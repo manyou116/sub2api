@@ -2,8 +2,38 @@ package service
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// legacyImagesInflight tracks the number of in-flight ChatGPT Web image generation
+// requests per account. Used by the scheduler to prevent assigning multiple concurrent
+// image jobs to the same account (image gen is serial per ChatGPT session).
+//
+// NOTE: This is a single-process counter. In multi-instance deployments the
+// scheduler may occasionally assign the same account across instances.
+// That scenario is currently considered acceptable.
+var legacyImagesInflight sync.Map // map[int64]*atomic.Int32
+
+func legacyImagesInflightCount(accountID int64) int32 {
+	if v, ok := legacyImagesInflight.Load(accountID); ok {
+		return v.(*atomic.Int32).Load()
+	}
+	return 0
+}
+
+// legacyImagesInflightTryAcquire atomically claims the image slot for an account
+// (CAS 0→1). Returns true if acquired; false if another request is already in-flight.
+func legacyImagesInflightTryAcquire(accountID int64) bool {
+	v, _ := legacyImagesInflight.LoadOrStore(accountID, new(atomic.Int32))
+	return v.(*atomic.Int32).CompareAndSwap(0, 1)
+}
+
+func legacyImagesInflightRelease(accountID int64) {
+	if v, ok := legacyImagesInflight.Load(accountID); ok {
+		v.(*atomic.Int32).Add(-1)
+	}
+}
 
 // legacyImagesUsageCacheTTL 决定调度路径上每个账号的 24h 用量缓存有效期。
 // 60s 是 ChatGPT Web 默认刷新节奏的下限，缓存到期后下次调度会自然回源；

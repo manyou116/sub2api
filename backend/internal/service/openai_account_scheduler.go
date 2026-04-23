@@ -283,6 +283,12 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			decision.StickyPreviousHit = true
 			decision.SelectedAccountID = selection.Account.ID
 			decision.SelectedAccountType = selection.Account.Type
+			// 对 image-native 请求原子占位，防止竞态下同一账号被多个并发 image 选中。
+			if !acquireImageSlotForSelection(req, selection.Account, selection) {
+				selection = nil // 竞态 miss：此账号刚被别人占用，降级到 load balance
+			}
+		}
+		if selection != nil && selection.Account != nil {
 			if req.SessionHash != "" {
 				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, selection.Account.ID)
 			}
@@ -373,11 +379,17 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	result, acquireErr := s.service.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
 	if acquireErr == nil && result.Acquired {
 		_ = s.service.refreshStickySessionTTL(ctx, req.GroupID, sessionHash, s.service.openAIWSSessionStickyTTL())
-		return &AccountSelectionResult{
+		sel := &AccountSelectionResult{
 			Account:     account,
 			Acquired:    true,
 			ReleaseFunc: result.ReleaseFunc,
-		}, nil
+		}
+		if !acquireImageSlotForSelection(req, account, sel) {
+			// 竞态 miss：槽位刚被占，释放 Redis 槽位，降级到 load balance
+			result.ReleaseFunc()
+			return nil, nil
+		}
+		return sel, nil
 	}
 
 	cfg := s.service.schedulingConfig()
@@ -749,14 +761,20 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 			return nil, len(candidates), topK, loadSkew, acquireErr
 		}
 		if result != nil && result.Acquired {
-			if req.SessionHash != "" {
-				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, fresh.ID)
-			}
-			return &AccountSelectionResult{
+			sel := &AccountSelectionResult{
 				Account:     fresh,
 				Acquired:    true,
 				ReleaseFunc: result.ReleaseFunc,
-			}, len(candidates), topK, loadSkew, nil
+			}
+			if !acquireImageSlotForSelection(req, fresh, sel) {
+				// 竞态 miss：软过滤通过后 inflight 被其他 goroutine 抢先，释放槽位换下一个候选
+				result.ReleaseFunc()
+				continue
+			}
+			if req.SessionHash != "" {
+				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, fresh.ID)
+			}
+			return sel, len(candidates), topK, loadSkew, nil
 		}
 	}
 
@@ -834,6 +852,12 @@ func (s *defaultOpenAIAccountScheduler) isAccountImageCapabilityCompatible(
 			return false
 		}
 	}
+	// 并发限制：同一账号同时只允许 1 个 image 生成任务，
+	// 避免多请求竞争同一 ChatGPT Web session 导致 429 或互相干扰。
+	// 这是软过滤（快速读），真正的 acquire 在 acquireImageSlotForSelection 中完成。
+	if legacyImagesInflightCount(account.ID) >= 1 {
+		return false
+	}
 	return true
 }
 
@@ -847,6 +871,33 @@ func legacyImagesDailyQuota(g *Group) int {
 		return 0
 	}
 	return g.OpenAILegacyImagesDailyQuota
+}
+
+// acquireImageSlotForSelection 在 image-native OAuth 请求选定账号后，
+// 原子性地占用该账号的 image in-flight 槽位，并将释放函数包装进 result.ReleaseFunc。
+// 对非 image / 非 OAuth 请求直接返回 true（不修改 result）。
+//
+// 返回 false 意味着账号已有 image 在执行（竞态 miss）；调用方应释放已占用的
+// 并发槽位（result.ReleaseFunc）并跳过该账号。
+func acquireImageSlotForSelection(req OpenAIAccountScheduleRequest, account *Account, result *AccountSelectionResult) bool {
+	if req.RequiredImageCapability != OpenAIImagesCapabilityNative || account.Type != AccountTypeOAuth {
+		return true
+	}
+	if !legacyImagesInflightTryAcquire(account.ID) {
+		return false
+	}
+	accountID := account.ID
+	var once sync.Once
+	origRelease := result.ReleaseFunc
+	result.ReleaseFunc = func() {
+		once.Do(func() {
+			legacyImagesInflightRelease(accountID)
+			if origRelease != nil {
+				origRelease()
+			}
+		})
+	}
+	return true
 }
 
 // cachedLegacyImagesDailyUsage 返回账号最近 24h 已成功生成的 image 数。
