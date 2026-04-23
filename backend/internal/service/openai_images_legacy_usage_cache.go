@@ -36,8 +36,17 @@ func (c *legacyImagesUsageCacheStore) get(accountID int64, loader func() int) in
 	c.mu.Unlock()
 	v := loader()
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Don't overwrite a bumpAccount write that happened while loader was running.
+	// Take max(db_value, cached_value) so neither the DB total nor the bump is lost.
+	if e, ok := c.entries[accountID]; ok && now.Before(e.expiresAt) {
+		if e.value >= v {
+			return e.value
+		}
+		c.entries[accountID] = legacyImagesUsageCacheEntry{value: v, expiresAt: e.expiresAt}
+		return v
+	}
 	c.entries[accountID] = legacyImagesUsageCacheEntry{value: v, expiresAt: now.Add(legacyImagesUsageCacheTTL)}
-	c.mu.Unlock()
 	return v
 }
 
@@ -52,8 +61,9 @@ func (c *legacyImagesUsageCacheStore) bumpAccount(accountID int64, n int) {
 	now := time.Now()
 	e, ok := c.entries[accountID]
 	if !ok || now.After(e.expiresAt) {
-		// 缓存缺失/过期：写入「至少 n」做兜底，下次回源会校正。
-		c.entries[accountID] = legacyImagesUsageCacheEntry{value: n, expiresAt: now.Add(legacyImagesUsageCacheTTL)}
+		// 缓存已过期/缺失：生成完成时图片已写入 DB，直接删除让下次 get() 回源重读真实总数。
+		// 写入 n=1 做兜底会导致 quota 检查永远看到 1 而非累计值，属于误报宽松。
+		delete(c.entries, accountID)
 		return
 	}
 	e.value += n
