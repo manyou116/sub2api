@@ -397,6 +397,20 @@ func (_c *GroupCreate) SetNillableRequirePrivacySet(v *bool) *GroupCreate {
 	return _c
 }
 
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (_c *GroupCreate) SetOpenaiLegacyImagesDefault(v bool) *GroupCreate {
+	_c.mutation.SetOpenaiLegacyImagesDefault(v)
+	return _c
+}
+
+// SetNillableOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableOpenaiLegacyImagesDefault(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetOpenaiLegacyImagesDefault(*v)
+	}
+	return _c
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (_c *GroupCreate) SetDefaultMappedModel(v string) *GroupCreate {
 	_c.mutation.SetDefaultMappedModel(v)
@@ -636,6 +650,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultRequirePrivacySet
 		_c.mutation.SetRequirePrivacySet(v)
 	}
+	if _, ok := _c.mutation.OpenaiLegacyImagesDefault(); !ok {
+		v := group.DefaultOpenaiLegacyImagesDefault
+		_c.mutation.SetOpenaiLegacyImagesDefault(v)
+	}
 	if _, ok := _c.mutation.DefaultMappedModel(); !ok {
 		v := group.DefaultDefaultMappedModel
 		_c.mutation.SetDefaultMappedModel(v)
@@ -723,6 +741,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.RequirePrivacySet(); !ok {
 		return &ValidationError{Name: "require_privacy_set", err: errors.New(`ent: missing required field "Group.require_privacy_set"`)}
+	}
+	if _, ok := _c.mutation.OpenaiLegacyImagesDefault(); !ok {
+		return &ValidationError{Name: "openai_legacy_images_default", err: errors.New(`ent: missing required field "Group.openai_legacy_images_default"`)}
 	}
 	if _, ok := _c.mutation.DefaultMappedModel(); !ok {
 		return &ValidationError{Name: "default_mapped_model", err: errors.New(`ent: missing required field "Group.default_mapped_model"`)}
@@ -876,6 +897,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.RequirePrivacySet(); ok {
 		_spec.SetField(group.FieldRequirePrivacySet, field.TypeBool, value)
 		_node.RequirePrivacySet = value
+	}
+	if value, ok := _c.mutation.OpenaiLegacyImagesDefault(); ok {
+		_spec.SetField(group.FieldOpenaiLegacyImagesDefault, field.TypeBool, value)
+		_node.OpenaiLegacyImagesDefault = value
 	}
 	if value, ok := _c.mutation.DefaultMappedModel(); ok {
 		_spec.SetField(group.FieldDefaultMappedModel, field.TypeString, value)
@@ -1501,6 +1526,18 @@ func (u *GroupUpsert) UpdateRequirePrivacySet() *GroupUpsert {
 	return u
 }
 
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (u *GroupUpsert) SetOpenaiLegacyImagesDefault(v bool) *GroupUpsert {
+	u.Set(group.FieldOpenaiLegacyImagesDefault, v)
+	return u
+}
+
+// UpdateOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateOpenaiLegacyImagesDefault() *GroupUpsert {
+	u.SetExcluded(group.FieldOpenaiLegacyImagesDefault)
+	return u
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (u *GroupUpsert) SetDefaultMappedModel(v string) *GroupUpsert {
 	u.Set(group.FieldDefaultMappedModel, v)
@@ -2117,6 +2154,20 @@ func (u *GroupUpsertOne) SetRequirePrivacySet(v bool) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateRequirePrivacySet() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRequirePrivacySet()
+	})
+}
+
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (u *GroupUpsertOne) SetOpenaiLegacyImagesDefault(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetOpenaiLegacyImagesDefault(v)
+	})
+}
+
+// UpdateOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateOpenaiLegacyImagesDefault() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateOpenaiLegacyImagesDefault()
 	})
 }
 
@@ -2909,6 +2960,20 @@ func (u *GroupUpsertBulk) SetRequirePrivacySet(v bool) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateRequirePrivacySet() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRequirePrivacySet()
+	})
+}
+
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (u *GroupUpsertBulk) SetOpenaiLegacyImagesDefault(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetOpenaiLegacyImagesDefault(v)
+	})
+}
+
+// UpdateOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateOpenaiLegacyImagesDefault() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateOpenaiLegacyImagesDefault()
 	})
 }
 

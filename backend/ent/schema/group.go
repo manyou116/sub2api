@@ -137,6 +137,9 @@ func (Group) Fields() []ent.Field {
 		field.Bool("require_privacy_set").
 			Default(false).
 			Comment("调度时仅允许 privacy 已成功设置的账号"),
+		field.Bool("openai_legacy_images_default").
+			Default(false).
+			Comment("OpenAI 分组默认启用 ChatGPT Web 旧版生图链路（账号 extra.openai_oauth_legacy_images 显式 true/false 可覆盖）"),
 		field.String("default_mapped_model").
 			MaxLen(100).
 			Default("").

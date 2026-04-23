@@ -493,13 +493,35 @@ func (s *OpenAIGatewayService) ForwardImages(
 	case AccountTypeAPIKey:
 		return s.forwardOpenAIImagesAPIKey(ctx, c, account, body, parsed, channelMappedModel)
 	case AccountTypeOAuth:
-		if account.IsOpenAILegacyImagesEnabled() {
+		group := s.resolveOpenAIImagesGroup(ctx, c)
+		if account.IsOpenAILegacyImagesEnabled(group) {
 			return s.forwardOpenAIImagesOAuthLegacy(ctx, c, account, parsed, channelMappedModel)
 		}
 		return s.forwardOpenAIImagesOAuth(ctx, c, account, parsed, channelMappedModel)
 	default:
 		return nil, fmt.Errorf("unsupported account type: %s", account.Type)
 	}
+}
+
+// resolveOpenAIImagesGroup 解析当前请求绑定的分组（来自 gin context 的 api_key）。
+// 仅用于 legacy 生图三态判定，找不到时返回 nil（按账号自身字段决策）。
+func (s *OpenAIGatewayService) resolveOpenAIImagesGroup(ctx context.Context, c *gin.Context) *Group {
+	if c == nil || s.schedulerSnapshot == nil {
+		return nil
+	}
+	val, ok := c.Get("api_key")
+	if !ok {
+		return nil
+	}
+	apiKey, ok := val.(*APIKey)
+	if !ok || apiKey == nil || apiKey.GroupID == nil {
+		return nil
+	}
+	group, err := s.schedulerSnapshot.GetGroupByID(ctx, *apiKey.GroupID)
+	if err != nil {
+		return nil
+	}
+	return group
 }
 
 func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(

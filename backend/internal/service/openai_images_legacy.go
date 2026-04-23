@@ -117,16 +117,28 @@ var legacyPowProcessStart = time.Now()
 
 // ─── 账号能力检测 ─────────────────────────────────────────────────────────────
 
-// IsOpenAILegacyImagesEnabled 返回 OAuth 账号是否启用旧版 web2api 生图路径。
+// IsOpenAILegacyImagesEnabled 判定 OAuth 账号是否走旧版 ChatGPT Web 生图链路。
 //
-// 字段：accounts.extra.openai_oauth_legacy_images。
-// 默认 false（使用新 Codex /responses 路径）。
-func (a *Account) IsOpenAILegacyImagesEnabled() bool {
-	if a == nil || !a.IsOpenAIOAuth() || a.Extra == nil {
+// 三态语义（优先级 account > group）：
+//   - 账号 extra.openai_oauth_legacy_images = true  → 强制启用（覆盖分组）
+//   - 账号 extra.openai_oauth_legacy_images = false → 强制禁用（覆盖分组）
+//   - 账号未设置该键 → 回落分组 OpenAILegacyImagesDefault
+//   - group 为 nil 时仅看账号字段，未设置则视为 false
+//
+// 仅 OpenAI OAuth 账号生效；其他类型一律返回 false。
+func (a *Account) IsOpenAILegacyImagesEnabled(group *Group) bool {
+	if a == nil || !a.IsOpenAIOAuth() {
 		return false
 	}
-	enabled, ok := a.Extra["openai_oauth_legacy_images"].(bool)
-	return ok && enabled
+	if a.Extra != nil {
+		if enabled, ok := a.Extra["openai_oauth_legacy_images"].(bool); ok {
+			return enabled
+		}
+	}
+	if group != nil {
+		return group.OpenAILegacyImagesDefault
+	}
+	return false
 }
 
 // ─── 主入口 ──────────────────────────────────────────────────────────────────

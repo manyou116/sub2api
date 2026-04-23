@@ -72,6 +72,8 @@ const (
 	FieldRequireOauthOnly = "require_oauth_only"
 	// FieldRequirePrivacySet holds the string denoting the require_privacy_set field in the database.
 	FieldRequirePrivacySet = "require_privacy_set"
+	// FieldOpenaiLegacyImagesDefault holds the string denoting the openai_legacy_images_default field in the database.
+	FieldOpenaiLegacyImagesDefault = "openai_legacy_images_default"
 	// FieldDefaultMappedModel holds the string denoting the default_mapped_model field in the database.
 	FieldDefaultMappedModel = "default_mapped_model"
 	// FieldMessagesDispatchModelConfig holds the string denoting the messages_dispatch_model_config field in the database.
@@ -181,6 +183,7 @@ var Columns = []string{
 	FieldAllowMessagesDispatch,
 	FieldRequireOauthOnly,
 	FieldRequirePrivacySet,
+	FieldOpenaiLegacyImagesDefault,
 	FieldDefaultMappedModel,
 	FieldMessagesDispatchModelConfig,
 	FieldRpmLimit,
@@ -255,6 +258,8 @@ var (
 	DefaultRequireOauthOnly bool
 	// DefaultRequirePrivacySet holds the default value on creation for the "require_privacy_set" field.
 	DefaultRequirePrivacySet bool
+	// DefaultOpenaiLegacyImagesDefault holds the default value on creation for the "openai_legacy_images_default" field.
+	DefaultOpenaiLegacyImagesDefault bool
 	// DefaultDefaultMappedModel holds the default value on creation for the "default_mapped_model" field.
 	DefaultDefaultMappedModel string
 	// DefaultMappedModelValidator is a validator for the "default_mapped_model" field. It is called by the builders before save.
@@ -401,6 +406,11 @@ func ByRequireOauthOnly(opts ...sql.OrderTermOption) OrderOption {
 // ByRequirePrivacySet orders the results by the require_privacy_set field.
 func ByRequirePrivacySet(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRequirePrivacySet, opts...).ToFunc()
+}
+
+// ByOpenaiLegacyImagesDefault orders the results by the openai_legacy_images_default field.
+func ByOpenaiLegacyImagesDefault(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldOpenaiLegacyImagesDefault, opts...).ToFunc()
 }
 
 // ByDefaultMappedModel orders the results by the default_mapped_model field.

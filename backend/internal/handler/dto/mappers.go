@@ -185,6 +185,7 @@ func groupFromServiceBase(g *service.Group) Group {
 		AllowMessagesDispatch:           g.AllowMessagesDispatch,
 		RequireOAuthOnly:                g.RequireOAuthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
+		OpenAILegacyImagesDefault:       g.OpenAILegacyImagesDefault,
 		RPMLimit:                        g.RPMLimit,
 		CreatedAt:                       g.CreatedAt,
 		UpdatedAt:                       g.UpdatedAt,

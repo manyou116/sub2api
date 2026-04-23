@@ -111,6 +111,10 @@ type Group struct {
 	RequireOAuthOnly  bool `json:"require_oauth_only"`
 	RequirePrivacySet bool `json:"require_privacy_set"`
 
+	// OpenAILegacyImagesDefault：分组默认是否启用 ChatGPT Web 旧版生图链路（仅 OpenAI 平台有效）；
+	// 账号 extra.openai_oauth_legacy_images 显式 true/false 可覆盖。
+	OpenAILegacyImagesDefault bool `json:"openai_legacy_images_default"`
+
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制），设置后覆盖用户级 rpm_limit。
 	RPMLimit int `json:"rpm_limit"`
 
