@@ -140,21 +140,17 @@
         </div>
       </div>
       <div v-else class="text-xs text-gray-400">-</div>
-      <!-- 旧版生图 24h 用量进度条（有 legacy 数据时显示） -->
-      <div v-if="legacyImagesUsage !== undefined && legacyImagesQuota > 0" class="mt-1">
-        <div class="flex items-center justify-between text-[10px] text-gray-500 dark:text-gray-400 mb-0.5">
-          <span title="过去 24h ChatGPT Web 旧版生图（gpt-image-1）用量">🎨 24h</span>
-          <span :class="legacyImagesUsage >= legacyImagesQuota ? 'font-semibold text-red-600 dark:text-red-400' : ''">
-            {{ legacyImagesUsage }}/{{ legacyImagesQuota }}
-          </span>
-        </div>
-        <div class="h-1 w-full rounded-full bg-gray-200 dark:bg-dark-600 overflow-hidden">
-          <div
-            class="h-full rounded-full transition-all duration-300"
-            :class="legacyImagesUsage >= legacyImagesQuota ? 'bg-red-500' : legacyImagesUsage >= legacyImagesQuota - 1 ? 'bg-amber-400' : 'bg-primary-500'"
-            :style="{ width: `${Math.min(100, (legacyImagesUsage / legacyImagesQuota) * 100)}%` }"
-          />
-        </div>
+      <!-- 旧版生图 24h 用量 badge（有 legacy 数据时显示） -->
+      <div
+        v-if="legacyImagesUsage !== undefined"
+        class="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium"
+        :class="legacyImagesQuota > 0 && legacyImagesUsage >= legacyImagesQuota
+          ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+          : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'"
+        :title="`过去 24h ChatGPT Web 旧版生图用量${legacyImagesQuota > 0 ? '（上限 ' + legacyImagesQuota + ' 张）' : '（不限）'}`"
+      >
+        <span>🎨</span>
+        <span>{{ legacyImagesUsage }}{{ legacyImagesQuota > 0 ? '/' + legacyImagesQuota : '' }}</span>
       </div>
     </template>
 
