@@ -819,10 +819,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(account *Acco
 	return account.SupportsOpenAIImageCapability(req.RequiredImageCapability)
 }
 
-// isAccountImageCapabilityCompatible 仅在 image-native 请求路径生效，
-// 跳过未启用 ChatGPT Web 旧版生图链路的 OpenAI OAuth 账号；
-// 非 image 请求 / 非 OAuth 账号 / 非 native 能力请求一律放行，
-// 不影响该账号的 text/codex 调度。
+// isAccountImageCapabilityCompatible 在 image 请求路径（Native 和 Basic）对 OAuth 账号
+// 执行旧版生图链路检查：启用状态、熔断、24h 配额、inflight 并发。
+// 非 image 请求 / 非 OAuth 账号一律放行，不影响 text/codex 调度。
 func (s *defaultOpenAIAccountScheduler) isAccountImageCapabilityCompatible(
 	account *Account,
 	req OpenAIAccountScheduleRequest,
@@ -831,10 +830,10 @@ func (s *defaultOpenAIAccountScheduler) isAccountImageCapabilityCompatible(
 	if account == nil {
 		return false
 	}
-	if req.RequiredImageCapability != OpenAIImagesCapabilityNative {
-		return true
-	}
-	if account.Type != AccountTypeOAuth {
+	// 非 image 请求（capability 为空）或 非 OAuth 账号 → 无需额外检查。
+	isImageReq := req.RequiredImageCapability == OpenAIImagesCapabilityNative ||
+		req.RequiredImageCapability == OpenAIImagesCapabilityBasic
+	if !isImageReq || account.Type != AccountTypeOAuth {
 		return true
 	}
 	if !account.IsOpenAILegacyImagesEnabled(schedGroup) {
@@ -880,7 +879,9 @@ func legacyImagesDailyQuota(g *Group) int {
 // 返回 false 意味着账号已有 image 在执行（竞态 miss）；调用方应释放已占用的
 // 并发槽位（result.ReleaseFunc）并跳过该账号。
 func acquireImageSlotForSelection(req OpenAIAccountScheduleRequest, account *Account, result *AccountSelectionResult) bool {
-	if req.RequiredImageCapability != OpenAIImagesCapabilityNative || account.Type != AccountTypeOAuth {
+	isImageReq := req.RequiredImageCapability == OpenAIImagesCapabilityNative ||
+		req.RequiredImageCapability == OpenAIImagesCapabilityBasic
+	if !isImageReq || account.Type != AccountTypeOAuth {
 		return true
 	}
 	if !legacyImagesInflightTryAcquire(account.ID) {
@@ -1051,15 +1052,7 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 	excludedIDs map[int64]struct{},
 	requiredCapability OpenAIImagesCapability,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
-	selection, decision, err := s.selectAccountWithScheduler(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, requiredCapability)
-	if err == nil && selection != nil && selection.Account != nil {
-		return selection, decision, nil
-	}
-	// 如果要求 native 能力（如指定了模型）但没有可用的 APIKey 账号，回退到 basic（OAuth 账号）
-	if requiredCapability == OpenAIImagesCapabilityNative {
-		return s.selectAccountWithScheduler(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, OpenAIImagesCapabilityBasic)
-	}
-	return selection, decision, err
+	return s.selectAccountWithScheduler(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, requiredCapability)
 }
 
 func (s *OpenAIGatewayService) selectAccountWithScheduler(
