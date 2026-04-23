@@ -141,6 +141,112 @@ func (a *Account) IsOpenAILegacyImagesEnabled(group *Group) bool {
 	return false
 }
 
+// ─── 失败熔断（仅作用于 image 维度，不影响 text/codex 调度） ─────────────────────
+
+const (
+	// legacyImagesScope 是 model_rate_limits 中 image 维度限流的 key。
+	// 调度层 isAccountImageCapabilityCompatible 会读取该 key 进行过滤。
+	legacyImagesScope = "legacy_images"
+
+	// legacyImagesConsecutiveFailureThreshold 控制连续失败几次后熔断。
+	legacyImagesConsecutiveFailureThreshold = 3
+	// legacyImagesFailureCooldown 是连续失败触发的冷却窗口。
+	legacyImagesFailureCooldown = 10 * time.Minute
+	// legacyImagesRateLimitCooldown 是上游显式限流（429/quota）后的冷却窗口。
+	legacyImagesRateLimitCooldown = time.Hour
+)
+
+// legacyImagesFailureCounter 记录每个账号连续失败次数（in-memory，重启清零）。
+var legacyImagesFailureCounter sync.Map
+
+func legacyImagesIncrementFailure(accountID int64) int64 {
+	v, _ := legacyImagesFailureCounter.LoadOrStore(accountID, new(int64))
+	ptr := v.(*int64)
+	// 简化处理：单写入路径下不需要原子；本调用场景已是请求级序列化。
+	*ptr++
+	return *ptr
+}
+
+func legacyImagesResetFailure(accountID int64) {
+	legacyImagesFailureCounter.Delete(accountID)
+}
+
+// recordLegacyImagesSuccess 在生图成功后清理失败计数。
+func (s *OpenAIGatewayService) recordLegacyImagesSuccess(account *Account) {
+	if account == nil {
+		return
+	}
+	legacyImagesResetFailure(account.ID)
+}
+
+// recordLegacyImagesFailure 在生图失败后维护连续失败计数；
+// 达到阈值后写入 model_rate_limits[legacy_images] reset_at = now+cooldown。
+// 仅在非显式 rate-limit 场景调用（429/quota 由 wrap 单独处理）。
+func (s *OpenAIGatewayService) recordLegacyImagesFailure(ctx context.Context, account *Account) {
+	if account == nil || s.accountRepo == nil {
+		return
+	}
+	count := legacyImagesIncrementFailure(account.ID)
+	if count < legacyImagesConsecutiveFailureThreshold {
+		return
+	}
+	resetAt := time.Now().Add(legacyImagesFailureCooldown).UTC()
+	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, legacyImagesScope, resetAt); err != nil {
+		logger.LegacyPrintf(
+			"service.openai_gateway",
+			"[OpenAI] Legacy image circuit-breaker SetModelRateLimit failed account_id=%d err=%v",
+			account.ID, err,
+		)
+		return
+	}
+	logger.LegacyPrintf(
+		"service.openai_gateway",
+		"[OpenAI] Legacy image circuit-breaker tripped account_id=%d consecutive=%d reset_at=%s",
+		account.ID, count, resetAt.Format(time.RFC3339),
+	)
+	legacyImagesResetFailure(account.ID)
+}
+
+// recordLegacyImagesUpstreamRateLimit 处理 429/quota 显式限流：写入 1h 冷却。
+func (s *OpenAIGatewayService) recordLegacyImagesUpstreamRateLimit(ctx context.Context, account *Account) {
+	if account == nil || s.accountRepo == nil {
+		return
+	}
+	resetAt := time.Now().Add(legacyImagesRateLimitCooldown).UTC()
+	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, legacyImagesScope, resetAt); err != nil {
+		logger.LegacyPrintf(
+			"service.openai_gateway",
+			"[OpenAI] Legacy image upstream rate-limit SetModelRateLimit failed account_id=%d err=%v",
+			account.ID, err,
+		)
+		return
+	}
+	logger.LegacyPrintf(
+		"service.openai_gateway",
+		"[OpenAI] Legacy image upstream rate-limited account_id=%d reset_at=%s",
+		account.ID, resetAt.Format(time.RFC3339),
+	)
+	legacyImagesResetFailure(account.ID)
+}
+
+// isLegacyOpenAIImageRateLimitStatus 判定状态错误是否表示上游显式限流。
+func isLegacyOpenAIImageRateLimitStatus(statusErr *legacyOpenAIImageStatusError) bool {
+	if statusErr == nil {
+		return false
+	}
+	if statusErr.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	msg := strings.ToLower(statusErr.Message)
+	if strings.Contains(msg, "rate limit") || strings.Contains(msg, "quota") ||
+		strings.Contains(msg, "you've reached") || strings.Contains(msg, "you have reached") {
+		return true
+	}
+	bodyMsg := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(statusErr.ResponseBody)))
+	return strings.Contains(bodyMsg, "rate limit") || strings.Contains(bodyMsg, "quota") ||
+		strings.Contains(bodyMsg, "you've reached") || strings.Contains(bodyMsg, "you have reached")
+}
+
 // ─── 主入口 ──────────────────────────────────────────────────────────────────
 
 // forwardOpenAIImagesOAuthLegacy 使用旧 web2api（f/conversation）接口生图。
@@ -151,7 +257,15 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthLegacy(
 	account *Account,
 	parsed *OpenAIImagesRequest,
 	channelMappedModel string,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, retErr error) {
+	// 失败熔断：成功 → 清失败计数；失败 → 累加，达到阈值后写入 image 维度限流。
+	defer func() {
+		if retErr == nil {
+			s.recordLegacyImagesSuccess(account)
+		} else {
+			s.recordLegacyImagesFailure(ctx, account)
+		}
+	}()
 	startTime := time.Now()
 	requestModel := strings.TrimSpace(parsed.Model)
 	if mapped := strings.TrimSpace(channelMappedModel); mapped != "" {
@@ -429,8 +543,10 @@ func (s *OpenAIGatewayService) wrapLegacyOpenAIImageBackendError(
 	setOpsUpstreamError(c, statusErr.StatusCode, upstreamMsg, "")
 
 	if s.shouldFailoverOpenAIUpstreamResponse(statusErr.StatusCode, upstreamMsg, statusErr.ResponseBody) {
-		if s.rateLimitService != nil {
-			s.rateLimitService.HandleUpstreamError(ctx, account, statusErr.StatusCode, statusErr.ResponseHeaders, statusErr.ResponseBody)
+		// 与普通 text/codex 路径不同：image 失败仅写 scope=legacy_images 维度的限流，
+		// 不调用 HandleUpstreamError，避免污染该账号的 text/codex 调度。
+		if isLegacyOpenAIImageRateLimitStatus(statusErr) {
+			s.recordLegacyImagesUpstreamRateLimit(ctx, account)
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,

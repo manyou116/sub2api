@@ -819,7 +819,15 @@ func (s *defaultOpenAIAccountScheduler) isAccountImageCapabilityCompatible(
 	if account.Type != AccountTypeOAuth {
 		return true
 	}
-	return account.IsOpenAILegacyImagesEnabled(schedGroup)
+	if !account.IsOpenAILegacyImagesEnabled(schedGroup) {
+		return false
+	}
+	// 熔断：image-only 维度的限流（model_rate_limits.legacy_images）期间跳过该账号，
+	// 但不影响其 text/codex 调度。
+	if account.isRateLimitActiveForKey(legacyImagesScope) {
+		return false
+	}
+	return true
 }
 
 func (s *defaultOpenAIAccountScheduler) ReportResult(accountID int64, success bool, firstTokenMs *int) {
