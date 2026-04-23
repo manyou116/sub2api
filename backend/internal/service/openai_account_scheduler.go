@@ -250,6 +250,13 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		s.metrics.recordSelect(decision)
 	}()
 
+	// 提前解析当前调度分组，供 sticky / load-balance 路径共享
+	// （只在请求实际指定 group 且 snapshot 可用时查询，控制开销）
+	var schedGroup *Group
+	if req.GroupID != nil && s.service.schedulerSnapshot != nil {
+		schedGroup, _ = s.service.schedulerSnapshot.GetGroupByID(ctx, *req.GroupID)
+	}
+
 	previousResponseID := strings.TrimSpace(req.PreviousResponseID)
 	if previousResponseID != "" {
 		selection, err := s.service.SelectAccountByPreviousResponseID(
@@ -267,6 +274,10 @@ func (s *defaultOpenAIAccountScheduler) Select(
 				selection = nil
 			}
 		}
+		if selection != nil && selection.Account != nil &&
+			!s.isAccountImageCapabilityCompatible(selection.Account, req, schedGroup) {
+			selection = nil
+		}
 		if selection != nil && selection.Account != nil {
 			decision.Layer = openAIAccountScheduleLayerPreviousResponse
 			decision.StickyPreviousHit = true
@@ -279,7 +290,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		}
 	}
 
-	selection, err := s.selectBySessionHash(ctx, req)
+	selection, err := s.selectBySessionHash(ctx, req, schedGroup)
 	if err != nil {
 		return nil, decision, err
 	}
@@ -291,7 +302,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		return selection, decision, nil
 	}
 
-	selection, candidateCount, topK, loadSkew, err := s.selectByLoadBalance(ctx, req)
+	selection, candidateCount, topK, loadSkew, err := s.selectByLoadBalance(ctx, req, schedGroup)
 	decision.Layer = openAIAccountScheduleLayerLoadBalance
 	decision.CandidateCount = candidateCount
 	decision.TopK = topK
@@ -309,6 +320,7 @@ func (s *defaultOpenAIAccountScheduler) Select(
 func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
+	schedGroup *Group,
 ) (*AccountSelectionResult, error) {
 	sessionHash := strings.TrimSpace(req.SessionHash)
 	if sessionHash == "" || s == nil || s.service == nil || s.service.cache == nil {
@@ -342,6 +354,10 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		return nil, nil
 	}
 	if !s.isAccountRequestCompatible(account, req) {
+		return nil, nil
+	}
+	if !s.isAccountImageCapabilityCompatible(account, req, schedGroup) {
+		// 不清 sticky：本次只是 image 不可用，后续 text 请求可继续命中该账号
 		return nil, nil
 	}
 	if !s.isAccountTransportCompatible(account, req.RequiredTransport) {
@@ -584,6 +600,7 @@ func buildOpenAIWeightedSelectionOrder(
 func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	ctx context.Context,
 	req OpenAIAccountScheduleRequest,
+	schedGroup *Group,
 ) (*AccountSelectionResult, int, int, float64, error) {
 	accounts, err := s.service.listSchedulableAccounts(ctx, req.GroupID)
 	if err != nil {
@@ -591,12 +608,6 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	}
 	if len(accounts) == 0 {
 		return nil, 0, 0, 0, errors.New("no available OpenAI accounts")
-	}
-
-	// require_privacy_set: 获取分组信息
-	var schedGroup *Group
-	if req.GroupID != nil && s.service.schedulerSnapshot != nil {
-		schedGroup, _ = s.service.schedulerSnapshot.GetGroupByID(ctx, *req.GroupID)
 	}
 
 	filtered := make([]*Account, 0, len(accounts))
@@ -618,6 +629,9 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 			continue
 		}
 		if !s.isAccountRequestCompatible(account, req) {
+			continue
+		}
+		if !s.isAccountImageCapabilityCompatible(account, req, schedGroup) {
 			continue
 		}
 		if !s.isAccountTransportCompatible(account, req.RequiredTransport) {
@@ -785,6 +799,27 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(account *Acco
 		return false
 	}
 	return account.SupportsOpenAIImageCapability(req.RequiredImageCapability)
+}
+
+// isAccountImageCapabilityCompatible 仅在 image-native 请求路径生效，
+// 跳过未启用 ChatGPT Web 旧版生图链路的 OpenAI OAuth 账号；
+// 非 image 请求 / 非 OAuth 账号 / 非 native 能力请求一律放行，
+// 不影响该账号的 text/codex 调度。
+func (s *defaultOpenAIAccountScheduler) isAccountImageCapabilityCompatible(
+	account *Account,
+	req OpenAIAccountScheduleRequest,
+	schedGroup *Group,
+) bool {
+	if account == nil {
+		return false
+	}
+	if req.RequiredImageCapability != OpenAIImagesCapabilityNative {
+		return true
+	}
+	if account.Type != AccountTypeOAuth {
+		return true
+	}
+	return account.IsOpenAILegacyImagesEnabled(schedGroup)
 }
 
 func (s *defaultOpenAIAccountScheduler) ReportResult(accountID int64, success bool, firstTokenMs *int) {

@@ -35,3 +35,45 @@ func TestIsOpenAILegacyImagesEnabled_ThreeState(t *testing.T) {
 		})
 	}
 }
+
+// TestSchedulerImageCapabilityFilter 验证 image-native 调度过滤：
+// 仅在 RequiredImageCapability=native + OAuth 账号 上检查 IsOpenAILegacyImagesEnabled；
+// text 请求 / APIKey 账号 一律放行（不影响其他模型调度）。
+func TestSchedulerImageCapabilityFilter(t *testing.T) {
+scheduler := &defaultOpenAIAccountScheduler{}
+oauthLegacyOn := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"openai_oauth_legacy_images": true}}
+oauthLegacyOff := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"openai_oauth_legacy_images": false}}
+oauthDefault := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+apiKeyAcct := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+groupOn := &Group{OpenAILegacyImagesDefault: true}
+groupOff := &Group{OpenAILegacyImagesDefault: false}
+
+imageReq := OpenAIAccountScheduleRequest{RequiredImageCapability: OpenAIImagesCapabilityNative}
+textReq := OpenAIAccountScheduleRequest{}
+
+cases := []struct {
+name    string
+account *Account
+req     OpenAIAccountScheduleRequest
+group   *Group
+want    bool
+}{
+{"text_request_oauth_legacy_off_passes", oauthLegacyOff, textReq, groupOff, true},
+{"text_request_oauth_default_passes", oauthDefault, textReq, groupOff, true},
+{"image_apikey_passes", apiKeyAcct, imageReq, groupOff, true},
+{"image_oauth_legacy_on_passes", oauthLegacyOn, imageReq, groupOff, true},
+{"image_oauth_legacy_off_blocked", oauthLegacyOff, imageReq, groupOn, false},
+{"image_oauth_default_with_group_on_passes", oauthDefault, imageReq, groupOn, true},
+{"image_oauth_default_with_group_off_blocked", oauthDefault, imageReq, groupOff, false},
+{"image_oauth_default_no_group_blocked", oauthDefault, imageReq, nil, false},
+{"nil_account_blocked", nil, imageReq, groupOn, false},
+}
+for _, tc := range cases {
+t.Run(tc.name, func(t *testing.T) {
+if got := scheduler.isAccountImageCapabilityCompatible(tc.account, tc.req, tc.group); got != tc.want {
+t.Fatalf("isAccountImageCapabilityCompatible = %v, want %v", got, tc.want)
+}
+})
+}
+}
