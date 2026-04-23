@@ -819,16 +819,30 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(account *Acco
 	return account.SupportsOpenAIImageCapability(req.RequiredImageCapability)
 }
 
-// isLegacyImageAccountCompatible checks legacy image eligibility for OAuth accounts.
-// Used by both the scheduler and the nil-scheduler fallback path.
+// isLegacyImageAccountCompatible checks full legacy image eligibility for OAuth accounts:
+// legacy-enabled flag (group/account setting) + CB/quota/inflight.
+// Used by the full scheduler path (when advanced scheduler is enabled).
 // Non-image requests and non-OAuth accounts always pass.
 func (s *OpenAIGatewayService) isLegacyImageAccountCompatible(account *Account, schedGroup *Group, requiredCap OpenAIImagesCapability) bool {
+	if !s.isLegacyImageQuotaEligible(account, schedGroup, requiredCap) {
+		return false
+	}
 	isImageReq := requiredCap == OpenAIImagesCapabilityNative || requiredCap == OpenAIImagesCapabilityBasic
 	if !isImageReq || account.Type != AccountTypeOAuth {
 		return true
 	}
-	if !account.IsOpenAILegacyImagesEnabled(schedGroup) {
-		return false
+	return account.IsOpenAILegacyImagesEnabled(schedGroup)
+}
+
+// isLegacyImageQuotaEligible checks quota/circuit-breaker/inflight for OAuth image accounts,
+// WITHOUT enforcing the legacy-enabled flag (group/account setting).
+// Used by the nil-scheduler fallback path: fixes quota-bypass bug while preserving the
+// pre-existing behaviour of not filtering by legacy-enabled (that is a Commit 3 concern
+// requiring group defaults to be configured first).
+func (s *OpenAIGatewayService) isLegacyImageQuotaEligible(account *Account, schedGroup *Group, requiredCap OpenAIImagesCapability) bool {
+	isImageReq := requiredCap == OpenAIImagesCapabilityNative || requiredCap == OpenAIImagesCapabilityBasic
+	if !isImageReq || account.Type != AccountTypeOAuth {
+		return true
 	}
 	// 熔断：image-only 维度的限流（model_rate_limits.legacy_images）期间跳过该账号，
 	// 但不影响其 text/codex 调度。
@@ -1117,7 +1131,7 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 					effectiveExcludedIDs[selection.Account.ID] = struct{}{}
 					continue
 				}
-				if !s.isLegacyImageAccountCompatible(selection.Account, getNilSchedGroup(), requiredImageCapability) {
+				if !s.isLegacyImageQuotaEligible(selection.Account, getNilSchedGroup(), requiredImageCapability) {
 					if selection.ReleaseFunc != nil {
 						selection.ReleaseFunc()
 					}
