@@ -2085,6 +2085,49 @@ func (r *usageLogRepository) GetAccountWindowStatsBatch(ctx context.Context, acc
 	return result, nil
 }
 
+// GetLegacyImageGenerationsBatch 批量聚合 OpenAI OAuth 账号在 [since, now) 窗口内
+// 经由 ChatGPT Web 旧版生图链路（gpt-image-1）成功生成的图片数量。
+//
+// 判定规则：account_id ∈ ids AND image_count > 0 AND created_at >= since。
+// 用 image_count > 0 而非 request_type 判断，因为 request_type 在该路径下表达
+// sync/stream 而非「图像/文本」语义；image_count 才是图像计数的权威字段。
+//
+// 未命中的账号显式回填为 0，便于上层直接渲染。
+func (r *usageLogRepository) GetLegacyImageGenerationsBatch(ctx context.Context, accountIDs []int64, since time.Time) (map[int64]int, error) {
+	result := make(map[int64]int, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return result, nil
+	}
+	const query = `
+		SELECT account_id, COALESCE(SUM(image_count), 0) AS images
+		FROM usage_logs
+		WHERE account_id = ANY($1) AND image_count > 0 AND created_at >= $2
+		GROUP BY account_id
+	`
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), since)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id int64
+		var images int
+		if err := rows.Scan(&id, &images); err != nil {
+			return nil, err
+		}
+		result[id] = images
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, id := range accountIDs {
+		if _, ok := result[id]; !ok {
+			result[id] = 0
+		}
+	}
+	return result, nil
+}
+
 // GetGeminiUsageTotalsBatch 批量聚合 Gemini 账号在窗口内的 Pro/Flash 请求与用量。
 // 模型分类规则与 service.geminiModelClassFromName 一致：model 包含 flash/lite 视为 flash，其余视为 pro。
 func (r *usageLogRepository) GetGeminiUsageTotalsBatch(ctx context.Context, accountIDs []int64, startTime, endTime time.Time) (map[int64]service.GeminiUsageTotals, error) {

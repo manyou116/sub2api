@@ -553,6 +553,27 @@ func (_u *GroupUpdate) SetNillableOpenaiLegacyImagesDefault(v *bool) *GroupUpdat
 	return _u
 }
 
+// SetOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field.
+func (_u *GroupUpdate) SetOpenaiLegacyImagesDailyQuota(v int) *GroupUpdate {
+	_u.mutation.ResetOpenaiLegacyImagesDailyQuota()
+	_u.mutation.SetOpenaiLegacyImagesDailyQuota(v)
+	return _u
+}
+
+// SetNillableOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableOpenaiLegacyImagesDailyQuota(v *int) *GroupUpdate {
+	if v != nil {
+		_u.SetOpenaiLegacyImagesDailyQuota(*v)
+	}
+	return _u
+}
+
+// AddOpenaiLegacyImagesDailyQuota adds value to the "openai_legacy_images_daily_quota" field.
+func (_u *GroupUpdate) AddOpenaiLegacyImagesDailyQuota(v int) *GroupUpdate {
+	_u.mutation.AddOpenaiLegacyImagesDailyQuota(v)
+	return _u
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (_u *GroupUpdate) SetDefaultMappedModel(v string) *GroupUpdate {
 	_u.mutation.SetDefaultMappedModel(v)
@@ -887,6 +908,11 @@ func (_u *GroupUpdate) check() error {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.OpenaiLegacyImagesDailyQuota(); ok {
+		if err := group.OpenaiLegacyImagesDailyQuotaValidator(v); err != nil {
+			return &ValidationError{Name: "openai_legacy_images_daily_quota", err: fmt.Errorf(`ent: validator failed for field "Group.openai_legacy_images_daily_quota": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.DefaultMappedModel(); ok {
 		if err := group.DefaultMappedModelValidator(v); err != nil {
 			return &ValidationError{Name: "default_mapped_model", err: fmt.Errorf(`ent: validator failed for field "Group.default_mapped_model": %w`, err)}
@@ -1061,6 +1087,12 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.OpenaiLegacyImagesDefault(); ok {
 		_spec.SetField(group.FieldOpenaiLegacyImagesDefault, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.OpenaiLegacyImagesDailyQuota(); ok {
+		_spec.SetField(group.FieldOpenaiLegacyImagesDailyQuota, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedOpenaiLegacyImagesDailyQuota(); ok {
+		_spec.AddField(group.FieldOpenaiLegacyImagesDailyQuota, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.DefaultMappedModel(); ok {
 		_spec.SetField(group.FieldDefaultMappedModel, field.TypeString, value)
@@ -1905,6 +1937,27 @@ func (_u *GroupUpdateOne) SetNillableOpenaiLegacyImagesDefault(v *bool) *GroupUp
 	return _u
 }
 
+// SetOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field.
+func (_u *GroupUpdateOne) SetOpenaiLegacyImagesDailyQuota(v int) *GroupUpdateOne {
+	_u.mutation.ResetOpenaiLegacyImagesDailyQuota()
+	_u.mutation.SetOpenaiLegacyImagesDailyQuota(v)
+	return _u
+}
+
+// SetNillableOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableOpenaiLegacyImagesDailyQuota(v *int) *GroupUpdateOne {
+	if v != nil {
+		_u.SetOpenaiLegacyImagesDailyQuota(*v)
+	}
+	return _u
+}
+
+// AddOpenaiLegacyImagesDailyQuota adds value to the "openai_legacy_images_daily_quota" field.
+func (_u *GroupUpdateOne) AddOpenaiLegacyImagesDailyQuota(v int) *GroupUpdateOne {
+	_u.mutation.AddOpenaiLegacyImagesDailyQuota(v)
+	return _u
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (_u *GroupUpdateOne) SetDefaultMappedModel(v string) *GroupUpdateOne {
 	_u.mutation.SetDefaultMappedModel(v)
@@ -2252,6 +2305,11 @@ func (_u *GroupUpdateOne) check() error {
 			return &ValidationError{Name: "subscription_type", err: fmt.Errorf(`ent: validator failed for field "Group.subscription_type": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.OpenaiLegacyImagesDailyQuota(); ok {
+		if err := group.OpenaiLegacyImagesDailyQuotaValidator(v); err != nil {
+			return &ValidationError{Name: "openai_legacy_images_daily_quota", err: fmt.Errorf(`ent: validator failed for field "Group.openai_legacy_images_daily_quota": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.DefaultMappedModel(); ok {
 		if err := group.DefaultMappedModelValidator(v); err != nil {
 			return &ValidationError{Name: "default_mapped_model", err: fmt.Errorf(`ent: validator failed for field "Group.default_mapped_model": %w`, err)}
@@ -2443,6 +2501,12 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.OpenaiLegacyImagesDefault(); ok {
 		_spec.SetField(group.FieldOpenaiLegacyImagesDefault, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.OpenaiLegacyImagesDailyQuota(); ok {
+		_spec.SetField(group.FieldOpenaiLegacyImagesDailyQuota, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedOpenaiLegacyImagesDailyQuota(); ok {
+		_spec.AddField(group.FieldOpenaiLegacyImagesDailyQuota, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.DefaultMappedModel(); ok {
 		_spec.SetField(group.FieldDefaultMappedModel, field.TypeString, value)

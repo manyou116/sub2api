@@ -1264,6 +1264,31 @@
               />
             </button>
           </div>
+
+          <!-- 旧版生图 24h 滚动配额（仅 OpenAI 平台、且启用 legacy 链路时展示） -->
+          <div
+            v-if="
+              createForm.platform === 'openai' &&
+              createForm.openai_legacy_images_default
+            "
+            class="flex items-center justify-between"
+          >
+            <div>
+              <label class="text-sm text-gray-600 dark:text-gray-400"
+                >每账号 24h 生图额度</label
+              >
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                ChatGPT Web 默认 free 账号 ~3 张/24h；超额账号会被调度跳过。0 = 不限。
+              </p>
+            </div>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              v-model.number="createForm.openai_legacy_images_daily_quota"
+              class="input-field w-24 text-right"
+            />
+          </div>
         </div>
 
         <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
@@ -2436,6 +2461,31 @@
               />
             </button>
           </div>
+
+          <!-- 旧版生图 24h 滚动配额（仅 OpenAI 平台、且启用 legacy 链路时展示） -->
+          <div
+            v-if="
+              editForm.platform === 'openai' &&
+              editForm.openai_legacy_images_default
+            "
+            class="flex items-center justify-between"
+          >
+            <div>
+              <label class="text-sm text-gray-600 dark:text-gray-400"
+                >每账号 24h 生图额度</label
+              >
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                ChatGPT Web 默认 free 账号 ~3 张/24h；超额账号会被调度跳过。0 = 不限。
+              </p>
+            </div>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              v-model.number="editForm.openai_legacy_images_daily_quota"
+              class="input-field w-24 text-right"
+            />
+          </div>
         </div>
 
         <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
@@ -3110,6 +3160,8 @@ const createForm = reactive({
   require_privacy_set: false,
   // OpenAI 分组默认是否走 ChatGPT Web 旧版生图（仅 OpenAI 平台生效）
   openai_legacy_images_default: false,
+  // 旧版生图每账号 24h 滚动配额（0 = 不限；默认 3 与 ChatGPT Web 实测对齐）
+  openai_legacy_images_daily_quota: 3,
   // 模型路由开关
   model_routing_enabled: false,
   // 支持的模型系列（仅 antigravity 平台）
@@ -3395,6 +3447,8 @@ const editForm = reactive({
   require_privacy_set: false,
   // OpenAI 分组默认是否走 ChatGPT Web 旧版生图（仅 OpenAI 平台生效）
   openai_legacy_images_default: false,
+  // 旧版生图每账号 24h 滚动配额（0 = 不限；默认 3 与 ChatGPT Web 实测对齐）
+  openai_legacy_images_daily_quota: 3,
   // 模型路由开关
   model_routing_enabled: false,
   // 支持的模型系列（仅 antigravity 平台）
@@ -3575,6 +3629,7 @@ const closeCreateModal = () => {
   createForm.require_oauth_only = false;
   createForm.require_privacy_set = false;
   createForm.openai_legacy_images_default = false;
+  createForm.openai_legacy_images_daily_quota = 3;
   createForm.supported_model_scopes = ["claude", "gemini_text", "gemini_image"];
   createForm.mcp_xml_inject = true;
   createForm.copy_accounts_from_group_ids = [];
@@ -3692,6 +3747,9 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.openai_legacy_images_default =
     (group as { openai_legacy_images_default?: boolean })
       .openai_legacy_images_default ?? false;
+  editForm.openai_legacy_images_daily_quota =
+    (group as { openai_legacy_images_daily_quota?: number })
+      .openai_legacy_images_daily_quota ?? 3;
   editForm.model_routing_enabled = group.model_routing_enabled || false;
   editForm.supported_model_scopes = group.supported_model_scopes || [
     "claude",

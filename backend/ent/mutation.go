@@ -10101,6 +10101,8 @@ type GroupMutation struct {
 	require_oauth_only                      *bool
 	require_privacy_set                     *bool
 	openai_legacy_images_default            *bool
+	openai_legacy_images_daily_quota        *int
+	addopenai_legacy_images_daily_quota     *int
 	default_mapped_model                    *string
 	messages_dispatch_model_config          *domain.OpenAIMessagesDispatchModelConfig
 	rpm_limit                               *int
@@ -11657,6 +11659,62 @@ func (m *GroupMutation) ResetOpenaiLegacyImagesDefault() {
 	m.openai_legacy_images_default = nil
 }
 
+// SetOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field.
+func (m *GroupMutation) SetOpenaiLegacyImagesDailyQuota(i int) {
+	m.openai_legacy_images_daily_quota = &i
+	m.addopenai_legacy_images_daily_quota = nil
+}
+
+// OpenaiLegacyImagesDailyQuota returns the value of the "openai_legacy_images_daily_quota" field in the mutation.
+func (m *GroupMutation) OpenaiLegacyImagesDailyQuota() (r int, exists bool) {
+	v := m.openai_legacy_images_daily_quota
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOpenaiLegacyImagesDailyQuota returns the old "openai_legacy_images_daily_quota" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldOpenaiLegacyImagesDailyQuota(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOpenaiLegacyImagesDailyQuota is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOpenaiLegacyImagesDailyQuota requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOpenaiLegacyImagesDailyQuota: %w", err)
+	}
+	return oldValue.OpenaiLegacyImagesDailyQuota, nil
+}
+
+// AddOpenaiLegacyImagesDailyQuota adds i to the "openai_legacy_images_daily_quota" field.
+func (m *GroupMutation) AddOpenaiLegacyImagesDailyQuota(i int) {
+	if m.addopenai_legacy_images_daily_quota != nil {
+		*m.addopenai_legacy_images_daily_quota += i
+	} else {
+		m.addopenai_legacy_images_daily_quota = &i
+	}
+}
+
+// AddedOpenaiLegacyImagesDailyQuota returns the value that was added to the "openai_legacy_images_daily_quota" field in this mutation.
+func (m *GroupMutation) AddedOpenaiLegacyImagesDailyQuota() (r int, exists bool) {
+	v := m.addopenai_legacy_images_daily_quota
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetOpenaiLegacyImagesDailyQuota resets all changes to the "openai_legacy_images_daily_quota" field.
+func (m *GroupMutation) ResetOpenaiLegacyImagesDailyQuota() {
+	m.openai_legacy_images_daily_quota = nil
+	m.addopenai_legacy_images_daily_quota = nil
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (m *GroupMutation) SetDefaultMappedModel(s string) {
 	m.default_mapped_model = &s
@@ -12143,7 +12201,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 32)
+	fields := make([]string, 0, 33)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -12231,6 +12289,9 @@ func (m *GroupMutation) Fields() []string {
 	if m.openai_legacy_images_default != nil {
 		fields = append(fields, group.FieldOpenaiLegacyImagesDefault)
 	}
+	if m.openai_legacy_images_daily_quota != nil {
+		fields = append(fields, group.FieldOpenaiLegacyImagesDailyQuota)
+	}
 	if m.default_mapped_model != nil {
 		fields = append(fields, group.FieldDefaultMappedModel)
 	}
@@ -12306,6 +12367,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.RequirePrivacySet()
 	case group.FieldOpenaiLegacyImagesDefault:
 		return m.OpenaiLegacyImagesDefault()
+	case group.FieldOpenaiLegacyImagesDailyQuota:
+		return m.OpenaiLegacyImagesDailyQuota()
 	case group.FieldDefaultMappedModel:
 		return m.DefaultMappedModel()
 	case group.FieldMessagesDispatchModelConfig:
@@ -12379,6 +12442,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldRequirePrivacySet(ctx)
 	case group.FieldOpenaiLegacyImagesDefault:
 		return m.OldOpenaiLegacyImagesDefault(ctx)
+	case group.FieldOpenaiLegacyImagesDailyQuota:
+		return m.OldOpenaiLegacyImagesDailyQuota(ctx)
 	case group.FieldDefaultMappedModel:
 		return m.OldDefaultMappedModel(ctx)
 	case group.FieldMessagesDispatchModelConfig:
@@ -12597,6 +12662,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetOpenaiLegacyImagesDefault(v)
 		return nil
+	case group.FieldOpenaiLegacyImagesDailyQuota:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOpenaiLegacyImagesDailyQuota(v)
+		return nil
 	case group.FieldDefaultMappedModel:
 		v, ok := value.(string)
 		if !ok {
@@ -12659,6 +12731,9 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addsort_order != nil {
 		fields = append(fields, group.FieldSortOrder)
 	}
+	if m.addopenai_legacy_images_daily_quota != nil {
+		fields = append(fields, group.FieldOpenaiLegacyImagesDailyQuota)
+	}
 	if m.addrpm_limit != nil {
 		fields = append(fields, group.FieldRpmLimit)
 	}
@@ -12692,6 +12767,8 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedFallbackGroupIDOnInvalidRequest()
 	case group.FieldSortOrder:
 		return m.AddedSortOrder()
+	case group.FieldOpenaiLegacyImagesDailyQuota:
+		return m.AddedOpenaiLegacyImagesDailyQuota()
 	case group.FieldRpmLimit:
 		return m.AddedRpmLimit()
 	}
@@ -12779,6 +12856,13 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddSortOrder(v)
+		return nil
+	case group.FieldOpenaiLegacyImagesDailyQuota:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddOpenaiLegacyImagesDailyQuota(v)
 		return nil
 	case group.FieldRpmLimit:
 		v, ok := value.(int)
@@ -12969,6 +13053,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldOpenaiLegacyImagesDefault:
 		m.ResetOpenaiLegacyImagesDefault()
+		return nil
+	case group.FieldOpenaiLegacyImagesDailyQuota:
+		m.ResetOpenaiLegacyImagesDailyQuota()
 		return nil
 	case group.FieldDefaultMappedModel:
 		m.ResetDefaultMappedModel()

@@ -115,6 +115,9 @@ type Group struct {
 	// 账号 extra.openai_oauth_legacy_images 显式 true/false 可覆盖。
 	OpenAILegacyImagesDefault bool `json:"openai_legacy_images_default"`
 
+	// OpenAILegacyImagesDailyQuota：旧版生图每个账号 24h 滚动配额（0 = 不限；默认 3 与 ChatGPT Web 实测对齐）。
+	OpenAILegacyImagesDailyQuota int `json:"openai_legacy_images_daily_quota"`
+
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制），设置后覆盖用户级 rpm_limit。
 	RPMLimit int `json:"rpm_limit"`
 

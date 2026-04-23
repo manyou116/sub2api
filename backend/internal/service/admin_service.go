@@ -205,6 +205,7 @@ type CreateGroupInput struct {
 	RequireOAuthOnly            bool
 	RequirePrivacySet           bool
 	OpenAILegacyImagesDefault   bool
+	OpenAILegacyImagesDailyQuota int
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
 	RPMLimit int
@@ -243,6 +244,7 @@ type UpdateGroupInput struct {
 	RequireOAuthOnly            *bool
 	RequirePrivacySet           *bool
 	OpenAILegacyImagesDefault   *bool
+	OpenAILegacyImagesDailyQuota *int
 	MessagesDispatchModelConfig *OpenAIMessagesDispatchModelConfig
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
 	RPMLimit *int
@@ -1429,6 +1431,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		RequireOAuthOnly:                input.RequireOAuthOnly,
 		RequirePrivacySet:               input.RequirePrivacySet,
 		OpenAILegacyImagesDefault:       input.OpenAILegacyImagesDefault,
+		OpenAILegacyImagesDailyQuota:    normalizeLegacyImagesDailyQuota(input.OpenAILegacyImagesDailyQuota),
 		DefaultMappedModel:              input.DefaultMappedModel,
 		MessagesDispatchModelConfig:     normalizeOpenAIMessagesDispatchModelConfig(input.MessagesDispatchModelConfig),
 		RPMLimit:                        input.RPMLimit,
@@ -1662,6 +1665,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.OpenAILegacyImagesDefault != nil {
 		group.OpenAILegacyImagesDefault = *input.OpenAILegacyImagesDefault
+	}
+	if input.OpenAILegacyImagesDailyQuota != nil {
+		group.OpenAILegacyImagesDailyQuota = normalizeLegacyImagesDailyQuota(*input.OpenAILegacyImagesDailyQuota)
 	}
 	if input.DefaultMappedModel != nil {
 		group.DefaultMappedModel = *input.DefaultMappedModel

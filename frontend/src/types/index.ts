@@ -478,6 +478,8 @@ export interface Group {
   // OpenAI 分组默认是否走 ChatGPT Web 旧版生图（仅 OpenAI 平台生效）；
   // 账号 extra.openai_oauth_legacy_images 显式 true/false 可覆盖。
   openai_legacy_images_default?: boolean
+  // OpenAI 旧版生图每个账号 24h 滚动配额（0 = 不限；默认 3 与 ChatGPT Web 实测对齐）
+  openai_legacy_images_daily_quota?: number
   created_at: string
   updated_at: string
 }
@@ -585,6 +587,7 @@ export interface CreateGroupRequest {
   require_oauth_only?: boolean
   require_privacy_set?: boolean
   openai_legacy_images_default?: boolean
+  openai_legacy_images_daily_quota?: number
   // 从指定分组复制账号
   copy_accounts_from_group_ids?: number[]
 }
@@ -611,6 +614,7 @@ export interface UpdateGroupRequest {
   require_oauth_only?: boolean
   require_privacy_set?: boolean
   openai_legacy_images_default?: boolean
+  openai_legacy_images_daily_quota?: number
   copy_accounts_from_group_ids?: number[]
 }
 

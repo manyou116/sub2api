@@ -140,6 +140,10 @@ func (Group) Fields() []ent.Field {
 		field.Bool("openai_legacy_images_default").
 			Default(false).
 			Comment("OpenAI 分组默认启用 ChatGPT Web 旧版生图链路（账号 extra.openai_oauth_legacy_images 显式 true/false 可覆盖）"),
+		field.Int("openai_legacy_images_daily_quota").
+			Default(3).
+			NonNegative().
+			Comment("OpenAI 旧版生图每个账号 24 小时滚动配额（0 = 不限制；ChatGPT Web 实测约 3 张/24h）"),
 		field.String("default_mapped_model").
 			MaxLen(100).
 			Default("").

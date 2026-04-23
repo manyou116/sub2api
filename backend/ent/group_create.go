@@ -411,6 +411,20 @@ func (_c *GroupCreate) SetNillableOpenaiLegacyImagesDefault(v *bool) *GroupCreat
 	return _c
 }
 
+// SetOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field.
+func (_c *GroupCreate) SetOpenaiLegacyImagesDailyQuota(v int) *GroupCreate {
+	_c.mutation.SetOpenaiLegacyImagesDailyQuota(v)
+	return _c
+}
+
+// SetNillableOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableOpenaiLegacyImagesDailyQuota(v *int) *GroupCreate {
+	if v != nil {
+		_c.SetOpenaiLegacyImagesDailyQuota(*v)
+	}
+	return _c
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (_c *GroupCreate) SetDefaultMappedModel(v string) *GroupCreate {
 	_c.mutation.SetDefaultMappedModel(v)
@@ -654,6 +668,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultOpenaiLegacyImagesDefault
 		_c.mutation.SetOpenaiLegacyImagesDefault(v)
 	}
+	if _, ok := _c.mutation.OpenaiLegacyImagesDailyQuota(); !ok {
+		v := group.DefaultOpenaiLegacyImagesDailyQuota
+		_c.mutation.SetOpenaiLegacyImagesDailyQuota(v)
+	}
 	if _, ok := _c.mutation.DefaultMappedModel(); !ok {
 		v := group.DefaultDefaultMappedModel
 		_c.mutation.SetDefaultMappedModel(v)
@@ -744,6 +762,14 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.OpenaiLegacyImagesDefault(); !ok {
 		return &ValidationError{Name: "openai_legacy_images_default", err: errors.New(`ent: missing required field "Group.openai_legacy_images_default"`)}
+	}
+	if _, ok := _c.mutation.OpenaiLegacyImagesDailyQuota(); !ok {
+		return &ValidationError{Name: "openai_legacy_images_daily_quota", err: errors.New(`ent: missing required field "Group.openai_legacy_images_daily_quota"`)}
+	}
+	if v, ok := _c.mutation.OpenaiLegacyImagesDailyQuota(); ok {
+		if err := group.OpenaiLegacyImagesDailyQuotaValidator(v); err != nil {
+			return &ValidationError{Name: "openai_legacy_images_daily_quota", err: fmt.Errorf(`ent: validator failed for field "Group.openai_legacy_images_daily_quota": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.DefaultMappedModel(); !ok {
 		return &ValidationError{Name: "default_mapped_model", err: errors.New(`ent: missing required field "Group.default_mapped_model"`)}
@@ -901,6 +927,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.OpenaiLegacyImagesDefault(); ok {
 		_spec.SetField(group.FieldOpenaiLegacyImagesDefault, field.TypeBool, value)
 		_node.OpenaiLegacyImagesDefault = value
+	}
+	if value, ok := _c.mutation.OpenaiLegacyImagesDailyQuota(); ok {
+		_spec.SetField(group.FieldOpenaiLegacyImagesDailyQuota, field.TypeInt, value)
+		_node.OpenaiLegacyImagesDailyQuota = value
 	}
 	if value, ok := _c.mutation.DefaultMappedModel(); ok {
 		_spec.SetField(group.FieldDefaultMappedModel, field.TypeString, value)
@@ -1538,6 +1568,24 @@ func (u *GroupUpsert) UpdateOpenaiLegacyImagesDefault() *GroupUpsert {
 	return u
 }
 
+// SetOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field.
+func (u *GroupUpsert) SetOpenaiLegacyImagesDailyQuota(v int) *GroupUpsert {
+	u.Set(group.FieldOpenaiLegacyImagesDailyQuota, v)
+	return u
+}
+
+// UpdateOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateOpenaiLegacyImagesDailyQuota() *GroupUpsert {
+	u.SetExcluded(group.FieldOpenaiLegacyImagesDailyQuota)
+	return u
+}
+
+// AddOpenaiLegacyImagesDailyQuota adds v to the "openai_legacy_images_daily_quota" field.
+func (u *GroupUpsert) AddOpenaiLegacyImagesDailyQuota(v int) *GroupUpsert {
+	u.Add(group.FieldOpenaiLegacyImagesDailyQuota, v)
+	return u
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (u *GroupUpsert) SetDefaultMappedModel(v string) *GroupUpsert {
 	u.Set(group.FieldDefaultMappedModel, v)
@@ -2168,6 +2216,27 @@ func (u *GroupUpsertOne) SetOpenaiLegacyImagesDefault(v bool) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateOpenaiLegacyImagesDefault() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateOpenaiLegacyImagesDefault()
+	})
+}
+
+// SetOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field.
+func (u *GroupUpsertOne) SetOpenaiLegacyImagesDailyQuota(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetOpenaiLegacyImagesDailyQuota(v)
+	})
+}
+
+// AddOpenaiLegacyImagesDailyQuota adds v to the "openai_legacy_images_daily_quota" field.
+func (u *GroupUpsertOne) AddOpenaiLegacyImagesDailyQuota(v int) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddOpenaiLegacyImagesDailyQuota(v)
+	})
+}
+
+// UpdateOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateOpenaiLegacyImagesDailyQuota() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateOpenaiLegacyImagesDailyQuota()
 	})
 }
 
@@ -2974,6 +3043,27 @@ func (u *GroupUpsertBulk) SetOpenaiLegacyImagesDefault(v bool) *GroupUpsertBulk 
 func (u *GroupUpsertBulk) UpdateOpenaiLegacyImagesDefault() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateOpenaiLegacyImagesDefault()
+	})
+}
+
+// SetOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field.
+func (u *GroupUpsertBulk) SetOpenaiLegacyImagesDailyQuota(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetOpenaiLegacyImagesDailyQuota(v)
+	})
+}
+
+// AddOpenaiLegacyImagesDailyQuota adds v to the "openai_legacy_images_daily_quota" field.
+func (u *GroupUpsertBulk) AddOpenaiLegacyImagesDailyQuota(v int) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddOpenaiLegacyImagesDailyQuota(v)
+	})
+}
+
+// UpdateOpenaiLegacyImagesDailyQuota sets the "openai_legacy_images_daily_quota" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateOpenaiLegacyImagesDailyQuota() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateOpenaiLegacyImagesDailyQuota()
 	})
 }
 

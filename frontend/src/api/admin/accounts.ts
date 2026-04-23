@@ -418,6 +418,22 @@ export async function getBatchTodayStats(accountIds: number[]): Promise<BatchTod
   return data
 }
 
+export interface LegacyImagesUsageResponse {
+  /** 以账号 ID（字符串）为键的 24h 已生成图片张数；缺失键代表 0。 */
+  usage: Record<string, number>
+}
+
+/**
+ * 批量获取若干 OpenAI OAuth 账号在过去 24h 滚动窗口内已通过 ChatGPT Web 旧版生图链路成功生成的图片张数。
+ * 仅 OpenAI OAuth 账号才有意义；非 OpenAI/非 OAuth 账号也可传入但结果总为 0。
+ */
+export async function getLegacyImagesUsageBatch(accountIds: number[]): Promise<LegacyImagesUsageResponse> {
+  const { data } = await apiClient.post<LegacyImagesUsageResponse>('/admin/accounts/legacy-images-usage', {
+    account_ids: accountIds
+  })
+  return data
+}
+
 /**
  * Set account schedulable status
  * @param id - Account ID
@@ -643,6 +659,7 @@ export const accountsAPI = {
   getUsage,
   getTodayStats,
   getBatchTodayStats,
+  getLegacyImagesUsageBatch,
   clearRateLimit,
   recoverState,
   resetAccountQuota,

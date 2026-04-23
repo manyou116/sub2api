@@ -1330,6 +1330,28 @@
                 · 恢复时间 {{ legacyImagesRateLimitStatus.resetAt }}
               </span>
             </p>
+            <!-- 24h 旧版生图用量进度条 -->
+            <div v-if="legacyImages24hUsage !== null || legacyImages24hLoading" class="mt-2">
+              <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 mb-0.5">
+                <span>过去 24h 生图用量</span>
+                <span v-if="!legacyImages24hLoading">
+                  <span :class="legacyImages24hQuota > 0 && (legacyImages24hUsage ?? 0) >= legacyImages24hQuota ? 'font-semibold text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'">
+                    {{ legacyImages24hUsage }}
+                  </span>
+                  <span v-if="legacyImages24hQuota > 0"> / {{ legacyImages24hQuota }} 张</span>
+                  <span v-else> 张（不限）</span>
+                </span>
+                <span v-else class="text-gray-400">加载中…</span>
+              </div>
+              <div v-if="legacyImages24hQuota > 0" class="h-1.5 w-full rounded-full bg-gray-200 dark:bg-dark-600 overflow-hidden">
+                <div
+                  v-if="!legacyImages24hLoading"
+                  class="h-full rounded-full transition-all duration-300"
+                  :class="(legacyImages24hUsage ?? 0) >= legacyImages24hQuota ? 'bg-red-500' : (legacyImages24hUsage ?? 0) >= legacyImages24hQuota - 1 ? 'bg-amber-400' : 'bg-primary-500'"
+                  :style="{ width: `${Math.min(100, ((legacyImages24hUsage ?? 0) / legacyImages24hQuota) * 100)}%` }"
+                />
+              </div>
+            </div>
           </div>
           <select
             v-model="openaiOAuthLegacyImagesMode"
@@ -2028,6 +2050,7 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+const anthropicPassthroughEnabled = ref(false)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
@@ -2052,7 +2075,39 @@ const legacyImagesRateLimitStatus = computed<{ active: boolean; resetAt: string 
   const active = resetAt.getTime() > Date.now()
   return { active, resetAt: resetAt.toLocaleString() }
 })
-const anthropicPassthroughEnabled = ref(false)
+
+// 24h 旧版生图用量（仅 OpenAI OAuth 账号；在 modal 每次打开时刷新）
+const legacyImages24hUsage = ref<number | null>(null)
+const legacyImages24hLoading = ref(false)
+
+// 有效配额：取账号所属 group 的 openai_legacy_images_daily_quota 最小非零值（若全 0 则视为不限）。
+// 前端仅展示用——调度实际逻辑在后端。
+const legacyImages24hQuota = computed<number>(() => {
+  const accountGroups = (props.account?.groups ?? []) as Array<{ openai_legacy_images_daily_quota?: number }>
+  if (accountGroups.length === 0) return 3
+  const quotas = accountGroups
+    .map(g => g.openai_legacy_images_daily_quota ?? 3)
+    .filter(q => q > 0)
+  if (quotas.length === 0) return 0 // all unlimited
+  return Math.min(...quotas)
+})
+
+const fetchLegacyImages24hUsage = async () => {
+  const id = props.account?.id
+  if (!id || props.account?.platform !== 'openai' || props.account?.type !== 'oauth') {
+    legacyImages24hUsage.value = null
+    return
+  }
+  legacyImages24hLoading.value = true
+  try {
+    const result = await adminAPI.accounts.getLegacyImagesUsageBatch([id])
+    legacyImages24hUsage.value = result.usage?.[String(id)] ?? 0
+  } catch {
+    legacyImages24hUsage.value = null
+  } finally {
+    legacyImages24hLoading.value = false
+  }
+}
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
 const {
@@ -2499,6 +2554,7 @@ watch(
     if (!wasShow || newAccount !== previousAccount) {
       syncFormFromAccount(newAccount)
       loadTLSProfiles()
+      fetchLegacyImages24hUsage()
     }
   },
   { immediate: true }

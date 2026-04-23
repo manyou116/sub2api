@@ -827,7 +827,47 @@ func (s *defaultOpenAIAccountScheduler) isAccountImageCapabilityCompatible(
 	if account.isRateLimitActiveForKey(legacyImagesScope) {
 		return false
 	}
+	// 24h 滚动配额（默认 3 张/账号）：超额时跳过，避免 ChatGPT 必然 429 的浪费请求。
+	// 仅在分组级 quota > 0 时启用；查询带 60s 缓存避免 DB hammer。
+	if quota := legacyImagesDailyQuota(schedGroup); quota > 0 {
+		if used := s.cachedLegacyImagesDailyUsage(account.ID); used >= quota {
+			return false
+		}
+	}
 	return true
+}
+
+// legacyImagesDailyQuota 读取分组级 24h 生图配额（0 = 不限）。
+// 未传分组（如 ad-hoc 调度）默认 3 与 ChatGPT Web 实测对齐。
+func legacyImagesDailyQuota(g *Group) int {
+	if g == nil {
+		return 3
+	}
+	if g.OpenAILegacyImagesDailyQuota < 0 {
+		return 0
+	}
+	return g.OpenAILegacyImagesDailyQuota
+}
+
+// cachedLegacyImagesDailyUsage 返回账号最近 24h 已成功生成的 image 数。
+// 60s 进程内缓存：调度高频路径，DB 一秒查多次没意义；过 quota 后下一次查询能在 ≤60s 内放行。
+func (s *defaultOpenAIAccountScheduler) cachedLegacyImagesDailyUsage(accountID int64) int {
+	if s == nil || s.service == nil || s.service.usageLogRepo == nil {
+		return 0
+	}
+	reader, ok := s.service.usageLogRepo.(legacyImageUsageBatchReader)
+	if !ok {
+		return 0
+	}
+	return legacyImagesUsageCache.get(accountID, func() int {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		m, err := reader.GetLegacyImageGenerationsBatch(ctx, []int64{accountID}, time.Now().Add(-24*time.Hour))
+		if err != nil {
+			return 0
+		}
+		return m[accountID]
+	})
 }
 
 func (s *defaultOpenAIAccountScheduler) ReportResult(accountID int64, success bool, firstTokenMs *int) {

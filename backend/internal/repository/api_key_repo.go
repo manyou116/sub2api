@@ -715,6 +715,7 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		RequireOAuthOnly:                g.RequireOauthOnly,
 		RequirePrivacySet:               g.RequirePrivacySet,
 		OpenAILegacyImagesDefault:       g.OpenaiLegacyImagesDefault,
+		OpenAILegacyImagesDailyQuota:    g.OpenaiLegacyImagesDailyQuota,
 		DefaultMappedModel:              g.DefaultMappedModel,
 		MessagesDispatchModelConfig:     g.MessagesDispatchModelConfig,
 		RPMLimit:                        g.RpmLimit,

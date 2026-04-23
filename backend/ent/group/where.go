@@ -190,6 +190,11 @@ func OpenaiLegacyImagesDefault(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldOpenaiLegacyImagesDefault, v))
 }
 
+// OpenaiLegacyImagesDailyQuota applies equality check predicate on the "openai_legacy_images_daily_quota" field. It's identical to OpenaiLegacyImagesDailyQuotaEQ.
+func OpenaiLegacyImagesDailyQuota(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldOpenaiLegacyImagesDailyQuota, v))
+}
+
 // DefaultMappedModel applies equality check predicate on the "default_mapped_model" field. It's identical to DefaultMappedModelEQ.
 func DefaultMappedModel(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldDefaultMappedModel, v))
@@ -1273,6 +1278,46 @@ func OpenaiLegacyImagesDefaultEQ(v bool) predicate.Group {
 // OpenaiLegacyImagesDefaultNEQ applies the NEQ predicate on the "openai_legacy_images_default" field.
 func OpenaiLegacyImagesDefaultNEQ(v bool) predicate.Group {
 	return predicate.Group(sql.FieldNEQ(FieldOpenaiLegacyImagesDefault, v))
+}
+
+// OpenaiLegacyImagesDailyQuotaEQ applies the EQ predicate on the "openai_legacy_images_daily_quota" field.
+func OpenaiLegacyImagesDailyQuotaEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldOpenaiLegacyImagesDailyQuota, v))
+}
+
+// OpenaiLegacyImagesDailyQuotaNEQ applies the NEQ predicate on the "openai_legacy_images_daily_quota" field.
+func OpenaiLegacyImagesDailyQuotaNEQ(v int) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldOpenaiLegacyImagesDailyQuota, v))
+}
+
+// OpenaiLegacyImagesDailyQuotaIn applies the In predicate on the "openai_legacy_images_daily_quota" field.
+func OpenaiLegacyImagesDailyQuotaIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldOpenaiLegacyImagesDailyQuota, vs...))
+}
+
+// OpenaiLegacyImagesDailyQuotaNotIn applies the NotIn predicate on the "openai_legacy_images_daily_quota" field.
+func OpenaiLegacyImagesDailyQuotaNotIn(vs ...int) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldOpenaiLegacyImagesDailyQuota, vs...))
+}
+
+// OpenaiLegacyImagesDailyQuotaGT applies the GT predicate on the "openai_legacy_images_daily_quota" field.
+func OpenaiLegacyImagesDailyQuotaGT(v int) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldOpenaiLegacyImagesDailyQuota, v))
+}
+
+// OpenaiLegacyImagesDailyQuotaGTE applies the GTE predicate on the "openai_legacy_images_daily_quota" field.
+func OpenaiLegacyImagesDailyQuotaGTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldOpenaiLegacyImagesDailyQuota, v))
+}
+
+// OpenaiLegacyImagesDailyQuotaLT applies the LT predicate on the "openai_legacy_images_daily_quota" field.
+func OpenaiLegacyImagesDailyQuotaLT(v int) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldOpenaiLegacyImagesDailyQuota, v))
+}
+
+// OpenaiLegacyImagesDailyQuotaLTE applies the LTE predicate on the "openai_legacy_images_daily_quota" field.
+func OpenaiLegacyImagesDailyQuotaLTE(v int) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldOpenaiLegacyImagesDailyQuota, v))
 }
 
 // DefaultMappedModelEQ applies the EQ predicate on the "default_mapped_model" field.

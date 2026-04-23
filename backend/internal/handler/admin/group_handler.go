@@ -109,6 +109,7 @@ type CreateGroupRequest struct {
 	RequireOAuthOnly            bool                                      `json:"require_oauth_only"`
 	RequirePrivacySet           bool                                      `json:"require_privacy_set"`
 	OpenAILegacyImagesDefault   bool                                      `json:"openai_legacy_images_default"`
+	OpenAILegacyImagesDailyQuota int                                      `json:"openai_legacy_images_daily_quota"`
 	DefaultMappedModel          string                                    `json:"default_mapped_model"`
 	MessagesDispatchModelConfig service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
 	// 分组 RPM 上限（0 = 不限制）
@@ -147,6 +148,7 @@ type UpdateGroupRequest struct {
 	RequireOAuthOnly            *bool                                      `json:"require_oauth_only"`
 	RequirePrivacySet           *bool                                      `json:"require_privacy_set"`
 	OpenAILegacyImagesDefault   *bool                                      `json:"openai_legacy_images_default"`
+	OpenAILegacyImagesDailyQuota *int                                      `json:"openai_legacy_images_daily_quota"`
 	DefaultMappedModel          *string                                    `json:"default_mapped_model"`
 	MessagesDispatchModelConfig *service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
 	// 分组 RPM 上限（0 = 不限制）；nil 表示未提供不改动
@@ -267,6 +269,7 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		RequireOAuthOnly:                req.RequireOAuthOnly,
 		RequirePrivacySet:               req.RequirePrivacySet,
 		OpenAILegacyImagesDefault:       req.OpenAILegacyImagesDefault,
+		OpenAILegacyImagesDailyQuota:    req.OpenAILegacyImagesDailyQuota,
 		DefaultMappedModel:              req.DefaultMappedModel,
 		MessagesDispatchModelConfig:     req.MessagesDispatchModelConfig,
 		RPMLimit:                        req.RPMLimit,
@@ -320,6 +323,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		RequireOAuthOnly:                req.RequireOAuthOnly,
 		RequirePrivacySet:               req.RequirePrivacySet,
 		OpenAILegacyImagesDefault:       req.OpenAILegacyImagesDefault,
+		OpenAILegacyImagesDailyQuota:    req.OpenAILegacyImagesDailyQuota,
 		DefaultMappedModel:              req.DefaultMappedModel,
 		MessagesDispatchModelConfig:     req.MessagesDispatchModelConfig,
 		RPMLimit:                        req.RPMLimit,

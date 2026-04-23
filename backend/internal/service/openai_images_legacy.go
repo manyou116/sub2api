@@ -262,6 +262,10 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthLegacy(
 	defer func() {
 		if retErr == nil {
 			s.recordLegacyImagesSuccess(account)
+			// 同步本地用量缓存：避免「缓存未过期但配额已满」导致放行 1 张超额请求。
+			if result != nil && result.ImageCount > 0 && account != nil {
+				legacyImagesUsageCache.bumpAccount(account.ID, result.ImageCount)
+			}
 		} else {
 			s.recordLegacyImagesFailure(ctx, account)
 		}

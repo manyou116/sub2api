@@ -74,6 +74,8 @@ const (
 	FieldRequirePrivacySet = "require_privacy_set"
 	// FieldOpenaiLegacyImagesDefault holds the string denoting the openai_legacy_images_default field in the database.
 	FieldOpenaiLegacyImagesDefault = "openai_legacy_images_default"
+	// FieldOpenaiLegacyImagesDailyQuota holds the string denoting the openai_legacy_images_daily_quota field in the database.
+	FieldOpenaiLegacyImagesDailyQuota = "openai_legacy_images_daily_quota"
 	// FieldDefaultMappedModel holds the string denoting the default_mapped_model field in the database.
 	FieldDefaultMappedModel = "default_mapped_model"
 	// FieldMessagesDispatchModelConfig holds the string denoting the messages_dispatch_model_config field in the database.
@@ -184,6 +186,7 @@ var Columns = []string{
 	FieldRequireOauthOnly,
 	FieldRequirePrivacySet,
 	FieldOpenaiLegacyImagesDefault,
+	FieldOpenaiLegacyImagesDailyQuota,
 	FieldDefaultMappedModel,
 	FieldMessagesDispatchModelConfig,
 	FieldRpmLimit,
@@ -260,6 +263,10 @@ var (
 	DefaultRequirePrivacySet bool
 	// DefaultOpenaiLegacyImagesDefault holds the default value on creation for the "openai_legacy_images_default" field.
 	DefaultOpenaiLegacyImagesDefault bool
+	// DefaultOpenaiLegacyImagesDailyQuota holds the default value on creation for the "openai_legacy_images_daily_quota" field.
+	DefaultOpenaiLegacyImagesDailyQuota int
+	// OpenaiLegacyImagesDailyQuotaValidator is a validator for the "openai_legacy_images_daily_quota" field. It is called by the builders before save.
+	OpenaiLegacyImagesDailyQuotaValidator func(int) error
 	// DefaultDefaultMappedModel holds the default value on creation for the "default_mapped_model" field.
 	DefaultDefaultMappedModel string
 	// DefaultMappedModelValidator is a validator for the "default_mapped_model" field. It is called by the builders before save.
@@ -411,6 +418,11 @@ func ByRequirePrivacySet(opts ...sql.OrderTermOption) OrderOption {
 // ByOpenaiLegacyImagesDefault orders the results by the openai_legacy_images_default field.
 func ByOpenaiLegacyImagesDefault(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldOpenaiLegacyImagesDefault, opts...).ToFunc()
+}
+
+// ByOpenaiLegacyImagesDailyQuota orders the results by the openai_legacy_images_daily_quota field.
+func ByOpenaiLegacyImagesDailyQuota(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldOpenaiLegacyImagesDailyQuota, opts...).ToFunc()
 }
 
 // ByDefaultMappedModel orders the results by the default_mapped_model field.

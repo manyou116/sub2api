@@ -210,11 +210,23 @@
             </button>
           </template>
           <template #cell-today_stats="{ row }">
-            <AccountTodayStatsCell
-              :stats="todayStatsByAccountId[String(row.id)] ?? null"
-              :loading="todayStatsLoading"
-              :error="todayStatsError"
-            />
+            <div class="space-y-1">
+              <AccountTodayStatsCell
+                :stats="todayStatsByAccountId[String(row.id)] ?? null"
+                :loading="todayStatsLoading"
+                :error="todayStatsError"
+              />
+              <!-- ChatGPT Web 旧版生图 24h 用量 badge：仅 OpenAI OAuth 账号显示 -->
+              <div
+                v-if="row.platform === 'openai' && row.type === 'oauth' && legacyImagesUsageById[String(row.id)] !== undefined"
+                class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium"
+                :class="legacyImagesUsageById[String(row.id)] >= 3 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'"
+                :title="`过去 24 小时通过 ChatGPT Web 旧版链路成功生成的图片张数（默认上限 3 张/账号）`"
+              >
+                <span>🎨</span>
+                <span>{{ legacyImagesUsageById[String(row.id)] }}/3</span>
+              </div>
+            </div>
           </template>
           <template #cell-groups="{ row }">
             <AccountGroupsCell :groups="row.groups" :max-display="4" />
@@ -460,6 +472,24 @@ const todayStatsError = ref<string | null>(null)
 const todayStatsReqSeq = ref(0)
 const pendingTodayStatsRefresh = ref(false)
 const usageManualRefreshToken = ref(0)
+const legacyImagesUsageById = ref<Record<string, number>>({})
+
+const refreshLegacyImagesUsageBatch = async () => {
+  // 仅查询当前账号列表里的 OpenAI OAuth 账号；其它账号无意义。
+  const ids = accounts.value
+    .filter(a => a.platform === 'openai' && a.type === 'oauth')
+    .map(a => a.id)
+  if (ids.length === 0) {
+    legacyImagesUsageById.value = {}
+    return
+  }
+  try {
+    const result = await adminAPI.accounts.getLegacyImagesUsageBatch(ids)
+    legacyImagesUsageById.value = result.usage ?? {}
+  } catch (error) {
+    console.error('Failed to load legacy images usage:', error)
+  }
+}
 
 const buildDefaultTodayStats = (): WindowStats => ({
   requests: 0,
@@ -502,6 +532,8 @@ const refreshTodayStatsBatch = async () => {
       nextStats[key] = serverStats[key] ?? buildDefaultTodayStats()
     }
     todayStatsByAccountId.value = nextStats
+    // 顺带刷新 OpenAI OAuth 24h 旧版生图用量；失败不影响 today stats。
+    refreshLegacyImagesUsageBatch().catch(() => {})
   } catch (error) {
     if (reqSeq !== todayStatsReqSeq.value) return
     todayStatsError.value = 'Failed'

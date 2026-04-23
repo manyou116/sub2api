@@ -63,6 +63,7 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetRequireOauthOnly(groupIn.RequireOAuthOnly).
 		SetRequirePrivacySet(groupIn.RequirePrivacySet).
 		SetOpenaiLegacyImagesDefault(groupIn.OpenAILegacyImagesDefault).
+		SetOpenaiLegacyImagesDailyQuota(groupIn.OpenAILegacyImagesDailyQuota).
 		SetDefaultMappedModel(groupIn.DefaultMappedModel).
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetRpmLimit(groupIn.RPMLimit)
@@ -132,6 +133,7 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetRequireOauthOnly(groupIn.RequireOAuthOnly).
 		SetRequirePrivacySet(groupIn.RequirePrivacySet).
 		SetOpenaiLegacyImagesDefault(groupIn.OpenAILegacyImagesDefault).
+		SetOpenaiLegacyImagesDailyQuota(groupIn.OpenAILegacyImagesDailyQuota).
 		SetDefaultMappedModel(groupIn.DefaultMappedModel).
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetRpmLimit(groupIn.RPMLimit)

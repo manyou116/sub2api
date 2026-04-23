@@ -83,6 +83,11 @@ type accountWindowStatsBatchReader interface {
 	GetAccountWindowStatsBatch(ctx context.Context, accountIDs []int64, startTime time.Time) (map[int64]*usagestats.AccountStats, error)
 }
 
+// legacyImageUsageBatchReader 暴露 ChatGPT Web 旧版生图（gpt-image-1）24h 滚动用量批量查询。
+type legacyImageUsageBatchReader interface {
+	GetLegacyImageGenerationsBatch(ctx context.Context, accountIDs []int64, since time.Time) (map[int64]int, error)
+}
+
 // apiUsageCache 缓存从 Anthropic API 获取的使用率数据（utilization, resets_at）
 // 同时支持缓存错误响应（负缓存），防止 429 等错误导致的重试风暴
 type apiUsageCache struct {
@@ -1334,4 +1339,41 @@ func buildGeminiUsageProgress(used, limit int64, resetAt time.Time, tokens int64
 // 用于账号列表页面显示当前窗口费用
 func (s *AccountUsageService) GetAccountWindowStats(ctx context.Context, accountID int64, startTime time.Time) (*usagestats.AccountStats, error) {
 	return s.usageLogRepo.GetAccountWindowStats(ctx, accountID, startTime)
+}
+
+// GetLegacyImagesUsageLast24h 返回 ChatGPT Web 旧版生图（gpt-image-1）账号在 24h 滚动窗口内的张数。
+// 缺失键统一返回 0。优先读取 60s TTL 缓存避免热路径打 DB。
+func (s *AccountUsageService) GetLegacyImagesUsageLast24h(ctx context.Context, accountIDs []int64) (map[int64]int, error) {
+	out := make(map[int64]int, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return out, nil
+	}
+	missing := make([]int64, 0, len(accountIDs))
+	now := time.Now()
+	for _, id := range accountIDs {
+		if v, ok := legacyImagesUsageCache.peek(id, now); ok {
+			out[id] = v
+			continue
+		}
+		missing = append(missing, id)
+	}
+	if len(missing) > 0 {
+		reader, ok := s.usageLogRepo.(legacyImageUsageBatchReader)
+		if !ok {
+			for _, id := range missing {
+				out[id] = 0
+			}
+			return out, nil
+		}
+		m, err := reader.GetLegacyImageGenerationsBatch(ctx, missing, now.Add(-24*time.Hour))
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range missing {
+			v := m[id]
+			out[id] = v
+			legacyImagesUsageCache.setBaseline(id, v, now)
+		}
+	}
+	return out, nil
 }

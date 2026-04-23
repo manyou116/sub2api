@@ -77,6 +77,8 @@ type Group struct {
 	RequirePrivacySet bool `json:"require_privacy_set,omitempty"`
 	// OpenAI 分组默认启用 ChatGPT Web 旧版生图链路（账号 extra.openai_oauth_legacy_images 显式 true/false 可覆盖）
 	OpenaiLegacyImagesDefault bool `json:"openai_legacy_images_default,omitempty"`
+	// OpenAI 旧版生图每个账号 24 小时滚动配额（0 = 不限制；ChatGPT Web 实测约 3 张/24h）
+	OpenaiLegacyImagesDailyQuota int `json:"openai_legacy_images_daily_quota,omitempty"`
 	// 默认映射模型 ID，当账号级映射找不到时使用此值
 	DefaultMappedModel string `json:"default_mapped_model,omitempty"`
 	// OpenAI Messages 调度模型配置：按 Claude 系列/精确模型映射到目标 GPT 模型
@@ -195,7 +197,7 @@ func (*Group) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case group.FieldRateMultiplier, group.FieldDailyLimitUsd, group.FieldWeeklyLimitUsd, group.FieldMonthlyLimitUsd, group.FieldImagePrice1k, group.FieldImagePrice2k, group.FieldImagePrice4k:
 			values[i] = new(sql.NullFloat64)
-		case group.FieldID, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldRpmLimit:
+		case group.FieldID, group.FieldDefaultValidityDays, group.FieldFallbackGroupID, group.FieldFallbackGroupIDOnInvalidRequest, group.FieldSortOrder, group.FieldOpenaiLegacyImagesDailyQuota, group.FieldRpmLimit:
 			values[i] = new(sql.NullInt64)
 		case group.FieldName, group.FieldDescription, group.FieldStatus, group.FieldPlatform, group.FieldSubscriptionType, group.FieldDefaultMappedModel:
 			values[i] = new(sql.NullString)
@@ -410,6 +412,12 @@ func (_m *Group) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.OpenaiLegacyImagesDefault = value.Bool
 			}
+		case group.FieldOpenaiLegacyImagesDailyQuota:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field openai_legacy_images_daily_quota", values[i])
+			} else if value.Valid {
+				_m.OpenaiLegacyImagesDailyQuota = int(value.Int64)
+			}
 		case group.FieldDefaultMappedModel:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field default_mapped_model", values[i])
@@ -612,6 +620,9 @@ func (_m *Group) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("openai_legacy_images_default=")
 	builder.WriteString(fmt.Sprintf("%v", _m.OpenaiLegacyImagesDefault))
+	builder.WriteString(", ")
+	builder.WriteString("openai_legacy_images_daily_quota=")
+	builder.WriteString(fmt.Sprintf("%v", _m.OpenaiLegacyImagesDailyQuota))
 	builder.WriteString(", ")
 	builder.WriteString("default_mapped_model=")
 	builder.WriteString(_m.DefaultMappedModel)

@@ -2154,3 +2154,37 @@ func sanitizeExtraBaseRPM(extra map[string]any) {
 	}
 	extra["base_rpm"] = v
 }
+
+// LegacyImagesUsageRequest 批量查询账号 ChatGPT Web 旧版生图 24h 用量请求。
+type LegacyImagesUsageRequest struct {
+AccountIDs []int64 `json:"account_ids" binding:"required"`
+}
+
+// GetLegacyImagesUsageBatch 返回若干账号在过去 24h 滚动窗口内已成功生成的图片张数。
+// 路由：POST /api/v1/admin/accounts/legacy-images-usage
+// 仅 OpenAI OAuth 账号才有意义；缺失键统一返回 0；不命中 cache 时回源 DB（usage_logs.image_count）。
+func (h *AccountHandler) GetLegacyImagesUsageBatch(c *gin.Context) {
+var req LegacyImagesUsageRequest
+if err := c.ShouldBindJSON(&req); err != nil {
+response.BadRequest(c, "Invalid request: "+err.Error())
+return
+}
+if len(req.AccountIDs) == 0 {
+response.Success(c, gin.H{"usage": gin.H{}})
+return
+}
+if len(req.AccountIDs) > 500 {
+response.BadRequest(c, "too many account_ids (max 500)")
+return
+}
+usage, err := h.accountUsageService.GetLegacyImagesUsageLast24h(c.Request.Context(), req.AccountIDs)
+if err != nil {
+response.InternalError(c, "failed to query legacy images usage: "+err.Error())
+return
+}
+out := make(map[string]int, len(usage))
+for id, v := range usage {
+out[strconv.FormatInt(id, 10)] = v
+}
+response.Success(c, gin.H{"usage": out})
+}

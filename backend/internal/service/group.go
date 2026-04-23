@@ -56,7 +56,8 @@ type Group struct {
 	AllowMessagesDispatch       bool
 	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
 	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
-	OpenAILegacyImagesDefault   bool // OpenAI 分组默认启用 ChatGPT Web 旧版生图链路；账号 extra.openai_oauth_legacy_images 显式 true/false 可覆盖
+	OpenAILegacyImagesDefault    bool // OpenAI 分组默认启用 ChatGPT Web 旧版生图链路；账号 extra.openai_oauth_legacy_images 显式 true/false 可覆盖
+	OpenAILegacyImagesDailyQuota int  // OpenAI 旧版生图每个账号 24 小时滚动配额（0 = 不限；默认 3 与 ChatGPT Web 实测对齐）
 	DefaultMappedModel          string
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
 
