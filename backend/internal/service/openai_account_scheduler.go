@@ -819,20 +819,11 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(account *Acco
 	return account.SupportsOpenAIImageCapability(req.RequiredImageCapability)
 }
 
-// isAccountImageCapabilityCompatible 在 image 请求路径（Native 和 Basic）对 OAuth 账号
-// 执行旧版生图链路检查：启用状态、熔断、24h 配额、inflight 并发。
-// 非 image 请求 / 非 OAuth 账号一律放行，不影响 text/codex 调度。
-func (s *defaultOpenAIAccountScheduler) isAccountImageCapabilityCompatible(
-	account *Account,
-	req OpenAIAccountScheduleRequest,
-	schedGroup *Group,
-) bool {
-	if account == nil {
-		return false
-	}
-	// 非 image 请求（capability 为空）或 非 OAuth 账号 → 无需额外检查。
-	isImageReq := req.RequiredImageCapability == OpenAIImagesCapabilityNative ||
-		req.RequiredImageCapability == OpenAIImagesCapabilityBasic
+// isLegacyImageAccountCompatible checks legacy image eligibility for OAuth accounts.
+// Used by both the scheduler and the nil-scheduler fallback path.
+// Non-image requests and non-OAuth accounts always pass.
+func (s *OpenAIGatewayService) isLegacyImageAccountCompatible(account *Account, schedGroup *Group, requiredCap OpenAIImagesCapability) bool {
+	isImageReq := requiredCap == OpenAIImagesCapabilityNative || requiredCap == OpenAIImagesCapabilityBasic
 	if !isImageReq || account.Type != AccountTypeOAuth {
 		return true
 	}
@@ -858,6 +849,20 @@ func (s *defaultOpenAIAccountScheduler) isAccountImageCapabilityCompatible(
 		return false
 	}
 	return true
+}
+
+// isAccountImageCapabilityCompatible 在 image 请求路径（Native 和 Basic）对 OAuth 账号
+// 执行旧版生图链路检查：启用状态、熔断、24h 配额、inflight 并发。
+// 非 image 请求 / 非 OAuth 账号一律放行，不影响 text/codex 调度。
+func (s *defaultOpenAIAccountScheduler) isAccountImageCapabilityCompatible(
+	account *Account,
+	req OpenAIAccountScheduleRequest,
+	schedGroup *Group,
+) bool {
+	if account == nil {
+		return false
+	}
+	return s.service.isLegacyImageAccountCompatible(account, schedGroup, req.RequiredImageCapability)
 }
 
 // legacyImagesDailyQuota 读取分组级 24h 生图配额（0 = 不限）。
@@ -901,13 +906,14 @@ func acquireImageSlotForSelection(req OpenAIAccountScheduleRequest, account *Acc
 	return true
 }
 
-// cachedLegacyImagesDailyUsage 返回账号最近 24h 已成功生成的 image 数。
-// 60s 进程内缓存：调度高频路径，DB 一秒查多次没意义；过 quota 后下一次查询能在 ≤60s 内放行。
-func (s *defaultOpenAIAccountScheduler) cachedLegacyImagesDailyUsage(accountID int64) int {
-	if s == nil || s.service == nil || s.service.usageLogRepo == nil {
+// cachedLegacyImagesDailyUsage returns the account's 24h image generation count.
+// Service-level variant shared by the scheduler and the nil-scheduler path.
+// Results are cached for up to 60s to avoid DB hammer on high-frequency scheduling.
+func (s *OpenAIGatewayService) cachedLegacyImagesDailyUsage(accountID int64) int {
+	if s == nil || s.usageLogRepo == nil {
 		return 0
 	}
-	reader, ok := s.service.usageLogRepo.(legacyImageUsageBatchReader)
+	reader, ok := s.usageLogRepo.(legacyImageUsageBatchReader)
 	if !ok {
 		return 0
 	}
@@ -920,6 +926,12 @@ func (s *defaultOpenAIAccountScheduler) cachedLegacyImagesDailyUsage(accountID i
 		}
 		return m[accountID]
 	})
+}
+
+// cachedLegacyImagesDailyUsage 返回账号最近 24h 已成功生成的 image 数。
+// 60s 进程内缓存：调度高频路径，DB 一秒查多次没意义；过 quota 后下一次查询能在 ≤60s 内放行。
+func (s *defaultOpenAIAccountScheduler) cachedLegacyImagesDailyUsage(accountID int64) int {
+	return s.service.cachedLegacyImagesDailyUsage(accountID)
 }
 
 func (s *defaultOpenAIAccountScheduler) ReportResult(accountID int64, success bool, firstTokenMs *int) {
@@ -1071,6 +1083,19 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 		decision.Layer = openAIAccountScheduleLayerLoadBalance
 		if requiredTransport == OpenAIUpstreamTransportAny || requiredTransport == OpenAIUpstreamTransportHTTPSSE {
 			effectiveExcludedIDs := cloneExcludedAccountIDs(excludedIDs)
+			// Lazily fetch the group once for legacy image compatibility checks.
+			var nilSchedGroup *Group
+			nilSchedGroupFetched := false
+			getNilSchedGroup := func() *Group {
+				if nilSchedGroupFetched {
+					return nilSchedGroup
+				}
+				nilSchedGroupFetched = true
+				if groupID != nil && s.schedulerSnapshot != nil {
+					nilSchedGroup, _ = s.schedulerSnapshot.GetGroupByID(ctx, *groupID)
+				}
+				return nilSchedGroup
+			}
 			for {
 				selection, err := s.SelectAccountWithLoadAwareness(ctx, groupID, sessionHash, requestedModel, effectiveExcludedIDs)
 				if err != nil {
@@ -1079,19 +1104,48 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 				if selection == nil || selection.Account == nil {
 					return selection, decision, nil
 				}
-				if selection.Account.SupportsOpenAIImageCapability(requiredImageCapability) {
-					return selection, decision, nil
+				if !selection.Account.SupportsOpenAIImageCapability(requiredImageCapability) {
+					if selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					if effectiveExcludedIDs == nil {
+						effectiveExcludedIDs = make(map[int64]struct{})
+					}
+					if _, exists := effectiveExcludedIDs[selection.Account.ID]; exists {
+						return nil, decision, ErrNoAvailableAccounts
+					}
+					effectiveExcludedIDs[selection.Account.ID] = struct{}{}
+					continue
 				}
-				if selection.ReleaseFunc != nil {
-					selection.ReleaseFunc()
+				if !s.isLegacyImageAccountCompatible(selection.Account, getNilSchedGroup(), requiredImageCapability) {
+					if selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					if effectiveExcludedIDs == nil {
+						effectiveExcludedIDs = make(map[int64]struct{})
+					}
+					if _, exists := effectiveExcludedIDs[selection.Account.ID]; exists {
+						return nil, decision, ErrNoAvailableAccounts
+					}
+					effectiveExcludedIDs[selection.Account.ID] = struct{}{}
+					continue
 				}
-				if effectiveExcludedIDs == nil {
-					effectiveExcludedIDs = make(map[int64]struct{})
+				schedReq := OpenAIAccountScheduleRequest{RequiredImageCapability: requiredImageCapability}
+				if !acquireImageSlotForSelection(schedReq, selection.Account, selection) {
+					// CAS race: another goroutine acquired the inflight slot first; try next account.
+					if selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					if effectiveExcludedIDs == nil {
+						effectiveExcludedIDs = make(map[int64]struct{})
+					}
+					if _, exists := effectiveExcludedIDs[selection.Account.ID]; exists {
+						return nil, decision, ErrNoAvailableAccounts
+					}
+					effectiveExcludedIDs[selection.Account.ID] = struct{}{}
+					continue
 				}
-				if _, exists := effectiveExcludedIDs[selection.Account.ID]; exists {
-					return nil, decision, ErrNoAvailableAccounts
-				}
-				effectiveExcludedIDs[selection.Account.ID] = struct{}{}
+				return selection, decision, nil
 			}
 		}
 

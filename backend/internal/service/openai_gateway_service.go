@@ -1152,6 +1152,32 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 	return currentHash
 }
 
+// GenerateImageSessionHash generates a session hash for image generation requests.
+// Priority: session_id header → conversation_id header → prompt_cache_key in body → fallbackSeed.
+// Unlike GenerateSessionHash, it does NOT derive a hash from chat-format fields (messages, input),
+// preventing the degenerate case where all same-model image requests get the same hash.
+func (s *OpenAIGatewayService) GenerateImageSessionHash(c *gin.Context, body []byte, fallbackSeed string) string {
+	if c == nil {
+		return ""
+	}
+	sessionID := strings.TrimSpace(c.GetHeader("session_id"))
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(c.GetHeader("conversation_id"))
+	}
+	if sessionID == "" && len(body) > 0 {
+		sessionID = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
+	}
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(fallbackSeed)
+	}
+	if sessionID == "" {
+		return ""
+	}
+	currentHash, legacyHash := deriveOpenAISessionHashes(sessionID)
+	attachOpenAILegacySessionHashToGin(c, legacyHash)
+	return currentHash
+}
+
 // GenerateSessionHashWithFallback 先按常规信号生成会话哈希；
 // 当未携带 session_id/conversation_id/prompt_cache_key 时，使用 fallbackSeed 生成稳定哈希。
 // 该方法用于 WS ingress，避免会话信号缺失时发生跨账号漂移。
