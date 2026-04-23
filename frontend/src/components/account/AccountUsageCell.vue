@@ -140,6 +140,22 @@
         </div>
       </div>
       <div v-else class="text-xs text-gray-400">-</div>
+      <!-- 旧版生图 24h 用量进度条（有 legacy 数据时显示） -->
+      <div v-if="legacyImagesUsage !== undefined && legacyImagesQuota > 0" class="mt-1">
+        <div class="flex items-center justify-between text-[10px] text-gray-500 dark:text-gray-400 mb-0.5">
+          <span title="过去 24h ChatGPT Web 旧版生图（gpt-image-1）用量">🎨 24h</span>
+          <span :class="legacyImagesUsage >= legacyImagesQuota ? 'font-semibold text-red-600 dark:text-red-400' : ''">
+            {{ legacyImagesUsage }}/{{ legacyImagesQuota }}
+          </span>
+        </div>
+        <div class="h-1 w-full rounded-full bg-gray-200 dark:bg-dark-600 overflow-hidden">
+          <div
+            class="h-full rounded-full transition-all duration-300"
+            :class="legacyImagesUsage >= legacyImagesQuota ? 'bg-red-500' : legacyImagesUsage >= legacyImagesQuota - 1 ? 'bg-amber-400' : 'bg-primary-500'"
+            :style="{ width: `${Math.min(100, (legacyImagesUsage / legacyImagesQuota) * 100)}%` }"
+          />
+        </div>
+      </div>
     </template>
 
     <!-- Antigravity OAuth accounts: fetch usage from API -->
@@ -459,11 +475,17 @@ const props = withDefaults(
     todayStats?: WindowStats | null
     todayStatsLoading?: boolean
     manualRefreshToken?: number
+    /** ChatGPT Web 旧版生图 24h 用量（仅 OpenAI OAuth 账号有意义；undefined = 未加载） */
+    legacyImagesUsage?: number | undefined
+    /** 有效配额（0 = 不限；默认 3） */
+    legacyImagesQuota?: number
   }>(),
   {
     todayStats: null,
     todayStatsLoading: false,
-    manualRefreshToken: 0
+    manualRefreshToken: 0,
+    legacyImagesUsage: undefined,
+    legacyImagesQuota: 3
   }
 )
 

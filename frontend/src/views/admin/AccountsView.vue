@@ -210,23 +210,11 @@
             </button>
           </template>
           <template #cell-today_stats="{ row }">
-            <div class="space-y-1">
-              <AccountTodayStatsCell
-                :stats="todayStatsByAccountId[String(row.id)] ?? null"
-                :loading="todayStatsLoading"
-                :error="todayStatsError"
-              />
-              <!-- ChatGPT Web 旧版生图 24h 用量 badge：仅 OpenAI OAuth 账号显示 -->
-              <div
-                v-if="row.platform === 'openai' && row.type === 'oauth' && legacyImagesUsageById[String(row.id)] !== undefined"
-                class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium"
-                :class="legacyImagesUsageById[String(row.id)] >= 3 ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'"
-                :title="`过去 24 小时通过 ChatGPT Web 旧版链路成功生成的图片张数（默认上限 3 张/账号）`"
-              >
-                <span>🎨</span>
-                <span>{{ legacyImagesUsageById[String(row.id)] }}/3</span>
-              </div>
-            </div>
+            <AccountTodayStatsCell
+              :stats="todayStatsByAccountId[String(row.id)] ?? null"
+              :loading="todayStatsLoading"
+              :error="todayStatsError"
+            />
           </template>
           <template #cell-groups="{ row }">
             <AccountGroupsCell :groups="row.groups" :max-display="4" />
@@ -237,6 +225,8 @@
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
               :manual-refresh-token="usageManualRefreshToken"
+              :legacy-images-usage="legacyImagesUsageById[String(row.id)]"
+              :legacy-images-quota="legacyImagesQuotaById[String(row.id)] ?? 3"
             />
           </template>
           <template #cell-proxy="{ row }">
@@ -473,6 +463,19 @@ const todayStatsReqSeq = ref(0)
 const pendingTodayStatsRefresh = ref(false)
 const usageManualRefreshToken = ref(0)
 const legacyImagesUsageById = ref<Record<string, number>>({})
+
+// 每个账号有效配额：取所属分组中 openai_legacy_images_daily_quota 最小非零值；全 0 视为不限返回 0。
+const legacyImagesQuotaById = computed<Record<string, number>>(() => {
+  const out: Record<string, number> = {}
+  for (const a of accounts.value) {
+    if (a.platform !== 'openai' || a.type !== 'oauth') continue
+    const quotas = (a.groups ?? [])
+      .map(g => (g as { openai_legacy_images_daily_quota?: number }).openai_legacy_images_daily_quota ?? 3)
+      .filter(q => q > 0)
+    out[String(a.id)] = quotas.length ? Math.min(...quotas) : 0
+  }
+  return out
+})
 
 const refreshLegacyImagesUsageBatch = async () => {
   // 仅查询当前账号列表里的 OpenAI OAuth 账号；其它账号无意义。
