@@ -1306,6 +1306,42 @@
         </div>
       </div>
 
+      <!-- OpenAI OAuth 旧版生图（ChatGPT Web /f/conversation）三态选择 -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0 flex-1">
+            <label class="input-label mb-0">ChatGPT Web 旧版生图</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              通过 ChatGPT Web /f/conversation 走通 image2api（gpt-image-1）。
+              「跟随分组」按所属分组默认值；显式启用/禁用会覆盖分组设置。
+            </p>
+            <p
+              v-if="legacyImagesRateLimitStatus"
+              class="mt-2 text-xs"
+              :class="legacyImagesRateLimitStatus.active
+                ? 'text-amber-600 dark:text-amber-400'
+                : 'text-gray-500 dark:text-gray-400'"
+            >
+              当前限流状态：{{ legacyImagesRateLimitStatus.active ? '熔断中' : '正常' }}
+              <span v-if="legacyImagesRateLimitStatus.resetAt">
+                · 恢复时间 {{ legacyImagesRateLimitStatus.resetAt }}
+              </span>
+            </p>
+          </div>
+          <select
+            v-model="openaiOAuthLegacyImagesMode"
+            class="input-base w-32 flex-shrink-0"
+          >
+            <option value="inherit">跟随分组</option>
+            <option value="enabled">强制启用</option>
+            <option value="disabled">强制禁用</option>
+          </select>
+        </div>
+      </div>
+
       <div>
         <div class="flex items-center justify-between">
           <div>
@@ -1995,6 +2031,27 @@ const openaiPassthroughEnabled = ref(false)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
+// OpenAI OAuth 旧版生图（ChatGPT Web /f/conversation）三态：
+// 'inherit'（跟随分组）/ 'enabled'（强制启用）/ 'disabled'（强制禁用）
+type OpenAILegacyImagesMode = 'inherit' | 'enabled' | 'disabled'
+const openaiOAuthLegacyImagesMode = ref<OpenAILegacyImagesMode>('inherit')
+const legacyImagesRateLimitStatus = computed<{ active: boolean; resetAt: string | null } | null>(() => {
+  if (props.account?.platform !== 'openai' || props.account?.type !== 'oauth') {
+    return null
+  }
+  const extra = (props.account?.extra as Record<string, unknown> | undefined) || undefined
+  const limits = extra?.model_rate_limits as Record<string, { rate_limit_reset_at?: string }> | undefined
+  const resetAtStr = limits?.legacy_images?.rate_limit_reset_at
+  if (!resetAtStr) {
+    return { active: false, resetAt: null }
+  }
+  const resetAt = new Date(resetAtStr)
+  if (Number.isNaN(resetAt.getTime())) {
+    return { active: false, resetAt: null }
+  }
+  const active = resetAt.getTime() > Date.now()
+  return { active, resetAt: resetAt.toLocaleString() }
+})
 const anthropicPassthroughEnabled = ref(false)
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
@@ -2180,6 +2237,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
+  openaiOAuthLegacyImagesMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   webSearchEmulationMode.value = 'default'
   if (newAccount.platform === 'openai' && (newAccount.type === 'oauth' || newAccount.type === 'apikey')) {
@@ -2198,6 +2256,15 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     })
     if (newAccount.type === 'oauth') {
       codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
+      // 旧版生图三态：true → enabled，false → disabled，缺失 → inherit
+      const legacyVal = extra?.openai_oauth_legacy_images
+      if (legacyVal === true) {
+        openaiOAuthLegacyImagesMode.value = 'enabled'
+      } else if (legacyVal === false) {
+        openaiOAuthLegacyImagesMode.value = 'disabled'
+      } else {
+        openaiOAuthLegacyImagesMode.value = 'inherit'
+      }
     }
   }
   if (newAccount.platform === 'anthropic' && newAccount.type === 'apikey') {
@@ -3217,6 +3284,18 @@ const handleSubmit = async () => {
           newExtra.codex_cli_only = false
         } else {
           delete newExtra.codex_cli_only
+        }
+
+        // 旧版生图三态写回：
+        // - 'inherit' → 删除字段，由分组默认决定
+        // - 'enabled' → true（覆盖分组）
+        // - 'disabled' → false（覆盖分组）
+        if (openaiOAuthLegacyImagesMode.value === 'enabled') {
+          newExtra.openai_oauth_legacy_images = true
+        } else if (openaiOAuthLegacyImagesMode.value === 'disabled') {
+          newExtra.openai_oauth_legacy_images = false
+        } else {
+          delete newExtra.openai_oauth_legacy_images
         }
       }
 
