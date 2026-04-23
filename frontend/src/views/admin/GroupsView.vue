@@ -1223,6 +1223,47 @@
               />
             </button>
           </div>
+
+          <!-- openai_legacy_images_default toggle (仅 OpenAI 平台展示) -->
+          <div
+            v-if="createForm.platform === 'openai'"
+            class="flex items-center justify-between"
+          >
+            <div>
+              <label class="text-sm text-gray-600 dark:text-gray-400"
+                >默认走 ChatGPT Web 旧版生图</label
+              >
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {{
+                  createForm.openai_legacy_images_default
+                    ? "已启用 — 本组下未单独设置 openai_oauth_legacy_images 的 OAuth 账号将走 /f/conversation 链路（适合 free 账号）"
+                    : "未启用 — 本组 OAuth 账号默认走 Codex /responses 生图（账号 extra 仍可单独覆盖）"
+                }}
+              </p>
+            </div>
+            <button
+              type="button"
+              @click="
+                createForm.openai_legacy_images_default =
+                  !createForm.openai_legacy_images_default
+              "
+              class="relative inline-flex h-6 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+              :class="
+                createForm.openai_legacy_images_default
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600'
+              "
+            >
+              <span
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                :class="
+                  createForm.openai_legacy_images_default
+                    ? 'translate-x-6'
+                    : 'translate-x-1'
+                "
+              />
+            </button>
+          </div>
         </div>
 
         <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
@@ -2354,6 +2395,47 @@
               />
             </button>
           </div>
+
+          <!-- openai_legacy_images_default toggle (仅 OpenAI 平台展示) -->
+          <div
+            v-if="editForm.platform === 'openai'"
+            class="flex items-center justify-between"
+          >
+            <div>
+              <label class="text-sm text-gray-600 dark:text-gray-400"
+                >默认走 ChatGPT Web 旧版生图</label
+              >
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {{
+                  editForm.openai_legacy_images_default
+                    ? "已启用 — 本组下未单独设置 openai_oauth_legacy_images 的 OAuth 账号将走 /f/conversation 链路（适合 free 账号）"
+                    : "未启用 — 本组 OAuth 账号默认走 Codex /responses 生图（账号 extra 仍可单独覆盖）"
+                }}
+              </p>
+            </div>
+            <button
+              type="button"
+              @click="
+                editForm.openai_legacy_images_default =
+                  !editForm.openai_legacy_images_default
+              "
+              class="relative inline-flex h-6 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+              :class="
+                editForm.openai_legacy_images_default
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600'
+              "
+            >
+              <span
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                :class="
+                  editForm.openai_legacy_images_default
+                    ? 'translate-x-6'
+                    : 'translate-x-1'
+                "
+              />
+            </button>
+          </div>
         </div>
 
         <!-- 无效请求兜底（仅 anthropic/antigravity 平台，且非订阅分组） -->
@@ -3026,6 +3108,8 @@ const createForm = reactive({
   // 账号过滤控制（OpenAI/Antigravity 平台）
   require_oauth_only: false,
   require_privacy_set: false,
+  // OpenAI 分组默认是否走 ChatGPT Web 旧版生图（仅 OpenAI 平台生效）
+  openai_legacy_images_default: false,
   // 模型路由开关
   model_routing_enabled: false,
   // 支持的模型系列（仅 antigravity 平台）
@@ -3309,6 +3393,8 @@ const editForm = reactive({
   // 账号过滤控制（OpenAI/Antigravity 平台）
   require_oauth_only: false,
   require_privacy_set: false,
+  // OpenAI 分组默认是否走 ChatGPT Web 旧版生图（仅 OpenAI 平台生效）
+  openai_legacy_images_default: false,
   // 模型路由开关
   model_routing_enabled: false,
   // 支持的模型系列（仅 antigravity 平台）
@@ -3488,6 +3574,7 @@ const closeCreateModal = () => {
   resetMessagesDispatchFormState(createForm);
   createForm.require_oauth_only = false;
   createForm.require_privacy_set = false;
+  createForm.openai_legacy_images_default = false;
   createForm.supported_model_scopes = ["claude", "gemini_text", "gemini_image"];
   createForm.mcp_xml_inject = true;
   createForm.copy_accounts_from_group_ids = [];
@@ -3602,6 +3689,9 @@ const handleEdit = async (group: AdminGroup) => {
     messagesDispatchFormState.exact_model_mappings;
   editForm.require_oauth_only = group.require_oauth_only ?? false;
   editForm.require_privacy_set = group.require_privacy_set ?? false;
+  editForm.openai_legacy_images_default =
+    (group as { openai_legacy_images_default?: boolean })
+      .openai_legacy_images_default ?? false;
   editForm.model_routing_enabled = group.model_routing_enabled || false;
   editForm.supported_model_scopes = group.supported_model_scopes || [
     "claude",
@@ -3769,6 +3859,7 @@ watch(
     if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
       createForm.require_oauth_only = false;
       createForm.require_privacy_set = false;
+      createForm.openai_legacy_images_default = false;
     }
   },
 );
@@ -3785,6 +3876,7 @@ watch(
     if (!["openai", "antigravity", "anthropic", "gemini"].includes(newVal)) {
       editForm.require_oauth_only = false;
       editForm.require_privacy_set = false;
+      editForm.openai_legacy_images_default = false;
     }
   },
 );

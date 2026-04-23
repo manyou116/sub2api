@@ -475,6 +475,9 @@ export interface Group {
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   require_oauth_only: boolean
   require_privacy_set: boolean
+  // OpenAI 分组默认是否走 ChatGPT Web 旧版生图（仅 OpenAI 平台生效）；
+  // 账号 extra.openai_oauth_legacy_images 显式 true/false 可覆盖。
+  openai_legacy_images_default?: boolean
   created_at: string
   updated_at: string
 }
@@ -581,6 +584,7 @@ export interface CreateGroupRequest {
   supported_model_scopes?: string[]
   require_oauth_only?: boolean
   require_privacy_set?: boolean
+  openai_legacy_images_default?: boolean
   // 从指定分组复制账号
   copy_accounts_from_group_ids?: number[]
 }
@@ -606,6 +610,7 @@ export interface UpdateGroupRequest {
   supported_model_scopes?: string[]
   require_oauth_only?: boolean
   require_privacy_set?: boolean
+  openai_legacy_images_default?: boolean
   copy_accounts_from_group_ids?: number[]
 }
 
