@@ -1153,10 +1153,11 @@ func (s *OpenAIGatewayService) GenerateSessionHash(c *gin.Context, body []byte) 
 }
 
 // GenerateImageSessionHash generates a session hash for image generation requests.
-// Priority: session_id header → conversation_id header → prompt_cache_key in body → fallbackSeed.
-// Unlike GenerateSessionHash, it does NOT derive a hash from chat-format fields (messages, input),
-// preventing the degenerate case where all same-model image requests get the same hash.
-func (s *OpenAIGatewayService) GenerateImageSessionHash(c *gin.Context, body []byte, fallbackSeed string) string {
+// Priority: session_id header -> conversation_id header -> prompt_cache_key in body.
+// Stateless image requests intentionally do not fall back to prompt/body-derived hashes:
+// identical prompts should be load-balanced across accounts unless the caller explicitly
+// asks for affinity with one of the headers or prompt_cache_key.
+func (s *OpenAIGatewayService) GenerateImageSessionHash(c *gin.Context, body []byte, _ string) string {
 	if c == nil {
 		return ""
 	}
@@ -1166,9 +1167,6 @@ func (s *OpenAIGatewayService) GenerateImageSessionHash(c *gin.Context, body []b
 	}
 	if sessionID == "" && len(body) > 0 {
 		sessionID = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
-	}
-	if sessionID == "" {
-		sessionID = strings.TrimSpace(fallbackSeed)
 	}
 	if sessionID == "" {
 		return ""

@@ -111,7 +111,16 @@ func buildOpenAIImagesStreamPartialPayload(
 	payload, _ = sjson.SetBytes(payload, "partial_image_index", partialImageIndex)
 	payload, _ = sjson.SetBytes(payload, "b64_json", b64)
 	if strings.EqualFold(strings.TrimSpace(responseFormat), "url") {
-		payload, _ = sjson.SetBytes(payload, "url", "data:"+openAIImageOutputMIMEType(meta.OutputFormat)+";base64,"+b64)
+		payload, _ = sjson.SetBytes(payload, "url", openAIImageDataURI(b64, meta.OutputFormat))
+	}
+	if isOpenAIImagesMarkdownFormat(responseFormat) {
+		markdown := buildOpenAIImagesMarkdown([]openAIImageMarkdownItem{{
+			Src: openAIImageDataURI(b64, meta.OutputFormat),
+			Alt: "image",
+		}})
+		if len(markdown) > 0 {
+			payload, _ = sjson.SetBytes(payload, "markdown", strings.TrimSpace(string(markdown)))
+		}
 	}
 	if meta.Background != "" {
 		payload, _ = sjson.SetBytes(payload, "background", meta.Background)
@@ -147,7 +156,16 @@ func buildOpenAIImagesStreamCompletedPayload(
 	payload, _ = sjson.SetBytes(payload, "created_at", createdAt)
 	payload, _ = sjson.SetBytes(payload, "b64_json", img.Result)
 	if strings.EqualFold(strings.TrimSpace(responseFormat), "url") {
-		payload, _ = sjson.SetBytes(payload, "url", "data:"+openAIImageOutputMIMEType(img.OutputFormat)+";base64,"+img.Result)
+		payload, _ = sjson.SetBytes(payload, "url", openAIImageDataURI(img.Result, img.OutputFormat))
+	}
+	if isOpenAIImagesMarkdownFormat(responseFormat) {
+		markdown := buildOpenAIImagesMarkdown([]openAIImageMarkdownItem{{
+			Src: openAIImageDataURI(img.Result, img.OutputFormat),
+			Alt: img.RevisedPrompt,
+		}})
+		if len(markdown) > 0 {
+			payload, _ = sjson.SetBytes(payload, "markdown", strings.TrimSpace(string(markdown)))
+		}
 	}
 	if img.Background != "" {
 		payload, _ = sjson.SetBytes(payload, "background", img.Background)
@@ -537,11 +555,23 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 		firstMeta.Model = strings.TrimSpace(fallbackModel)
 	}
 
+	if wantsOpenAIImagesMarkdownResponse(c, responseFormat) {
+		markdown, ok := buildOpenAIImagesMarkdownFromResponsesResults(results)
+		if !ok {
+			return OpenAIUsage{}, 0, fmt.Errorf("upstream image response cannot be converted to markdown")
+		}
+		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		c.Writer.Header().Set("Content-Type", openAIImagesMarkdownContentType)
+		c.Data(resp.StatusCode, openAIImagesMarkdownContentType, markdown)
+		return usage, len(results), nil
+	}
+
 	responseBody, err := buildOpenAIImagesAPIResponse(results, createdAt, usageRaw, firstMeta, responseFormat)
 	if err != nil {
 		return OpenAIUsage{}, 0, err
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	c.Data(resp.StatusCode, "application/json; charset=utf-8", responseBody)
 	return usage, len(results), nil
 }

@@ -17,7 +17,9 @@ var legacyImagesInflight sync.Map // map[int64]*atomic.Int32
 
 func legacyImagesInflightCount(accountID int64) int32 {
 	if v, ok := legacyImagesInflight.Load(accountID); ok {
-		return v.(*atomic.Int32).Load()
+		if counter, ok := v.(*atomic.Int32); ok && counter != nil {
+			return counter.Load()
+		}
 	}
 	return 0
 }
@@ -25,13 +27,20 @@ func legacyImagesInflightCount(accountID int64) int32 {
 // legacyImagesInflightTryAcquire atomically claims the image slot for an account
 // (CAS 0→1). Returns true if acquired; false if another request is already in-flight.
 func legacyImagesInflightTryAcquire(accountID int64) bool {
-	v, _ := legacyImagesInflight.LoadOrStore(accountID, new(atomic.Int32))
-	return v.(*atomic.Int32).CompareAndSwap(0, 1)
+	counter := new(atomic.Int32)
+	actual, _ := legacyImagesInflight.LoadOrStore(accountID, counter)
+	if existing, ok := actual.(*atomic.Int32); ok && existing != nil {
+		return existing.CompareAndSwap(0, 1)
+	}
+	legacyImagesInflight.Store(accountID, counter)
+	return counter.CompareAndSwap(0, 1)
 }
 
 func legacyImagesInflightRelease(accountID int64) {
 	if v, ok := legacyImagesInflight.Load(accountID); ok {
-		v.(*atomic.Int32).Add(-1)
+		if counter, ok := v.(*atomic.Int32); ok && counter != nil {
+			counter.Add(-1)
+		}
 	}
 }
 
@@ -115,13 +124,6 @@ func (c *legacyImagesUsageCacheStore) setBaseline(accountID int64, value int, no
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[accountID] = legacyImagesUsageCacheEntry{value: value, expiresAt: now.Add(legacyImagesUsageCacheTTL)}
-}
-
-// invalidateAccount 主动失效缓存（管理员重置等场景）。
-func (c *legacyImagesUsageCacheStore) invalidateAccount(accountID int64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.entries, accountID)
 }
 
 // normalizeLegacyImagesDailyQuota 把 < 0 的输入归一化为 0（不限）。

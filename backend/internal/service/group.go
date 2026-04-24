@@ -53,13 +53,13 @@ type Group struct {
 	SortOrder int
 
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch       bool
-	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
-	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
+	AllowMessagesDispatch        bool
+	RequireOAuthOnly             bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
+	RequirePrivacySet            bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
 	OpenAILegacyImagesDefault    bool // OpenAI 分组默认启用 ChatGPT Web 旧版生图链路；账号 extra.openai_oauth_legacy_images 显式 true/false 可覆盖
 	OpenAILegacyImagesDailyQuota int  // OpenAI 旧版生图每个账号 24 小时滚动配额（0 = 不限；默认 3 与 ChatGPT Web 实测对齐）
-	DefaultMappedModel          string
-	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
+	DefaultMappedModel           string
+	MessagesDispatchModelConfig  OpenAIMessagesDispatchModelConfig
 
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制）。
 	// 一旦设置即接管该分组用户的限流（覆盖用户级 rpm_limit），可被 user-group rpm_override 进一步覆盖。

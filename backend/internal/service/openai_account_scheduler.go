@@ -395,7 +395,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	cfg := s.service.schedulingConfig()
 	// WaitPlan.MaxConcurrency 使用 Concurrency（非 EffectiveLoadFactor），因为 WaitPlan 控制的是 Redis 实际并发槽位等待。
 	if s.service.concurrencyService != nil {
-		return &AccountSelectionResult{
+		sel := &AccountSelectionResult{
 			Account: account,
 			WaitPlan: &AccountWaitPlan{
 				AccountID:      accountID,
@@ -403,7 +403,11 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 				Timeout:        cfg.StickySessionWaitTimeout,
 				MaxWaiting:     cfg.StickySessionMaxWaiting,
 			},
-		}, nil
+		}
+		if !acquireImageSlotForSelection(req, account, sel) {
+			return nil, nil
+		}
+		return sel, nil
 	}
 	return nil, nil
 }
@@ -785,7 +789,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		if fresh == nil || !s.isAccountTransportCompatible(fresh, req.RequiredTransport) || !s.isAccountRequestCompatible(fresh, req) {
 			continue
 		}
-		return &AccountSelectionResult{
+		sel := &AccountSelectionResult{
 			Account: fresh,
 			WaitPlan: &AccountWaitPlan{
 				AccountID:      fresh.ID,
@@ -793,7 +797,11 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 				Timeout:        cfg.FallbackWaitTimeout,
 				MaxWaiting:     cfg.FallbackMaxWaiting,
 			},
-		}, len(candidates), topK, loadSkew, nil
+		}
+		if !acquireImageSlotForSelection(req, fresh, sel) {
+			continue
+		}
+		return sel, len(candidates), topK, loadSkew, nil
 	}
 
 	return nil, len(candidates), topK, loadSkew, ErrNoAvailableAccounts
@@ -900,7 +908,13 @@ func legacyImagesDailyQuota(g *Group) int {
 func acquireImageSlotForSelection(req OpenAIAccountScheduleRequest, account *Account, result *AccountSelectionResult) bool {
 	isImageReq := req.RequiredImageCapability == OpenAIImagesCapabilityNative ||
 		req.RequiredImageCapability == OpenAIImagesCapabilityBasic
-	if !isImageReq || account.Type != AccountTypeOAuth {
+	if !isImageReq {
+		return true
+	}
+	if account == nil || result == nil {
+		return false
+	}
+	if account.Type != AccountTypeOAuth {
 		return true
 	}
 	if !legacyImagesInflightTryAcquire(account.ID) {
@@ -940,12 +954,6 @@ func (s *OpenAIGatewayService) cachedLegacyImagesDailyUsage(accountID int64) int
 		}
 		return m[accountID]
 	})
-}
-
-// cachedLegacyImagesDailyUsage 返回账号最近 24h 已成功生成的 image 数。
-// 60s 进程内缓存：调度高频路径，DB 一秒查多次没意义；过 quota 后下一次查询能在 ≤60s 内放行。
-func (s *defaultOpenAIAccountScheduler) cachedLegacyImagesDailyUsage(accountID int64) int {
-	return s.service.cachedLegacyImagesDailyUsage(accountID)
 }
 
 func (s *defaultOpenAIAccountScheduler) ReportResult(accountID int64, success bool, firstTokenMs *int) {

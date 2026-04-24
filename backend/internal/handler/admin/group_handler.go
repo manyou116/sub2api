@@ -105,13 +105,13 @@ type CreateGroupRequest struct {
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes []string `json:"supported_model_scopes"`
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch       bool                                      `json:"allow_messages_dispatch"`
-	RequireOAuthOnly            bool                                      `json:"require_oauth_only"`
-	RequirePrivacySet           bool                                      `json:"require_privacy_set"`
-	OpenAILegacyImagesDefault   bool                                      `json:"openai_legacy_images_default"`
-	OpenAILegacyImagesDailyQuota int                                      `json:"openai_legacy_images_daily_quota"`
-	DefaultMappedModel          string                                    `json:"default_mapped_model"`
-	MessagesDispatchModelConfig service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
+	AllowMessagesDispatch        bool                                      `json:"allow_messages_dispatch"`
+	RequireOAuthOnly             bool                                      `json:"require_oauth_only"`
+	RequirePrivacySet            bool                                      `json:"require_privacy_set"`
+	OpenAILegacyImagesDefault    bool                                      `json:"openai_legacy_images_default"`
+	OpenAILegacyImagesDailyQuota int                                       `json:"openai_legacy_images_daily_quota"`
+	DefaultMappedModel           string                                    `json:"default_mapped_model"`
+	MessagesDispatchModelConfig  service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
 	// 分组 RPM 上限（0 = 不限制）
 	RPMLimit int `json:"rpm_limit"`
 	// 从指定分组复制账号（创建后自动绑定）
@@ -144,13 +144,13 @@ type UpdateGroupRequest struct {
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes *[]string `json:"supported_model_scopes"`
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch       *bool                                      `json:"allow_messages_dispatch"`
-	RequireOAuthOnly            *bool                                      `json:"require_oauth_only"`
-	RequirePrivacySet           *bool                                      `json:"require_privacy_set"`
-	OpenAILegacyImagesDefault   *bool                                      `json:"openai_legacy_images_default"`
-	OpenAILegacyImagesDailyQuota *int                                      `json:"openai_legacy_images_daily_quota"`
-	DefaultMappedModel          *string                                    `json:"default_mapped_model"`
-	MessagesDispatchModelConfig *service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
+	AllowMessagesDispatch        *bool                                      `json:"allow_messages_dispatch"`
+	RequireOAuthOnly             *bool                                      `json:"require_oauth_only"`
+	RequirePrivacySet            *bool                                      `json:"require_privacy_set"`
+	OpenAILegacyImagesDefault    *bool                                      `json:"openai_legacy_images_default"`
+	OpenAILegacyImagesDailyQuota *int                                       `json:"openai_legacy_images_daily_quota"`
+	DefaultMappedModel           *string                                    `json:"default_mapped_model"`
+	MessagesDispatchModelConfig  *service.OpenAIMessagesDispatchModelConfig `json:"messages_dispatch_model_config"`
 	// 分组 RPM 上限（0 = 不限制）；nil 表示未提供不改动
 	RPMLimit *int `json:"rpm_limit"`
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）

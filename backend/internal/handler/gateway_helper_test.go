@@ -128,6 +128,36 @@ func TestWrapReleaseOnDone_ConcurrentCalls(t *testing.T) {
 	}
 }
 
+func TestCombineReleaseFuncs_ReleasesAllOnce(t *testing.T) {
+	var firstCount int32
+	var secondCount int32
+
+	release := combineReleaseFuncs(
+		func() { atomic.AddInt32(&firstCount, 1) },
+		nil,
+		func() { atomic.AddInt32(&secondCount, 1) },
+	)
+	if release == nil {
+		t.Fatal("expected release function")
+	}
+
+	release()
+	release()
+
+	if count := atomic.LoadInt32(&firstCount); count != 1 {
+		t.Errorf("expected first release count to be 1, got %d", count)
+	}
+	if count := atomic.LoadInt32(&secondCount); count != 1 {
+		t.Errorf("expected second release count to be 1, got %d", count)
+	}
+}
+
+func TestCombineReleaseFuncs_NilOnly(t *testing.T) {
+	if release := combineReleaseFuncs(nil, nil); release != nil {
+		t.Fatal("expected nil release function")
+	}
+}
+
 // BenchmarkWrapReleaseOnDone 性能基准测试
 func BenchmarkWrapReleaseOnDone(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())

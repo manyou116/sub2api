@@ -394,6 +394,10 @@ func isOpenAIImageGenerationModel(model string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-image-")
 }
 
+func IsOpenAIImageGenerationModel(model string) bool {
+	return isOpenAIImageGenerationModel(model)
+}
+
 func validateOpenAIImagesModel(model string) error {
 	model = strings.TrimSpace(model)
 	if isOpenAIImageGenerationModel(model) {
@@ -552,7 +556,8 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		parsed.Endpoint,
 		account.Type,
 	)
-	forwardBody, forwardContentType, err := rewriteOpenAIImagesModel(body, parsed.ContentType, upstreamModel)
+	markdownResponse := wantsOpenAIImagesMarkdownResponse(c, parsed.ResponseFormat)
+	forwardBody, forwardContentType, err := rewriteOpenAIImagesForUpstream(body, parsed.ContentType, upstreamModel, parsed.ResponseFormat)
 	if err != nil {
 		return nil, err
 	}
@@ -567,6 +572,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	upstreamReq, err := s.buildOpenAIImagesRequest(ctx, c, account, forwardBody, forwardContentType, token, parsed.Endpoint)
 	if err != nil {
 		return nil, err
+	}
+	if markdownResponse {
+		upstreamReq.Header.Set("Accept", "application/json")
 	}
 
 	proxyURL := ""
@@ -622,7 +630,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	imageCount := parsed.N
 	var firstTokenMs *int
 	if parsed.Stream {
-		streamUsage, streamCount, ttft, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime)
+		streamUsage, streamCount, ttft, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime, parsed.ResponseFormat)
 		if err != nil {
 			return nil, err
 		}
@@ -630,7 +638,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		imageCount = streamCount
 		firstTokenMs = ttft
 	} else {
-		nonStreamUsage, nonStreamCount, err := s.handleOpenAIImagesNonStreamingResponse(resp, c)
+		nonStreamUsage, nonStreamCount, err := s.handleOpenAIImagesNonStreamingResponse(resp, c, parsed.ResponseFormat)
 		if err != nil {
 			return nil, err
 		}
@@ -710,24 +718,36 @@ func buildOpenAIImagesURL(base string, endpoint string) string {
 	return normalized + endpoint
 }
 
-func rewriteOpenAIImagesModel(body []byte, contentType string, model string) ([]byte, string, error) {
+func rewriteOpenAIImagesForUpstream(body []byte, contentType string, model string, responseFormat string) ([]byte, string, error) {
 	model = strings.TrimSpace(model)
-	if model == "" {
+	fields := make(map[string]string, 2)
+	if model != "" {
+		fields["model"] = model
+	}
+	if upstreamFormat := normalizeOpenAIImagesUpstreamResponseFormat(responseFormat); upstreamFormat != "" &&
+		!strings.EqualFold(upstreamFormat, strings.TrimSpace(responseFormat)) {
+		fields["response_format"] = upstreamFormat
+	}
+	if len(fields) == 0 {
 		return body, contentType, nil
 	}
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err == nil && strings.EqualFold(mediaType, "multipart/form-data") {
-		rewrittenBody, rewrittenType, rewriteErr := rewriteOpenAIImagesMultipartModel(body, contentType, model)
+		rewrittenBody, rewrittenType, rewriteErr := rewriteOpenAIImagesMultipartFields(body, contentType, fields)
 		return rewrittenBody, rewrittenType, rewriteErr
 	}
-	rewritten, err := sjson.SetBytes(body, "model", model)
-	if err != nil {
-		return nil, "", fmt.Errorf("rewrite image request model: %w", err)
+	rewritten := body
+	for field, value := range fields {
+		var err error
+		rewritten, err = sjson.SetBytes(rewritten, field, value)
+		if err != nil {
+			return nil, "", fmt.Errorf("rewrite image request %s: %w", field, err)
+		}
 	}
 	return rewritten, contentType, nil
 }
 
-func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model string) ([]byte, string, error) {
+func rewriteOpenAIImagesMultipartFields(body []byte, contentType string, fields map[string]string) ([]byte, string, error) {
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		return nil, "", fmt.Errorf("parse multipart content-type: %w", err)
@@ -740,7 +760,7 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 	reader := multipart.NewReader(bytes.NewReader(body), boundary)
 	var buffer bytes.Buffer
 	writer := multipart.NewWriter(&buffer)
-	modelWritten := false
+	written := make(map[string]bool, len(fields))
 
 	for {
 		part, err := reader.NextPart()
@@ -759,12 +779,12 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 			return nil, "", fmt.Errorf("create multipart part: %w", err)
 		}
 
-		if formName == "model" && part.FileName() == "" {
-			if _, err := target.Write([]byte(model)); err != nil {
+		if value, ok := fields[formName]; ok && part.FileName() == "" {
+			if _, err := target.Write([]byte(value)); err != nil {
 				_ = part.Close()
-				return nil, "", fmt.Errorf("rewrite multipart model: %w", err)
+				return nil, "", fmt.Errorf("rewrite multipart %s: %w", formName, err)
 			}
-			modelWritten = true
+			written[formName] = true
 			_ = part.Close()
 			continue
 		}
@@ -775,9 +795,12 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 		_ = part.Close()
 	}
 
-	if !modelWritten {
-		if err := writer.WriteField("model", model); err != nil {
-			return nil, "", fmt.Errorf("append multipart model field: %w", err)
+	for field, value := range fields {
+		if written[field] {
+			continue
+		}
+		if err := writer.WriteField(field, value); err != nil {
+			return nil, "", fmt.Errorf("append multipart %s field: %w", field, err)
 		}
 	}
 	if err := writer.Close(); err != nil {
@@ -796,28 +819,39 @@ func cloneMultipartHeader(src textproto.MIMEHeader) textproto.MIMEHeader {
 	return dst
 }
 
-func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(resp *http.Response, c *gin.Context) (OpenAIUsage, int, error) {
+func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(resp *http.Response, c *gin.Context, responseFormat string) (OpenAIUsage, int, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return OpenAIUsage{}, 0, err
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	usage, _ := extractOpenAIUsageFromJSONBytes(body)
+	imageCount := extractOpenAIImageCountFromJSONBytes(body)
+	if wantsOpenAIImagesMarkdownResponse(c, responseFormat) {
+		markdown, markdownCount, ok := buildOpenAIImagesMarkdownFromAPIResponse(body)
+		if !ok {
+			return OpenAIUsage{}, 0, fmt.Errorf("upstream image response cannot be converted to markdown")
+		}
+		c.Writer.Header().Set("Content-Type", openAIImagesMarkdownContentType)
+		c.Data(resp.StatusCode, openAIImagesMarkdownContentType, markdown)
+		return usage, markdownCount, nil
+	}
 	contentType := "application/json"
 	if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {
 		if upstreamType := resp.Header.Get("Content-Type"); upstreamType != "" {
 			contentType = upstreamType
 		}
 	}
+	c.Writer.Header().Set("Content-Type", contentType)
 	c.Data(resp.StatusCode, contentType, body)
-
-	usage, _ := extractOpenAIUsageFromJSONBytes(body)
-	return usage, extractOpenAIImageCountFromJSONBytes(body), nil
+	return usage, imageCount, nil
 }
 
 func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
 	startTime time.Time,
+	responseFormat string,
 ) (OpenAIUsage, int, *int, error) {
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
@@ -836,6 +870,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	usage := OpenAIUsage{}
 	imageCount := 0
 	var firstTokenMs *int
+	markdownResponse := wantsOpenAIImagesMarkdownResponse(c, responseFormat)
 
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -844,12 +879,20 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 				ms := int(time.Since(startTime).Milliseconds())
 				firstTokenMs = &ms
 			}
-			if _, writeErr := c.Writer.Write(line); writeErr != nil {
+			writeLine := line
+			if markdownResponse {
+				if data, ok := extractOpenAISSEDataLine(strings.TrimRight(string(line), "\r\n")); ok && data != "" && data != "[DONE]" {
+					if rewrittenData := appendOpenAIImagesMarkdownToStreamPayload([]byte(data)); len(rewrittenData) > 0 {
+						writeLine = []byte("data: " + string(rewrittenData) + "\n")
+					}
+				}
+			}
+			if _, writeErr := c.Writer.Write(writeLine); writeErr != nil {
 				return OpenAIUsage{}, 0, firstTokenMs, writeErr
 			}
 			flusher.Flush()
 
-			if data, ok := extractOpenAISSEDataLine(strings.TrimRight(string(line), "\r\n")); ok && data != "" && data != "[DONE]" {
+			if data, ok := extractOpenAISSEDataLine(strings.TrimRight(string(writeLine), "\r\n")); ok && data != "" && data != "[DONE]" {
 				dataBytes := []byte(data)
 				mergeOpenAIUsage(&usage, dataBytes)
 				if count := extractOpenAIImageCountFromJSONBytes(dataBytes); count > imageCount {

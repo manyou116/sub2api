@@ -172,6 +172,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	reqStream := streamResult.Bool()
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
+	if service.IsOpenAIImageGenerationModel(reqModel) {
+		if h.tryHandleOpenAIImagesCompat(c, apiKey, subject, body, reqStream, requestStart, reqLog, openAIImagesCompatModeResponses) {
+			return
+		}
+	}
 	previousResponseID := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String())
 	if previousResponseID != "" {
 		previousResponseIDKind := service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
@@ -957,12 +962,16 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 		return nil, false
 	}
 
+	selectionReleaseFunc := selection.ReleaseFunc
 	fastReleaseFunc, fastAcquired, err := h.concurrencyHelper.TryAcquireAccountSlot(
 		ctx,
 		account.ID,
 		selection.WaitPlan.MaxConcurrency,
 	)
 	if err != nil {
+		if selectionReleaseFunc != nil {
+			selectionReleaseFunc()
+		}
 		reqLog.Warn("openai.account_slot_quick_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		h.handleConcurrencyError(c, err, "account", *streamStarted)
 		return nil, false
@@ -971,7 +980,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 		if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, account.ID); err != nil {
 			reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		}
-		return wrapReleaseOnDone(ctx, fastReleaseFunc), true
+		return wrapReleaseOnDone(ctx, combineReleaseFuncs(fastReleaseFunc, selectionReleaseFunc)), true
 	}
 
 	canWait, waitErr := h.concurrencyHelper.IncrementAccountWaitCount(ctx, account.ID, selection.WaitPlan.MaxWaiting)
@@ -982,6 +991,9 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 			zap.Int64("account_id", account.ID),
 			zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 		)
+		if selectionReleaseFunc != nil {
+			selectionReleaseFunc()
+		}
 		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", *streamStarted)
 		return nil, false
 	}
@@ -1004,6 +1016,9 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 		streamStarted,
 	)
 	if err != nil {
+		if selectionReleaseFunc != nil {
+			selectionReleaseFunc()
+		}
 		reqLog.Warn("openai.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		h.handleConcurrencyError(c, err, "account", *streamStarted)
 		return nil, false
@@ -1014,7 +1029,7 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	if err := h.gatewayService.BindStickySession(ctx, groupID, sessionHash, account.ID); err != nil {
 		reqLog.Warn("openai.bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 	}
-	return wrapReleaseOnDone(ctx, accountReleaseFunc), true
+	return wrapReleaseOnDone(ctx, combineReleaseFuncs(accountReleaseFunc, selectionReleaseFunc)), true
 }
 
 // ResponsesWebSocket handles OpenAI Responses API WebSocket ingress endpoint

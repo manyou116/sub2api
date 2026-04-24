@@ -200,13 +200,13 @@ type CreateGroupInput struct {
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes []string
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch       bool
-	DefaultMappedModel          string
-	RequireOAuthOnly            bool
-	RequirePrivacySet           bool
-	OpenAILegacyImagesDefault   bool
+	AllowMessagesDispatch        bool
+	DefaultMappedModel           string
+	RequireOAuthOnly             bool
+	RequirePrivacySet            bool
+	OpenAILegacyImagesDefault    bool
 	OpenAILegacyImagesDailyQuota int
-	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
+	MessagesDispatchModelConfig  OpenAIMessagesDispatchModelConfig
 	// RPMLimit 分组 RPM 上限（0 = 不限制）
 	RPMLimit int
 	// 从指定分组复制账号（创建分组后在同一事务内绑定）
@@ -239,13 +239,13 @@ type UpdateGroupInput struct {
 	// 支持的模型系列（仅 antigravity 平台使用）
 	SupportedModelScopes *[]string
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
-	AllowMessagesDispatch       *bool
-	DefaultMappedModel          *string
-	RequireOAuthOnly            *bool
-	RequirePrivacySet           *bool
-	OpenAILegacyImagesDefault   *bool
+	AllowMessagesDispatch        *bool
+	DefaultMappedModel           *string
+	RequireOAuthOnly             *bool
+	RequirePrivacySet            *bool
+	OpenAILegacyImagesDefault    *bool
 	OpenAILegacyImagesDailyQuota *int
-	MessagesDispatchModelConfig *OpenAIMessagesDispatchModelConfig
+	MessagesDispatchModelConfig  *OpenAIMessagesDispatchModelConfig
 	// RPMLimit 分组 RPM 上限（0 = 不限制），nil 表示未提供不改动。
 	RPMLimit *int
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）

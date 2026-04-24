@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -160,11 +161,13 @@ const (
 var legacyImagesFailureCounter sync.Map
 
 func legacyImagesIncrementFailure(accountID int64) int64 {
-	v, _ := legacyImagesFailureCounter.LoadOrStore(accountID, new(int64))
-	ptr := v.(*int64)
-	// 简化处理：单写入路径下不需要原子；本调用场景已是请求级序列化。
-	*ptr++
-	return *ptr
+	counter := new(atomic.Int64)
+	actual, _ := legacyImagesFailureCounter.LoadOrStore(accountID, counter)
+	if existing, ok := actual.(*atomic.Int64); ok && existing != nil {
+		return existing.Add(1)
+	}
+	legacyImagesFailureCounter.Store(accountID, counter)
+	return counter.Add(1)
 }
 
 func legacyImagesResetFailure(accountID int64) {
@@ -416,12 +419,19 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuthLegacy(
 		return nil, fmt.Errorf("openai legacy image conversation returned no downloadable images")
 	}
 
-	responseBody, imageCount, err := buildLegacyOpenAIImageResponse(lifecycleCtx, client, headers, conversationID, pointerInfos)
+	responseBody, contentType, imageCount, err := buildLegacyOpenAIImageResponse(
+		lifecycleCtx,
+		client,
+		headers,
+		conversationID,
+		pointerInfos,
+		wantsOpenAIImagesMarkdownResponse(c, parsed.ResponseFormat),
+	)
 	if err != nil {
 		return nil, s.wrapLegacyOpenAIImageBackendError(ctx, c, account, err)
 	}
 
-	c.Data(http.StatusOK, "application/json; charset=utf-8", responseBody)
+	c.Data(http.StatusOK, contentType, responseBody)
 	return &OpenAIForwardResult{
 		RequestID:     resp.Header.Get("x-request-id"),
 		Usage:         usage,
@@ -1103,20 +1113,20 @@ func buildLegacyOpenAIImageConversationRequest(
 	}
 
 	return map[string]any{
-		"action":                              "next",
-		"messages":                            messages,
-		"parent_message_id":                   uuid.NewString(),
-		"model":                               legacyOpenAIImageModelSlug(parsed.Model),
-		"client_prepare_state":                "sent",
-		"timezone_offset_min":                 openAITimezoneOffsetMinutes(),
-		"timezone":                            openAITimezoneName(),
-		"conversation_mode":                   map[string]any{"kind": "primary_assistant"},
-		"enable_message_followups":            true,
-		"system_hints":                        []string{"picture_v2"},
-		"supports_buffering":                  true,
-		"supported_encodings":                 []string{"v1"},
+		"action":                               "next",
+		"messages":                             messages,
+		"parent_message_id":                    uuid.NewString(),
+		"model":                                legacyOpenAIImageModelSlug(parsed.Model),
+		"client_prepare_state":                 "sent",
+		"timezone_offset_min":                  openAITimezoneOffsetMinutes(),
+		"timezone":                             openAITimezoneName(),
+		"conversation_mode":                    map[string]any{"kind": "primary_assistant"},
+		"enable_message_followups":             true,
+		"system_hints":                         []string{"picture_v2"},
+		"supports_buffering":                   true,
+		"supported_encodings":                  []string{"v1"},
 		"paragen_cot_summary_display_override": "allow",
-		"force_parallel_switch":               "auto",
+		"force_parallel_switch":                "auto",
 		"client_contextual_info": map[string]any{
 			"is_dark_mode":      false,
 			"time_since_loaded": 1200,
@@ -1199,7 +1209,9 @@ func drainLegacyOpenAIImageConversationStream(body io.ReadCloser) {
 	if body == nil {
 		return
 	}
-	defer body.Close()
+	defer func() {
+		_ = body.Close()
+	}()
 	// 限制 drain 时长与字节数，防止异常长尾占用 goroutine。
 	_, _ = io.Copy(io.Discard, io.LimitReader(body, 8<<20))
 }
@@ -1227,15 +1239,6 @@ func mergeLegacyOpenAIImagePointerInfos(existing, next []legacyOpenAIImagePointe
 		result = append(result, item)
 	}
 	return result
-}
-
-func hasLegacyOpenAIFileServicePointerInfos(items []legacyOpenAIImagePointerInfo) bool {
-	for _, item := range items {
-		if strings.HasPrefix(item.Pointer, "file-service://") {
-			return true
-		}
-	}
-	return false
 }
 
 // hasLegacyOpenAIDownloadablePointerInfos 判定是否存在可下载的 pointer。
@@ -1378,11 +1381,13 @@ func buildLegacyOpenAIImageResponse(
 	headers http.Header,
 	conversationID string,
 	pointerInfos []legacyOpenAIImagePointerInfo,
-) ([]byte, int, error) {
+	markdownResponse bool,
+) ([]byte, string, int, error) {
 	type imageData struct {
 		B64JSON string `json:"b64_json"`
 	}
 	var images []imageData
+	markdownItems := make([]openAIImageMarkdownItem, 0, len(pointerInfos))
 	for _, info := range pointerInfos {
 		downloadURL, err := fetchLegacyOpenAIImageDownloadURL(ctx, client, headers, conversationID, info.Pointer)
 		if err != nil {
@@ -1396,10 +1401,24 @@ func buildLegacyOpenAIImageResponse(
 				"[OpenAI] Legacy image download failed url=%s err=%v", downloadURL, err)
 			continue
 		}
-		images = append(images, imageData{B64JSON: base64.StdEncoding.EncodeToString(imageBytes)})
+		b64 := base64.StdEncoding.EncodeToString(imageBytes)
+		images = append(images, imageData{B64JSON: b64})
+		if markdownResponse {
+			markdownItems = append(markdownItems, openAIImageMarkdownItem{
+				Src: openAIImageDataURI(b64, ""),
+				Alt: "image",
+			})
+		}
 	}
 	if len(images) == 0 {
-		return nil, 0, fmt.Errorf("no images downloaded")
+		return nil, "", 0, fmt.Errorf("no images downloaded")
+	}
+	if markdownResponse {
+		body := buildOpenAIImagesMarkdown(markdownItems)
+		if len(body) == 0 {
+			return nil, "", 0, fmt.Errorf("no images converted to markdown")
+		}
+		return body, openAIImagesMarkdownContentType, len(images), nil
 	}
 	result := map[string]any{
 		"created": time.Now().Unix(),
@@ -1407,9 +1426,9 @@ func buildLegacyOpenAIImageResponse(
 	}
 	body, err := json.Marshal(result)
 	if err != nil {
-		return nil, 0, err
+		return nil, "", 0, err
 	}
-	return body, len(images), nil
+	return body, "application/json; charset=utf-8", len(images), nil
 }
 
 func fetchLegacyOpenAIImageDownloadURL(
@@ -1539,23 +1558,23 @@ func buildLegacyPowConfig(ua, scriptSource, dataBuild string) []any {
 	uptime := float64(time.Since(legacyPowProcessStart).Milliseconds())
 	return []any{
 		[]int{3000, 4000, 5000}[rand.Intn(3)], // [0] screen
-		legacyPowFormatTime(),                  // [1] current time in EST
-		4294705152,                             // [2] hardcoded sentinel constant
-		0,                                      // [3] placeholder → PoW nonce i
-		ua,                                     // [4]
-		scriptSource,                           // [5] sentinel SDK script URL
-		dataBuild,                              // [6] data-build hash
-		"en-US",                                // [7]
-		"en-US,es-US,en,es",                    // [8]
-		0,                                      // [9] placeholder → i >> 1
-		legacyPowNavigatorKeys[rand.Intn(len(legacyPowNavigatorKeys))],   // [10]
-		legacyPowDocumentKeys[rand.Intn(len(legacyPowDocumentKeys))],     // [11]
-		legacyPowWindowKeys[rand.Intn(len(legacyPowWindowKeys))],         // [12]
-		uptime,                                 // [13] process uptime ms
-		uuid.NewString(),                       // [14]
-		"",                                     // [15]
-		legacyPowCores[rand.Intn(len(legacyPowCores))],                   // [16] cores
-		float64(now.UnixMilli()) - uptime,      // [17] approx boot epoch ms
+		legacyPowFormatTime(),                 // [1] current time in EST
+		4294705152,                            // [2] hardcoded sentinel constant
+		0,                                     // [3] placeholder → PoW nonce i
+		ua,                                    // [4]
+		scriptSource,                          // [5] sentinel SDK script URL
+		dataBuild,                             // [6] data-build hash
+		"en-US",                               // [7]
+		"en-US,es-US,en,es",                   // [8]
+		0,                                     // [9] placeholder → i >> 1
+		legacyPowNavigatorKeys[rand.Intn(len(legacyPowNavigatorKeys))], // [10]
+		legacyPowDocumentKeys[rand.Intn(len(legacyPowDocumentKeys))],   // [11]
+		legacyPowWindowKeys[rand.Intn(len(legacyPowWindowKeys))],       // [12]
+		uptime,           // [13] process uptime ms
+		uuid.NewString(), // [14]
+		"",               // [15]
+		legacyPowCores[rand.Intn(len(legacyPowCores))], // [16] cores
+		float64(now.UnixMilli()) - uptime,              // [17] approx boot epoch ms
 	}
 }
 

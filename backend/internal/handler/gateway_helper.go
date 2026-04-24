@@ -195,6 +195,26 @@ func wrapReleaseOnDone(ctx context.Context, releaseFunc func()) func() {
 	return release
 }
 
+func combineReleaseFuncs(releases ...func()) func() {
+	filtered := make([]func(), 0, len(releases))
+	for _, release := range releases {
+		if release != nil {
+			filtered = append(filtered, release)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for _, release := range filtered {
+				release()
+			}
+		})
+	}
+}
+
 // IncrementWaitCount increments the wait count for a user
 func (h *ConcurrencyHelper) IncrementWaitCount(ctx context.Context, userID int64, maxWait int) (bool, error) {
 	return h.concurrencyService.IncrementWaitCount(ctx, userID, maxWait)

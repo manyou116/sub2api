@@ -159,3 +159,14 @@ func TestGetUpstreamEndpoint_FullFlow(t *testing.T) {
 	got := GetUpstreamEndpoint(c, service.PlatformOpenAI)
 	require.Equal(t, "/v1/responses/compact", got)
 }
+
+func TestGetUpstreamEndpoint_Override(t *testing.T) {
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set(ctxKeyInboundEndpoint, NormalizeInboundEndpoint(c.Request.URL.Path))
+	setUpstreamEndpointOverride(c, EndpointImagesGenerations)
+
+	got := GetUpstreamEndpoint(c, service.PlatformOpenAI)
+	require.Equal(t, EndpointImagesGenerations, got)
+}

@@ -76,6 +76,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	reqStream := gjson.GetBytes(body, "stream").Bool()
 
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
+	if service.IsOpenAIImageGenerationModel(reqModel) {
+		if h.tryHandleOpenAIImagesCompat(c, apiKey, subject, body, reqStream, requestStart, reqLog, openAIImagesCompatModeChat) {
+			return
+		}
+	}
 
 	setOpsRequestContext(c, reqModel, reqStream, body)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
