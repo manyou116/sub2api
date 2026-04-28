@@ -411,7 +411,7 @@ func (s *GeminiOAuthService) RefreshAccountGoogleOneTier(
 
 	// 获取 proxy URL
 	var proxyURL string
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 

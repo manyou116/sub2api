@@ -108,7 +108,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 
 	// 9. Get proxy URL
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 
