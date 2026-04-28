@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/service/openaiimages"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -1305,14 +1306,14 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 	return nil
 }
 
-// testOpenAIImageOAuth tests OpenAI image generation using an OAuth account via Codex /responses API.
+// testOpenAIImageOAuth tests OpenAI image generation by invoking the new
+// openaiimages pipeline directly with the test account. This exercises the
+// same code path that user-facing /v1/images/generations requests use.
 func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Context, account *Account, modelID, prompt string) error {
-	authToken := account.GetOpenAIAccessToken()
-	if authToken == "" {
+	if account.GetOpenAIAccessToken() == "" {
 		return s.sendErrorAndEnd(c, "No access token available")
 	}
 
-	// Set SSE headers
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
@@ -1320,84 +1321,104 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	c.Writer.Flush()
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
-	s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /responses image tool...\n"})
+	s.sendEvent(c, TestEvent{Type: "content", Text: "Invoking openaiimages dispatch...\n"})
 
-	parsed := &OpenAIImagesRequest{
-		Endpoint: openAIImagesGenerationsEndpoint,
-		Model:    strings.TrimSpace(modelID),
-		Prompt:   prompt,
-	}
-	applyOpenAIImagesDefaults(parsed)
-
-	responsesBody, err := buildOpenAIImagesResponsesRequest(parsed, parsed.Model)
-	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to build image request: %s", err.Error()))
+	model := strings.TrimSpace(modelID)
+	if model == "" {
+		model = "gpt-image-2"
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexAPIURL, bytes.NewReader(responsesBody))
-	if err != nil {
-		return s.sendErrorAndEnd(c, "Failed to create request")
-	}
-	req.Host = "chatgpt.com"
-	req.Header.Set("Authorization", "Bearer "+authToken)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("originator", "opencode")
-	if customUA := strings.TrimSpace(account.GetOpenAIUserAgent()); customUA != "" {
-		req.Header.Set("User-Agent", customUA)
-	} else {
-		req.Header.Set("User-Agent", codexCLIUserAgent)
-	}
-	if chatgptAccountID := strings.TrimSpace(account.GetChatGPTAccountID()); chatgptAccountID != "" {
-		req.Header.Set("chatgpt-account-id", chatgptAccountID)
+	cap, ok := openaiimages.LookupCapability(model)
+	if !ok {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("model %q is not a recognised image model", model))
 	}
 
+	apiKey, _ := account.Credentials["api_key"].(string)
+	chatGPTAcctID, _ := account.Credentials["chatgpt_account_id"].(string)
+	userAgent, _ := account.Credentials["user_agent"].(string)
+	// device_id / session_id 解析必须与 v2 handler 保持一致：
+	// 持久化(extra) → credentials 兼容 → stable UUIDv5 派生。否则 oai-device-id
+	// 头会为空，被 ChatGPT/Cloudflare 当作"全新设备"触发 403 challenge。
+	credDeviceID, _ := account.Credentials["device_id"].(string)
+	credSessionID, _ := account.Credentials["session_id"].(string)
+	deviceID, sessionID := openaiimages.ResolveDeviceSession(
+		account.ID,
+		account.GetOpenAIDeviceID(),
+		account.GetOpenAISessionID(),
+		credDeviceID,
+		credSessionID,
+	)
+
+	groupLegacy := false
+	for _, g := range account.Groups {
+		if g != nil && g.OpenAILegacyImagesDefault {
+			groupLegacy = true
+			break
+		}
+	}
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
-	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Responses API request failed: %s", err.Error()))
+
+	view := openaiimages.NewPoolAccountView(
+		openaiimages.PoolAccount{
+			ID:          account.ID,
+			Status:      account.Status,
+			Schedulable: account.Schedulable,
+			GroupIDs:    account.GroupIDs,
+			Extra:       account.Extra,
+			LastUsedAt:  account.LastUsedAt,
+			AccessToken: account.GetOpenAIAccessToken(),
+			ProxyURL:    proxyURL,
+		},
+		openaiimages.WithAPIKey(apiKey),
+		openaiimages.WithGroupLegacyDefault(groupLegacy),
+		openaiimages.WithDeviceSession(deviceID, sessionID, chatGPTAcctID, userAgent),
+	)
+
+	driverName := openaiimages.ResolveDriverName(cap, view)
+	registry := openaiimages.MapDriverRegistry{
+		openaiimages.DriverAPIKey:    openaiimages.NewAPIKeyDriver(),
+		openaiimages.DriverResponses: openaiimages.NewResponsesToolDriver(),
+		openaiimages.DriverWeb:       openaiimages.NewWebDriverAdapter(),
 	}
-	defer func() {
-		if resp != nil && resp.Body != nil {
-			_ = resp.Body.Close()
-		}
-	}()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-		message := strings.TrimSpace(extractUpstreamErrorMessage(body))
-		if message == "" {
-			message = fmt.Sprintf("Responses API returned %d", resp.StatusCode)
-		}
-		return s.sendErrorAndEnd(c, message)
+	driver, ok := registry.Get(driverName)
+	if !ok {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("driver %q not registered", driverName))
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to read image response: %s", err.Error()))
+	req := &openaiimages.ImagesRequest{
+		Entry:  openaiimages.EntryImagesGenerations,
+		Model:  model,
+		Prompt: prompt,
+		N:      1,
 	}
 
-	results, _, _, _, _, err := collectOpenAIImagesFromResponsesBody(body)
+	dctx, cancel := context.WithTimeout(ctx, 240*time.Second)
+	defer cancel()
+	result, err := driver.Forward(dctx, view, req)
 	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to parse image response: %s", err.Error()))
-	}
-	if len(results) == 0 {
-		return s.sendErrorAndEnd(c, "No images returned from responses API")
+		return s.sendErrorAndEnd(c, fmt.Sprintf("driver %s failed: %s", driverName, err.Error()))
 	}
 
-	for _, item := range results {
+	for _, item := range result.Items {
 		if item.RevisedPrompt != "" {
 			s.sendEvent(c, TestEvent{Type: "content", Text: item.RevisedPrompt})
 		}
-		mimeType := openAIImageOutputMIMEType(item.OutputFormat)
-		s.sendEvent(c, TestEvent{
-			Type:     "image",
-			ImageURL: "data:" + mimeType + ";base64," + item.Result,
-			MimeType: mimeType,
-		})
+		if item.B64JSON != "" {
+			mime := item.MimeType
+			if mime == "" {
+				mime = "image/png"
+			}
+			s.sendEvent(c, TestEvent{
+				Type:     "image",
+				ImageURL: "data:" + mime + ";base64," + item.B64JSON,
+				MimeType: mime,
+			})
+		} else if item.URL != "" {
+			s.sendEvent(c, TestEvent{Type: "image", ImageURL: item.URL})
+		}
 	}
 
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})

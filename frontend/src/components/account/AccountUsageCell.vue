@@ -107,7 +107,7 @@
 
     <!-- OpenAI OAuth accounts: single source from /usage API -->
     <template v-else-if="account.platform === 'openai' && account.type === 'oauth'">
-      <div v-if="hasOpenAIUsageFallback" class="space-y-1">
+      <div v-if="hasOpenAIUsageDisplay" class="space-y-1">
         <UsageProgressBar
           v-if="usageInfo?.five_hour"
           label="5h"
@@ -126,6 +126,26 @@
           :show-now-when-idle="true"
           color="emerald"
         />
+        <div
+          v-if="openAIImageQuotaState"
+          class="flex max-w-[260px] items-center gap-1.5 text-[10px] leading-tight text-gray-500 dark:text-gray-400"
+          :title="openAIImageQuotaTitle"
+        >
+          <span
+            :class="[
+              'inline-flex shrink-0 items-center rounded px-1.5 py-0.5 font-medium',
+              openAIImageQuotaBadgeClass
+            ]"
+          >
+            图片 {{ openAIImageQuotaLabel }}
+          </span>
+          <span v-if="openAIImageRestoreLabel" class="truncate">
+            恢复 {{ openAIImageRestoreLabel }}
+          </span>
+          <span v-else-if="openAIImageStatsLabel" class="truncate">
+            {{ openAIImageStatsLabel }}
+          </span>
+        </div>
       </div>
       <div v-else-if="loading" class="space-y-1.5">
         <div class="flex items-center gap-1">
@@ -526,6 +546,132 @@ const geminiUsageAvailable = computed(() => {
 const hasOpenAIUsageFallback = computed(() => {
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
   return !!usageInfo.value?.five_hour || !!usageInfo.value?.seven_day
+})
+
+const openAIImageQuotaState = computed(() => {
+  if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return null
+  const extra: any = props.account.extra ?? {}
+
+  // 优先读 v2 网关写入的扁平字段；缺失时降级到旧 openai_legacy_image_quota 嵌套对象。
+  const cooldownRaw: string = extra.image_cooldown_until ?? ''
+  const remaining: number | null =
+    typeof extra.image_quota_remaining === 'number' ? extra.image_quota_remaining : null
+  const total: number | null =
+    typeof extra.image_quota_total === 'number' ? extra.image_quota_total : null
+  const plan: string | null = extra.image_account_plan ?? null
+  const lastProbedAt: string | null = extra.image_last_probed_at ?? null
+
+  const hasV2 = !!(cooldownRaw || remaining !== null || total !== null || plan || lastProbedAt)
+
+  if (hasV2) {
+    const cooldownActive = !!cooldownRaw && new Date(cooldownRaw).getTime() > Date.now()
+    let status: 'rate_limited' | 'available' | 'unknown'
+    if (cooldownActive) status = 'rate_limited'
+    else if (remaining !== null) status = 'available'
+    else status = 'unknown'
+    return {
+      source: 'v2' as const,
+      status,
+      quotaRemaining: remaining,
+      quotaTotal: total,
+      restoreAt: cooldownActive ? cooldownRaw : '',
+      plan,
+      lastProbedAt
+    }
+  }
+
+  const legacy = extra.openai_legacy_image_quota
+  if (!legacy) return null
+  return {
+    source: 'legacy' as const,
+    status: legacy.status ?? 'unknown',
+    quotaRemaining: typeof legacy.quota_remaining === 'number' ? legacy.quota_remaining : null,
+    quotaTotal: null,
+    restoreAt: legacy.status === 'rate_limited' ? legacy.restore_at ?? '' : '',
+    plan: null,
+    lastProbedAt: legacy.updated_at ?? legacy.last_used_at ?? null,
+    successCount: legacy.success_count ?? 0,
+    failureCount: legacy.failure_count ?? 0,
+    consecutiveFailures: legacy.consecutive_failures ?? 0,
+    lastErrorStatus: legacy.last_error_status ?? null,
+    lastErrorMessage: legacy.last_error_message ?? null,
+    quotaUnknown: !!legacy.quota_unknown
+  }
+})
+
+const hasOpenAIUsageDisplay = computed(() => {
+  return hasOpenAIUsageFallback.value || !!openAIImageQuotaState.value
+})
+
+const openAIImageQuotaLabel = computed(() => {
+  const s = openAIImageQuotaState.value
+  if (!s) return ''
+  if (s.status === 'rate_limited') return '限流'
+  if (s.quotaRemaining !== null) {
+    return s.quotaTotal != null && s.quotaTotal > 0
+      ? `${s.quotaRemaining}/${s.quotaTotal}`
+      : String(s.quotaRemaining)
+  }
+  if (s.status === 'available') return '可用'
+  return '未知'
+})
+
+const openAIImageQuotaBadgeClass = computed(() => {
+  const status = openAIImageQuotaState.value?.status
+  if (status === 'rate_limited') {
+    return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
+  }
+  if (status === 'unknown') {
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+  }
+  return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+})
+
+const formatOpenAIImageTime = (value?: string | null): string => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hour = String(date.getHours()).padStart(2, '0')
+  const minute = String(date.getMinutes()).padStart(2, '0')
+  return `${month}-${day} ${hour}:${minute}`
+}
+
+const openAIImageRestoreLabel = computed(() => {
+  const s = openAIImageQuotaState.value
+  if (!s || s.status !== 'rate_limited') return ''
+  return formatOpenAIImageTime(s.restoreAt)
+})
+
+const openAIImageStatsLabel = computed(() => {
+  const s: any = openAIImageQuotaState.value
+  if (!s) return ''
+  if (s.source === 'v2' && s.lastProbedAt) {
+    return `刷新 ${formatOpenAIImageTime(s.lastProbedAt)}`
+  }
+  if (s.source === 'legacy' && (s.successCount || s.failureCount)) {
+    return `S ${s.successCount} / F ${s.failureCount}`
+  }
+  return ''
+})
+
+const openAIImageQuotaTitle = computed(() => {
+  const s: any = openAIImageQuotaState.value
+  if (!s) return ''
+  const parts = [
+    `图片额度: ${openAIImageQuotaLabel.value}`,
+    s.plan ? `套餐: ${s.plan}` : '',
+    openAIImageRestoreLabel.value ? `恢复: ${openAIImageRestoreLabel.value}` : '',
+    s.lastProbedAt ? `刷新: ${formatOpenAIImageTime(s.lastProbedAt)}` : '',
+    s.source === 'legacy' && (s.successCount || s.failureCount)
+      ? `成功 ${s.successCount} / 失败 ${s.failureCount}`
+      : '',
+    s.source === 'legacy' && s.consecutiveFailures ? `连续失败: ${s.consecutiveFailures}` : '',
+    s.source === 'legacy' && s.lastErrorStatus ? `错误状态: ${s.lastErrorStatus}` : '',
+    s.source === 'legacy' && s.lastErrorMessage ? s.lastErrorMessage : ''
+  ]
+  return parts.filter(Boolean).join('\n')
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))

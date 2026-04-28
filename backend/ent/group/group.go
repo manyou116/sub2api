@@ -72,12 +72,16 @@ const (
 	FieldRequireOauthOnly = "require_oauth_only"
 	// FieldRequirePrivacySet holds the string denoting the require_privacy_set field in the database.
 	FieldRequirePrivacySet = "require_privacy_set"
+	// FieldOpenaiLegacyImagesDefault holds the string denoting the openai_legacy_images_default field in the database.
+	FieldOpenaiLegacyImagesDefault = "openai_legacy_images_default"
 	// FieldDefaultMappedModel holds the string denoting the default_mapped_model field in the database.
 	FieldDefaultMappedModel = "default_mapped_model"
 	// FieldMessagesDispatchModelConfig holds the string denoting the messages_dispatch_model_config field in the database.
 	FieldMessagesDispatchModelConfig = "messages_dispatch_model_config"
 	// FieldRpmLimit holds the string denoting the rpm_limit field in the database.
 	FieldRpmLimit = "rpm_limit"
+	// FieldProxyID holds the string denoting the proxy_id field in the database.
+	FieldProxyID = "proxy_id"
 	// EdgeAPIKeys holds the string denoting the api_keys edge name in mutations.
 	EdgeAPIKeys = "api_keys"
 	// EdgeRedeemCodes holds the string denoting the redeem_codes edge name in mutations.
@@ -181,9 +185,11 @@ var Columns = []string{
 	FieldAllowMessagesDispatch,
 	FieldRequireOauthOnly,
 	FieldRequirePrivacySet,
+	FieldOpenaiLegacyImagesDefault,
 	FieldDefaultMappedModel,
 	FieldMessagesDispatchModelConfig,
 	FieldRpmLimit,
+	FieldProxyID,
 }
 
 var (
@@ -255,6 +261,8 @@ var (
 	DefaultRequireOauthOnly bool
 	// DefaultRequirePrivacySet holds the default value on creation for the "require_privacy_set" field.
 	DefaultRequirePrivacySet bool
+	// DefaultOpenaiLegacyImagesDefault holds the default value on creation for the "openai_legacy_images_default" field.
+	DefaultOpenaiLegacyImagesDefault bool
 	// DefaultDefaultMappedModel holds the default value on creation for the "default_mapped_model" field.
 	DefaultDefaultMappedModel string
 	// DefaultMappedModelValidator is a validator for the "default_mapped_model" field. It is called by the builders before save.
@@ -403,6 +411,11 @@ func ByRequirePrivacySet(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRequirePrivacySet, opts...).ToFunc()
 }
 
+// ByOpenaiLegacyImagesDefault orders the results by the openai_legacy_images_default field.
+func ByOpenaiLegacyImagesDefault(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldOpenaiLegacyImagesDefault, opts...).ToFunc()
+}
+
 // ByDefaultMappedModel orders the results by the default_mapped_model field.
 func ByDefaultMappedModel(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDefaultMappedModel, opts...).ToFunc()
@@ -411,6 +424,11 @@ func ByDefaultMappedModel(opts ...sql.OrderTermOption) OrderOption {
 // ByRpmLimit orders the results by the rpm_limit field.
 func ByRpmLimit(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRpmLimit, opts...).ToFunc()
+}
+
+// ByProxyID orders the results by the proxy_id field.
+func ByProxyID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldProxyID, opts...).ToFunc()
 }
 
 // ByAPIKeysCount orders the results by api_keys count.

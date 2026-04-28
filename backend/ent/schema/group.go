@@ -137,6 +137,9 @@ func (Group) Fields() []ent.Field {
 		field.Bool("require_privacy_set").
 			Default(false).
 			Comment("调度时仅允许 privacy 已成功设置的账号"),
+		field.Bool("openai_legacy_images_default").
+			Default(false).
+			Comment("OpenAI OAuth 账号默认启用旧版 ChatGPT Web 生图/改图链路"),
 		field.String("default_mapped_model").
 			MaxLen(100).
 			Default("").
@@ -150,6 +153,10 @@ func (Group) Fields() []ent.Field {
 		field.Int("rpm_limit").
 			Default(0).
 			Comment("分组 RPM 上限，0 表示不限制；设置后接管该分组用户的限流"),
+		field.Int64("proxy_id").
+			Optional().
+			Nillable().
+			Comment("分组默认代理 ID；账号未设置代理时使用"),
 	}
 }
 

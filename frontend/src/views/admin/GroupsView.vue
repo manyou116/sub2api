@@ -396,6 +396,11 @@
           />
           <p class="input-hint">{{ t("admin.groups.platformHint") }}</p>
         </div>
+        <div>
+          <label class="input-label">分组代理</label>
+          <ProxySelector v-model="createForm.proxy_id" :proxies="proxies" />
+          <p class="input-hint">账号未设置代理时使用此代理</p>
+        </div>
         <!-- 从分组复制账号 -->
         <div v-if="copyAccountsGroupOptions.length > 0">
           <div class="mb-1.5 flex items-center gap-1">
@@ -918,6 +923,39 @@
           <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
             {{ t("admin.groups.openaiMessages.title") }}
           </h4>
+
+          <div class="mb-4 flex items-center justify-between">
+            <div>
+              <label class="text-sm text-gray-600 dark:text-gray-400">
+                旧版 Web 生图默认启用
+              </label>
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                OpenAI OAuth 账号未单独覆盖时，默认使用 ChatGPT Web 生图/改图链路
+              </p>
+            </div>
+            <button
+              type="button"
+              @click="
+                createForm.openai_legacy_images_default =
+                  !createForm.openai_legacy_images_default
+              "
+              class="relative inline-flex h-6 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+              :class="
+                createForm.openai_legacy_images_default
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600'
+              "
+            >
+              <span
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                :class="
+                  createForm.openai_legacy_images_default
+                    ? 'translate-x-6'
+                    : 'translate-x-1'
+                "
+              />
+            </button>
+          </div>
 
           <!-- 允许 Messages 调度开关 -->
           <div class="flex items-center justify-between">
@@ -1528,6 +1566,11 @@
           />
           <p class="input-hint">{{ t("admin.groups.platformNotEditable") }}</p>
         </div>
+        <div>
+          <label class="input-label">分组代理</label>
+          <ProxySelector v-model="editForm.proxy_id" :proxies="proxies" />
+          <p class="input-hint">账号未设置代理时使用此代理</p>
+        </div>
         <!-- 从分组复制账号（编辑时） -->
         <div v-if="copyAccountsGroupOptionsForEdit.length > 0">
           <div class="mb-1.5 flex items-center gap-1">
@@ -2049,6 +2092,39 @@
           <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
             {{ t("admin.groups.openaiMessages.title") }}
           </h4>
+
+          <div class="mb-4 flex items-center justify-between">
+            <div>
+              <label class="text-sm text-gray-600 dark:text-gray-400">
+                旧版 Web 生图默认启用
+              </label>
+              <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                OpenAI OAuth 账号未单独覆盖时，默认使用 ChatGPT Web 生图/改图链路
+              </p>
+            </div>
+            <button
+              type="button"
+              @click="
+                editForm.openai_legacy_images_default =
+                  !editForm.openai_legacy_images_default
+              "
+              class="relative inline-flex h-6 w-12 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+              :class="
+                editForm.openai_legacy_images_default
+                  ? 'bg-primary-500'
+                  : 'bg-gray-300 dark:bg-dark-600'
+              "
+            >
+              <span
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                :class="
+                  editForm.openai_legacy_images_default
+                    ? 'translate-x-6'
+                    : 'translate-x-1'
+                "
+              />
+            </button>
+          </div>
 
           <!-- 允许 Messages 调度开关 -->
           <div class="flex items-center justify-between">
@@ -2739,7 +2815,7 @@ import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
 import { useOnboardingStore } from "@/stores/onboarding";
 import { adminAPI } from "@/api/admin";
-import type { AdminGroup, GroupPlatform, SubscriptionType } from "@/types";
+import type { AdminGroup, GroupPlatform, Proxy, SubscriptionType } from "@/types";
 import type { Column } from "@/components/common/types";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import TablePageLayout from "@/components/layout/TablePageLayout.vue";
@@ -2749,6 +2825,7 @@ import BaseDialog from "@/components/common/BaseDialog.vue";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import Select from "@/components/common/Select.vue";
+import ProxySelector from "@/components/common/ProxySelector.vue";
 import PlatformIcon from "@/components/common/PlatformIcon.vue";
 import Icon from "@/components/icons/Icon.vue";
 import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipliersModal.vue";
@@ -2996,6 +3073,7 @@ const rateMultipliersGroup = ref<AdminGroup | null>(null);
 const showRPMOverridesModal = ref(false);
 const rpmOverridesGroup = ref<AdminGroup | null>(null);
 const sortableGroups = ref<AdminGroup[]>([]);
+const proxies = ref<Proxy[]>([]);
 const createMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 const editMessagesDispatchDefaults = createDefaultMessagesDispatchFormState();
 
@@ -3017,8 +3095,10 @@ const createForm = reactive({
   claude_code_only: false,
   fallback_group_id: null as number | null,
   fallback_group_id_on_invalid_request: null as number | null,
+  proxy_id: null as number | null,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   allow_messages_dispatch: false,
+  openai_legacy_images_default: false,
   opus_mapped_model: createMessagesDispatchDefaults.opus_mapped_model,
   sonnet_mapped_model: createMessagesDispatchDefaults.sonnet_mapped_model,
   haiku_mapped_model: createMessagesDispatchDefaults.haiku_mapped_model,
@@ -3299,8 +3379,10 @@ const editForm = reactive({
   claude_code_only: false,
   fallback_group_id: null as number | null,
   fallback_group_id_on_invalid_request: null as number | null,
+  proxy_id: null as number | null,
   // OpenAI Messages 调度配置（仅 openai 平台使用）
   allow_messages_dispatch: false,
+  openai_legacy_images_default: false,
   default_mapped_model: '',
   opus_mapped_model: editMessagesDispatchDefaults.opus_mapped_model,
   sonnet_mapped_model: editMessagesDispatchDefaults.sonnet_mapped_model,
@@ -3437,6 +3519,15 @@ const loadCapacitySummary = async () => {
   }
 };
 
+const loadProxies = async () => {
+  try {
+    proxies.value = await adminAPI.proxies.getAllWithCount();
+  } catch (error) {
+    console.error("Error loading proxies:", error);
+    proxies.value = [];
+  }
+};
+
 let searchTimeout: ReturnType<typeof setTimeout>;
 const handleSearch = () => {
   clearTimeout(searchTimeout);
@@ -3523,6 +3614,9 @@ const handleCreateGroup = async () => {
     // 构建请求数据，包含模型路由配置
     const requestData = {
       ...createForm,
+      proxy_id: createForm.proxy_id ?? null,
+      openai_legacy_images_default:
+        createForm.platform === "openai" && createForm.openai_legacy_images_default,
       daily_limit_usd: normalizeOptionalLimit(
         createForm.daily_limit_usd as number | string | null,
       ),
@@ -3589,6 +3683,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.fallback_group_id = group.fallback_group_id;
   editForm.fallback_group_id_on_invalid_request =
     group.fallback_group_id_on_invalid_request;
+  editForm.proxy_id = group.proxy_id ?? null;
   const messagesDispatchFormState = messagesDispatchConfigToFormState(
     group.messages_dispatch_model_config,
   );
@@ -3602,6 +3697,8 @@ const handleEdit = async (group: AdminGroup) => {
     messagesDispatchFormState.exact_model_mappings;
   editForm.require_oauth_only = group.require_oauth_only ?? false;
   editForm.require_privacy_set = group.require_privacy_set ?? false;
+  editForm.openai_legacy_images_default =
+    group.openai_legacy_images_default ?? false;
   editForm.model_routing_enabled = group.model_routing_enabled || false;
   editForm.supported_model_scopes = group.supported_model_scopes || [
     "claude",
@@ -3642,6 +3739,9 @@ const handleUpdateGroup = async () => {
     // 转换 fallback_group_id: null -> 0 (后端使用 0 表示清除)
     const payload = {
       ...editForm,
+      proxy_id: editForm.proxy_id ?? 0,
+      openai_legacy_images_default:
+        editForm.platform === "openai" && editForm.openai_legacy_images_default,
       daily_limit_usd: normalizeOptionalLimit(
         editForm.daily_limit_usd as number | string | null,
       ),
@@ -3859,6 +3959,7 @@ const saveSortOrder = async () => {
 
 onMounted(() => {
   loadGroups();
+  loadProxies();
   document.addEventListener("click", handleClickOutside);
 });
 

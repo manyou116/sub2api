@@ -500,12 +500,14 @@ export interface Group {
   claude_code_only: boolean
   fallback_group_id: number | null
   fallback_group_id_on_invalid_request: number | null
+  proxy_id?: number | null
   // OpenAI Messages 调度开关（用户侧需要此字段判断是否展示 Claude Code 教程）
   allow_messages_dispatch?: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   require_oauth_only: boolean
   require_privacy_set: boolean
+  openai_legacy_images_default?: boolean
   created_at: string
   updated_at: string
 }
@@ -608,10 +610,12 @@ export interface CreateGroupRequest {
   claude_code_only?: boolean
   fallback_group_id?: number | null
   fallback_group_id_on_invalid_request?: number | null
+  proxy_id?: number | null
   mcp_xml_inject?: boolean
   supported_model_scopes?: string[]
   require_oauth_only?: boolean
   require_privacy_set?: boolean
+  openai_legacy_images_default?: boolean
   // 从指定分组复制账号
   copy_accounts_from_group_ids?: number[]
 }
@@ -633,10 +637,12 @@ export interface UpdateGroupRequest {
   claude_code_only?: boolean
   fallback_group_id?: number | null
   fallback_group_id_on_invalid_request?: number | null
+  proxy_id?: number | null
   mcp_xml_inject?: boolean
   supported_model_scopes?: string[]
   require_oauth_only?: boolean
   require_privacy_set?: boolean
+  openai_legacy_images_default?: boolean
   copy_accounts_from_group_ids?: number[]
 }
 
@@ -773,7 +779,7 @@ export interface Account {
   type: AccountType
   credentials?: Record<string, unknown>
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
-  extra?: (CodexUsageSnapshot & OpenAICompactState & {
+  extra?: (CodexUsageSnapshot & OpenAICompactState & OpenAILegacyImageQuotaState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     antigravity_credits_overages?: Record<string, { activated_at: string; active_until: string }>
   } & Record<string, unknown>)
@@ -859,6 +865,39 @@ export interface Account {
   current_window_cost?: number | null // 当前窗口费用
   active_sessions?: number | null // 当前活跃会话数
   current_rpm?: number | null // 当前分钟 RPM 计数
+}
+
+// OpenAIImageQuotaExtra 描述 v2 图片网关写入 account.extra 的图片额度/限流字段。
+// 来源：backend/internal/service/openaiimages/account_probe.go::write。
+//
+// 旧版嵌套 openai_legacy_image_quota 字段已废弃；保留类型仅用于兼容历史数据展示。
+export interface OpenAIImageQuotaExtra {
+  image_account_plan?: string | null
+  image_quota_remaining?: number | null
+  image_quota_total?: number | null
+  image_cooldown_until?: string | null
+  image_last_probed_at?: string | null
+}
+
+/** @deprecated v2 网关已迁移到顶层 image_* 字段；保留仅供兼容旧数据。 */
+export interface OpenAILegacyImageQuotaExtra {
+  status?: string | null
+  quota_remaining?: number | null
+  quota_unknown?: boolean | null
+  restore_at?: string | null
+  success_count?: number | null
+  failure_count?: number | null
+  consecutive_failures?: number | null
+  last_error_status?: number | null
+  last_error_message?: string | null
+  last_used_at?: string | null
+  last_success_at?: string | null
+  last_failure_at?: string | null
+  updated_at?: string | null
+}
+
+export interface OpenAILegacyImageQuotaState {
+  openai_legacy_image_quota?: OpenAILegacyImageQuotaExtra | null
 }
 
 // Account Usage types

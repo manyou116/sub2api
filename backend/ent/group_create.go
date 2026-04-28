@@ -397,6 +397,20 @@ func (_c *GroupCreate) SetNillableRequirePrivacySet(v *bool) *GroupCreate {
 	return _c
 }
 
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (_c *GroupCreate) SetOpenaiLegacyImagesDefault(v bool) *GroupCreate {
+	_c.mutation.SetOpenaiLegacyImagesDefault(v)
+	return _c
+}
+
+// SetNillableOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableOpenaiLegacyImagesDefault(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetOpenaiLegacyImagesDefault(*v)
+	}
+	return _c
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (_c *GroupCreate) SetDefaultMappedModel(v string) *GroupCreate {
 	_c.mutation.SetDefaultMappedModel(v)
@@ -435,6 +449,20 @@ func (_c *GroupCreate) SetRpmLimit(v int) *GroupCreate {
 func (_c *GroupCreate) SetNillableRpmLimit(v *int) *GroupCreate {
 	if v != nil {
 		_c.SetRpmLimit(*v)
+	}
+	return _c
+}
+
+// SetProxyID sets the "proxy_id" field.
+func (_c *GroupCreate) SetProxyID(v int64) *GroupCreate {
+	_c.mutation.SetProxyID(v)
+	return _c
+}
+
+// SetNillableProxyID sets the "proxy_id" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableProxyID(v *int64) *GroupCreate {
+	if v != nil {
+		_c.SetProxyID(*v)
 	}
 	return _c
 }
@@ -636,6 +664,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultRequirePrivacySet
 		_c.mutation.SetRequirePrivacySet(v)
 	}
+	if _, ok := _c.mutation.OpenaiLegacyImagesDefault(); !ok {
+		v := group.DefaultOpenaiLegacyImagesDefault
+		_c.mutation.SetOpenaiLegacyImagesDefault(v)
+	}
 	if _, ok := _c.mutation.DefaultMappedModel(); !ok {
 		v := group.DefaultDefaultMappedModel
 		_c.mutation.SetDefaultMappedModel(v)
@@ -723,6 +755,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.RequirePrivacySet(); !ok {
 		return &ValidationError{Name: "require_privacy_set", err: errors.New(`ent: missing required field "Group.require_privacy_set"`)}
+	}
+	if _, ok := _c.mutation.OpenaiLegacyImagesDefault(); !ok {
+		return &ValidationError{Name: "openai_legacy_images_default", err: errors.New(`ent: missing required field "Group.openai_legacy_images_default"`)}
 	}
 	if _, ok := _c.mutation.DefaultMappedModel(); !ok {
 		return &ValidationError{Name: "default_mapped_model", err: errors.New(`ent: missing required field "Group.default_mapped_model"`)}
@@ -877,6 +912,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldRequirePrivacySet, field.TypeBool, value)
 		_node.RequirePrivacySet = value
 	}
+	if value, ok := _c.mutation.OpenaiLegacyImagesDefault(); ok {
+		_spec.SetField(group.FieldOpenaiLegacyImagesDefault, field.TypeBool, value)
+		_node.OpenaiLegacyImagesDefault = value
+	}
 	if value, ok := _c.mutation.DefaultMappedModel(); ok {
 		_spec.SetField(group.FieldDefaultMappedModel, field.TypeString, value)
 		_node.DefaultMappedModel = value
@@ -888,6 +927,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)
 		_node.RpmLimit = value
+	}
+	if value, ok := _c.mutation.ProxyID(); ok {
+		_spec.SetField(group.FieldProxyID, field.TypeInt64, value)
+		_node.ProxyID = &value
 	}
 	if nodes := _c.mutation.APIKeysIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1501,6 +1544,18 @@ func (u *GroupUpsert) UpdateRequirePrivacySet() *GroupUpsert {
 	return u
 }
 
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (u *GroupUpsert) SetOpenaiLegacyImagesDefault(v bool) *GroupUpsert {
+	u.Set(group.FieldOpenaiLegacyImagesDefault, v)
+	return u
+}
+
+// UpdateOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateOpenaiLegacyImagesDefault() *GroupUpsert {
+	u.SetExcluded(group.FieldOpenaiLegacyImagesDefault)
+	return u
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (u *GroupUpsert) SetDefaultMappedModel(v string) *GroupUpsert {
 	u.Set(group.FieldDefaultMappedModel, v)
@@ -1540,6 +1595,30 @@ func (u *GroupUpsert) UpdateRpmLimit() *GroupUpsert {
 // AddRpmLimit adds v to the "rpm_limit" field.
 func (u *GroupUpsert) AddRpmLimit(v int) *GroupUpsert {
 	u.Add(group.FieldRpmLimit, v)
+	return u
+}
+
+// SetProxyID sets the "proxy_id" field.
+func (u *GroupUpsert) SetProxyID(v int64) *GroupUpsert {
+	u.Set(group.FieldProxyID, v)
+	return u
+}
+
+// UpdateProxyID sets the "proxy_id" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateProxyID() *GroupUpsert {
+	u.SetExcluded(group.FieldProxyID)
+	return u
+}
+
+// AddProxyID adds v to the "proxy_id" field.
+func (u *GroupUpsert) AddProxyID(v int64) *GroupUpsert {
+	u.Add(group.FieldProxyID, v)
+	return u
+}
+
+// ClearProxyID clears the value of the "proxy_id" field.
+func (u *GroupUpsert) ClearProxyID() *GroupUpsert {
+	u.SetNull(group.FieldProxyID)
 	return u
 }
 
@@ -2120,6 +2199,20 @@ func (u *GroupUpsertOne) UpdateRequirePrivacySet() *GroupUpsertOne {
 	})
 }
 
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (u *GroupUpsertOne) SetOpenaiLegacyImagesDefault(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetOpenaiLegacyImagesDefault(v)
+	})
+}
+
+// UpdateOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateOpenaiLegacyImagesDefault() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateOpenaiLegacyImagesDefault()
+	})
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (u *GroupUpsertOne) SetDefaultMappedModel(v string) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
@@ -2166,6 +2259,34 @@ func (u *GroupUpsertOne) AddRpmLimit(v int) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateRpmLimit() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRpmLimit()
+	})
+}
+
+// SetProxyID sets the "proxy_id" field.
+func (u *GroupUpsertOne) SetProxyID(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetProxyID(v)
+	})
+}
+
+// AddProxyID adds v to the "proxy_id" field.
+func (u *GroupUpsertOne) AddProxyID(v int64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddProxyID(v)
+	})
+}
+
+// UpdateProxyID sets the "proxy_id" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateProxyID() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateProxyID()
+	})
+}
+
+// ClearProxyID clears the value of the "proxy_id" field.
+func (u *GroupUpsertOne) ClearProxyID() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearProxyID()
 	})
 }
 
@@ -2912,6 +3033,20 @@ func (u *GroupUpsertBulk) UpdateRequirePrivacySet() *GroupUpsertBulk {
 	})
 }
 
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (u *GroupUpsertBulk) SetOpenaiLegacyImagesDefault(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetOpenaiLegacyImagesDefault(v)
+	})
+}
+
+// UpdateOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateOpenaiLegacyImagesDefault() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateOpenaiLegacyImagesDefault()
+	})
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (u *GroupUpsertBulk) SetDefaultMappedModel(v string) *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
@@ -2958,6 +3093,34 @@ func (u *GroupUpsertBulk) AddRpmLimit(v int) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateRpmLimit() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRpmLimit()
+	})
+}
+
+// SetProxyID sets the "proxy_id" field.
+func (u *GroupUpsertBulk) SetProxyID(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetProxyID(v)
+	})
+}
+
+// AddProxyID adds v to the "proxy_id" field.
+func (u *GroupUpsertBulk) AddProxyID(v int64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddProxyID(v)
+	})
+}
+
+// UpdateProxyID sets the "proxy_id" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateProxyID() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateProxyID()
+	})
+}
+
+// ClearProxyID clears the value of the "proxy_id" field.
+func (u *GroupUpsertBulk) ClearProxyID() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearProxyID()
 	})
 }
 

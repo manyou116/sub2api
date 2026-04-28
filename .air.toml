@@ -1,0 +1,21 @@
+root = "."
+tmp_dir = "backend/tmp"
+
+[build]
+cmd = "cd backend && go build -o ./tmp/sub2api-server ./cmd/server"
+bin = "./backend/tmp/sub2api-server"
+full_bin = "DATA_DIR=backend ./backend/tmp/sub2api-server"
+include_ext = ["go", "yaml"]
+exclude_dir = ["frontend", "tmp", "deploy/data", "deploy/postgres_data", "deploy/redis_data", "backend/tmp", "backend/data", "backend/ent/migrate/migrations"]
+exclude_file = []
+exclude_regex = ["_test.go"]
+delay = 1000
+stop_on_error = true
+send_interrupt = true
+kill_delay = "500ms"
+
+[log]
+time = true
+
+[misc]
+clean_on_exit = true

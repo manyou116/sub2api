@@ -209,6 +209,10 @@ type CreateGroupInput struct {
 	RPMLimit int
 	// 从指定分组复制账号（创建分组后在同一事务内绑定）
 	CopyAccountsFromGroupIDs []int64
+	// OpenAILegacyImagesDefault 控制 OpenAI OAuth 账号默认是否启用 ChatGPT Web 生图链路（nil = 默认 false）
+	OpenAILegacyImagesDefault *bool
+	// ProxyID 分组默认代理；账号未设置代理时使用
+	ProxyID *int64
 }
 
 type UpdateGroupInput struct {
@@ -246,6 +250,10 @@ type UpdateGroupInput struct {
 	RPMLimit *int
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
 	CopyAccountsFromGroupIDs []int64
+	// OpenAILegacyImagesDefault 控制 OpenAI OAuth 账号默认是否启用 ChatGPT Web 生图链路
+	OpenAILegacyImagesDefault *bool
+	// ProxyID 分组默认代理（指针：nil 不改动；指向 0 视为清空）
+	ProxyID *int64
 }
 
 type CreateAccountInput struct {
@@ -514,6 +522,14 @@ type adminServiceImpl struct {
 
 type userGroupRateBatchReader interface {
 	GetByUserIDs(ctx context.Context, userIDs []int64) (map[int64]map[int64]float64, error)
+}
+
+// normalizeOptionalPositiveID 把指针 ID 规范化：nil 或 <=0 一律返回 nil（视为未设置）。
+func normalizeOptionalPositiveID(id *int64) *int64 {
+	if id == nil || *id <= 0 {
+		return nil
+	}
+	return id
 }
 
 // NewAdminService creates a new AdminService
@@ -1429,6 +1445,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		DefaultMappedModel:              input.DefaultMappedModel,
 		MessagesDispatchModelConfig:     normalizeOpenAIMessagesDispatchModelConfig(input.MessagesDispatchModelConfig),
 		RPMLimit:                        input.RPMLimit,
+		OpenAILegacyImagesDefault:       input.OpenAILegacyImagesDefault != nil && *input.OpenAILegacyImagesDefault,
+		ProxyID:                         normalizeOptionalPositiveID(input.ProxyID),
 	}
 	sanitizeGroupMessagesDispatchFields(group)
 	if err := s.groupRepo.Create(ctx, group); err != nil {
@@ -1665,6 +1683,12 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.RPMLimit != nil {
 		group.RPMLimit = *input.RPMLimit
+	}
+	if input.OpenAILegacyImagesDefault != nil {
+		group.OpenAILegacyImagesDefault = *input.OpenAILegacyImagesDefault
+	}
+	if input.ProxyID != nil {
+		group.ProxyID = normalizeOptionalPositiveID(input.ProxyID)
 	}
 	sanitizeGroupMessagesDispatchFields(group)
 

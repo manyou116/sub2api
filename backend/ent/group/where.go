@@ -185,6 +185,11 @@ func RequirePrivacySet(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldRequirePrivacySet, v))
 }
 
+// OpenaiLegacyImagesDefault applies equality check predicate on the "openai_legacy_images_default" field. It's identical to OpenaiLegacyImagesDefaultEQ.
+func OpenaiLegacyImagesDefault(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldOpenaiLegacyImagesDefault, v))
+}
+
 // DefaultMappedModel applies equality check predicate on the "default_mapped_model" field. It's identical to DefaultMappedModelEQ.
 func DefaultMappedModel(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldDefaultMappedModel, v))
@@ -193,6 +198,11 @@ func DefaultMappedModel(v string) predicate.Group {
 // RpmLimit applies equality check predicate on the "rpm_limit" field. It's identical to RpmLimitEQ.
 func RpmLimit(v int) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldRpmLimit, v))
+}
+
+// ProxyID applies equality check predicate on the "proxy_id" field. It's identical to ProxyIDEQ.
+func ProxyID(v int64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldProxyID, v))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
@@ -1260,6 +1270,16 @@ func RequirePrivacySetNEQ(v bool) predicate.Group {
 	return predicate.Group(sql.FieldNEQ(FieldRequirePrivacySet, v))
 }
 
+// OpenaiLegacyImagesDefaultEQ applies the EQ predicate on the "openai_legacy_images_default" field.
+func OpenaiLegacyImagesDefaultEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldOpenaiLegacyImagesDefault, v))
+}
+
+// OpenaiLegacyImagesDefaultNEQ applies the NEQ predicate on the "openai_legacy_images_default" field.
+func OpenaiLegacyImagesDefaultNEQ(v bool) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldOpenaiLegacyImagesDefault, v))
+}
+
 // DefaultMappedModelEQ applies the EQ predicate on the "default_mapped_model" field.
 func DefaultMappedModelEQ(v string) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldDefaultMappedModel, v))
@@ -1363,6 +1383,56 @@ func RpmLimitLT(v int) predicate.Group {
 // RpmLimitLTE applies the LTE predicate on the "rpm_limit" field.
 func RpmLimitLTE(v int) predicate.Group {
 	return predicate.Group(sql.FieldLTE(FieldRpmLimit, v))
+}
+
+// ProxyIDEQ applies the EQ predicate on the "proxy_id" field.
+func ProxyIDEQ(v int64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldProxyID, v))
+}
+
+// ProxyIDNEQ applies the NEQ predicate on the "proxy_id" field.
+func ProxyIDNEQ(v int64) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldProxyID, v))
+}
+
+// ProxyIDIn applies the In predicate on the "proxy_id" field.
+func ProxyIDIn(vs ...int64) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldProxyID, vs...))
+}
+
+// ProxyIDNotIn applies the NotIn predicate on the "proxy_id" field.
+func ProxyIDNotIn(vs ...int64) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldProxyID, vs...))
+}
+
+// ProxyIDGT applies the GT predicate on the "proxy_id" field.
+func ProxyIDGT(v int64) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldProxyID, v))
+}
+
+// ProxyIDGTE applies the GTE predicate on the "proxy_id" field.
+func ProxyIDGTE(v int64) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldProxyID, v))
+}
+
+// ProxyIDLT applies the LT predicate on the "proxy_id" field.
+func ProxyIDLT(v int64) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldProxyID, v))
+}
+
+// ProxyIDLTE applies the LTE predicate on the "proxy_id" field.
+func ProxyIDLTE(v int64) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldProxyID, v))
+}
+
+// ProxyIDIsNil applies the IsNil predicate on the "proxy_id" field.
+func ProxyIDIsNil() predicate.Group {
+	return predicate.Group(sql.FieldIsNull(FieldProxyID))
+}
+
+// ProxyIDNotNil applies the NotNil predicate on the "proxy_id" field.
+func ProxyIDNotNil() predicate.Group {
+	return predicate.Group(sql.FieldNotNull(FieldProxyID))
 }
 
 // HasAPIKeys applies the HasEdge predicate on the "api_keys" edge.

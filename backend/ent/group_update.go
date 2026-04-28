@@ -539,6 +539,20 @@ func (_u *GroupUpdate) SetNillableRequirePrivacySet(v *bool) *GroupUpdate {
 	return _u
 }
 
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (_u *GroupUpdate) SetOpenaiLegacyImagesDefault(v bool) *GroupUpdate {
+	_u.mutation.SetOpenaiLegacyImagesDefault(v)
+	return _u
+}
+
+// SetNillableOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableOpenaiLegacyImagesDefault(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetOpenaiLegacyImagesDefault(*v)
+	}
+	return _u
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (_u *GroupUpdate) SetDefaultMappedModel(v string) *GroupUpdate {
 	_u.mutation.SetDefaultMappedModel(v)
@@ -585,6 +599,33 @@ func (_u *GroupUpdate) SetNillableRpmLimit(v *int) *GroupUpdate {
 // AddRpmLimit adds value to the "rpm_limit" field.
 func (_u *GroupUpdate) AddRpmLimit(v int) *GroupUpdate {
 	_u.mutation.AddRpmLimit(v)
+	return _u
+}
+
+// SetProxyID sets the "proxy_id" field.
+func (_u *GroupUpdate) SetProxyID(v int64) *GroupUpdate {
+	_u.mutation.ResetProxyID()
+	_u.mutation.SetProxyID(v)
+	return _u
+}
+
+// SetNillableProxyID sets the "proxy_id" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableProxyID(v *int64) *GroupUpdate {
+	if v != nil {
+		_u.SetProxyID(*v)
+	}
+	return _u
+}
+
+// AddProxyID adds value to the "proxy_id" field.
+func (_u *GroupUpdate) AddProxyID(v int64) *GroupUpdate {
+	_u.mutation.AddProxyID(v)
+	return _u
+}
+
+// ClearProxyID clears the value of the "proxy_id" field.
+func (_u *GroupUpdate) ClearProxyID() *GroupUpdate {
+	_u.mutation.ClearProxyID()
 	return _u
 }
 
@@ -1045,6 +1086,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.RequirePrivacySet(); ok {
 		_spec.SetField(group.FieldRequirePrivacySet, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.OpenaiLegacyImagesDefault(); ok {
+		_spec.SetField(group.FieldOpenaiLegacyImagesDefault, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.DefaultMappedModel(); ok {
 		_spec.SetField(group.FieldDefaultMappedModel, field.TypeString, value)
 	}
@@ -1056,6 +1100,15 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedRpmLimit(); ok {
 		_spec.AddField(group.FieldRpmLimit, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.ProxyID(); ok {
+		_spec.SetField(group.FieldProxyID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedProxyID(); ok {
+		_spec.AddField(group.FieldProxyID, field.TypeInt64, value)
+	}
+	if _u.mutation.ProxyIDCleared() {
+		_spec.ClearField(group.FieldProxyID, field.TypeInt64)
 	}
 	if _u.mutation.APIKeysCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1874,6 +1927,20 @@ func (_u *GroupUpdateOne) SetNillableRequirePrivacySet(v *bool) *GroupUpdateOne 
 	return _u
 }
 
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (_u *GroupUpdateOne) SetOpenaiLegacyImagesDefault(v bool) *GroupUpdateOne {
+	_u.mutation.SetOpenaiLegacyImagesDefault(v)
+	return _u
+}
+
+// SetNillableOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableOpenaiLegacyImagesDefault(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetOpenaiLegacyImagesDefault(*v)
+	}
+	return _u
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (_u *GroupUpdateOne) SetDefaultMappedModel(v string) *GroupUpdateOne {
 	_u.mutation.SetDefaultMappedModel(v)
@@ -1920,6 +1987,33 @@ func (_u *GroupUpdateOne) SetNillableRpmLimit(v *int) *GroupUpdateOne {
 // AddRpmLimit adds value to the "rpm_limit" field.
 func (_u *GroupUpdateOne) AddRpmLimit(v int) *GroupUpdateOne {
 	_u.mutation.AddRpmLimit(v)
+	return _u
+}
+
+// SetProxyID sets the "proxy_id" field.
+func (_u *GroupUpdateOne) SetProxyID(v int64) *GroupUpdateOne {
+	_u.mutation.ResetProxyID()
+	_u.mutation.SetProxyID(v)
+	return _u
+}
+
+// SetNillableProxyID sets the "proxy_id" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableProxyID(v *int64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetProxyID(*v)
+	}
+	return _u
+}
+
+// AddProxyID adds value to the "proxy_id" field.
+func (_u *GroupUpdateOne) AddProxyID(v int64) *GroupUpdateOne {
+	_u.mutation.AddProxyID(v)
+	return _u
+}
+
+// ClearProxyID clears the value of the "proxy_id" field.
+func (_u *GroupUpdateOne) ClearProxyID() *GroupUpdateOne {
+	_u.mutation.ClearProxyID()
 	return _u
 }
 
@@ -2410,6 +2504,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	if value, ok := _u.mutation.RequirePrivacySet(); ok {
 		_spec.SetField(group.FieldRequirePrivacySet, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.OpenaiLegacyImagesDefault(); ok {
+		_spec.SetField(group.FieldOpenaiLegacyImagesDefault, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.DefaultMappedModel(); ok {
 		_spec.SetField(group.FieldDefaultMappedModel, field.TypeString, value)
 	}
@@ -2421,6 +2518,15 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.AddedRpmLimit(); ok {
 		_spec.AddField(group.FieldRpmLimit, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.ProxyID(); ok {
+		_spec.SetField(group.FieldProxyID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedProxyID(); ok {
+		_spec.AddField(group.FieldProxyID, field.TypeInt64, value)
+	}
+	if _u.mutation.ProxyIDCleared() {
+		_spec.ClearField(group.FieldProxyID, field.TypeInt64)
 	}
 	if _u.mutation.APIKeysCleared() {
 		edge := &sqlgraph.EdgeSpec{

@@ -2424,6 +2424,17 @@
         v-if="form.platform === 'openai' && accountCategory === 'oauth-based'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
+        <div class="mb-4 flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">旧版 Web 生图</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              选择是否继承分组默认，或对当前 OAuth 账号强制启用/禁用
+            </p>
+          </div>
+          <div class="w-40">
+            <Select v-model="openAILegacyImagesMode" :options="openAILegacyImagesModeOptions" />
+          </div>
+        </div>
         <div class="flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.openai.codexCLIOnly') }}</label>
@@ -3112,6 +3123,7 @@ const customErrorCodeInput = ref<number | null>(null)
 const interceptWarmupRequests = ref(false)
 const autoPauseOnExpired = ref(true)
 const openaiPassthroughEnabled = ref(false)
+const openAILegacyImagesMode = ref<'inherit' | 'enabled' | 'disabled'>('inherit')
 const openAICompactMode = ref<OpenAICompactMode>('auto')
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
@@ -3163,6 +3175,11 @@ const openAICompactModeOptions = computed(() => [
   { value: 'auto', label: t('admin.accounts.openai.compactModeAuto') },
   { value: 'force_on', label: t('admin.accounts.openai.compactModeForceOn') },
   { value: 'force_off', label: t('admin.accounts.openai.compactModeForceOff') }
+])
+const openAILegacyImagesModeOptions = computed(() => [
+  { value: 'inherit', label: '继承分组' },
+  { value: 'enabled', label: '强制启用' },
+  { value: 'disabled', label: '强制禁用' }
 ])
 
 function buildAntigravityExtra(): Record<string, unknown> | undefined {
@@ -3857,6 +3874,7 @@ const resetForm = () => {
   interceptWarmupRequests.value = false
   autoPauseOnExpired.value = true
   openaiPassthroughEnabled.value = false
+  openAILegacyImagesMode.value = 'inherit'
   openAICompactMode.value = 'auto'
   openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
@@ -3934,6 +3952,17 @@ const buildOpenAIExtra = (base?: Record<string, unknown>): Record<string, unknow
     extra.codex_cli_only = true
   } else {
     delete extra.codex_cli_only
+  }
+  if (accountCategory.value === 'oauth-based') {
+    if (openAILegacyImagesMode.value === 'enabled') {
+      extra.openai_oauth_legacy_images = true
+    } else if (openAILegacyImagesMode.value === 'disabled') {
+      extra.openai_oauth_legacy_images = false
+    } else {
+      delete extra.openai_oauth_legacy_images
+    }
+  } else {
+    delete extra.openai_oauth_legacy_images
   }
   if (openAICompactMode.value !== 'auto') {
     extra.openai_compact_mode = openAICompactMode.value

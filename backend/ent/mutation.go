@@ -14785,10 +14785,13 @@ type GroupMutation struct {
 	allow_messages_dispatch                 *bool
 	require_oauth_only                      *bool
 	require_privacy_set                     *bool
+	openai_legacy_images_default            *bool
 	default_mapped_model                    *string
 	messages_dispatch_model_config          *domain.OpenAIMessagesDispatchModelConfig
 	rpm_limit                               *int
 	addrpm_limit                            *int
+	proxy_id                                *int64
+	addproxy_id                             *int64
 	clearedFields                           map[string]struct{}
 	api_keys                                map[int64]struct{}
 	removedapi_keys                         map[int64]struct{}
@@ -16305,6 +16308,42 @@ func (m *GroupMutation) ResetRequirePrivacySet() {
 	m.require_privacy_set = nil
 }
 
+// SetOpenaiLegacyImagesDefault sets the "openai_legacy_images_default" field.
+func (m *GroupMutation) SetOpenaiLegacyImagesDefault(b bool) {
+	m.openai_legacy_images_default = &b
+}
+
+// OpenaiLegacyImagesDefault returns the value of the "openai_legacy_images_default" field in the mutation.
+func (m *GroupMutation) OpenaiLegacyImagesDefault() (r bool, exists bool) {
+	v := m.openai_legacy_images_default
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOpenaiLegacyImagesDefault returns the old "openai_legacy_images_default" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldOpenaiLegacyImagesDefault(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOpenaiLegacyImagesDefault is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOpenaiLegacyImagesDefault requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOpenaiLegacyImagesDefault: %w", err)
+	}
+	return oldValue.OpenaiLegacyImagesDefault, nil
+}
+
+// ResetOpenaiLegacyImagesDefault resets all changes to the "openai_legacy_images_default" field.
+func (m *GroupMutation) ResetOpenaiLegacyImagesDefault() {
+	m.openai_legacy_images_default = nil
+}
+
 // SetDefaultMappedModel sets the "default_mapped_model" field.
 func (m *GroupMutation) SetDefaultMappedModel(s string) {
 	m.default_mapped_model = &s
@@ -16431,6 +16470,76 @@ func (m *GroupMutation) AddedRpmLimit() (r int, exists bool) {
 func (m *GroupMutation) ResetRpmLimit() {
 	m.rpm_limit = nil
 	m.addrpm_limit = nil
+}
+
+// SetProxyID sets the "proxy_id" field.
+func (m *GroupMutation) SetProxyID(i int64) {
+	m.proxy_id = &i
+	m.addproxy_id = nil
+}
+
+// ProxyID returns the value of the "proxy_id" field in the mutation.
+func (m *GroupMutation) ProxyID() (r int64, exists bool) {
+	v := m.proxy_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProxyID returns the old "proxy_id" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldProxyID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProxyID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProxyID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProxyID: %w", err)
+	}
+	return oldValue.ProxyID, nil
+}
+
+// AddProxyID adds i to the "proxy_id" field.
+func (m *GroupMutation) AddProxyID(i int64) {
+	if m.addproxy_id != nil {
+		*m.addproxy_id += i
+	} else {
+		m.addproxy_id = &i
+	}
+}
+
+// AddedProxyID returns the value that was added to the "proxy_id" field in this mutation.
+func (m *GroupMutation) AddedProxyID() (r int64, exists bool) {
+	v := m.addproxy_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearProxyID clears the value of the "proxy_id" field.
+func (m *GroupMutation) ClearProxyID() {
+	m.proxy_id = nil
+	m.addproxy_id = nil
+	m.clearedFields[group.FieldProxyID] = struct{}{}
+}
+
+// ProxyIDCleared returns if the "proxy_id" field was cleared in this mutation.
+func (m *GroupMutation) ProxyIDCleared() bool {
+	_, ok := m.clearedFields[group.FieldProxyID]
+	return ok
+}
+
+// ResetProxyID resets all changes to the "proxy_id" field.
+func (m *GroupMutation) ResetProxyID() {
+	m.proxy_id = nil
+	m.addproxy_id = nil
+	delete(m.clearedFields, group.FieldProxyID)
 }
 
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by ids.
@@ -16791,7 +16900,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 31)
+	fields := make([]string, 0, 33)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -16876,6 +16985,9 @@ func (m *GroupMutation) Fields() []string {
 	if m.require_privacy_set != nil {
 		fields = append(fields, group.FieldRequirePrivacySet)
 	}
+	if m.openai_legacy_images_default != nil {
+		fields = append(fields, group.FieldOpenaiLegacyImagesDefault)
+	}
 	if m.default_mapped_model != nil {
 		fields = append(fields, group.FieldDefaultMappedModel)
 	}
@@ -16884,6 +16996,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.rpm_limit != nil {
 		fields = append(fields, group.FieldRpmLimit)
+	}
+	if m.proxy_id != nil {
+		fields = append(fields, group.FieldProxyID)
 	}
 	return fields
 }
@@ -16949,12 +17064,16 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.RequireOauthOnly()
 	case group.FieldRequirePrivacySet:
 		return m.RequirePrivacySet()
+	case group.FieldOpenaiLegacyImagesDefault:
+		return m.OpenaiLegacyImagesDefault()
 	case group.FieldDefaultMappedModel:
 		return m.DefaultMappedModel()
 	case group.FieldMessagesDispatchModelConfig:
 		return m.MessagesDispatchModelConfig()
 	case group.FieldRpmLimit:
 		return m.RpmLimit()
+	case group.FieldProxyID:
+		return m.ProxyID()
 	}
 	return nil, false
 }
@@ -17020,12 +17139,16 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldRequireOauthOnly(ctx)
 	case group.FieldRequirePrivacySet:
 		return m.OldRequirePrivacySet(ctx)
+	case group.FieldOpenaiLegacyImagesDefault:
+		return m.OldOpenaiLegacyImagesDefault(ctx)
 	case group.FieldDefaultMappedModel:
 		return m.OldDefaultMappedModel(ctx)
 	case group.FieldMessagesDispatchModelConfig:
 		return m.OldMessagesDispatchModelConfig(ctx)
 	case group.FieldRpmLimit:
 		return m.OldRpmLimit(ctx)
+	case group.FieldProxyID:
+		return m.OldProxyID(ctx)
 	}
 	return nil, fmt.Errorf("unknown Group field %s", name)
 }
@@ -17231,6 +17354,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetRequirePrivacySet(v)
 		return nil
+	case group.FieldOpenaiLegacyImagesDefault:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOpenaiLegacyImagesDefault(v)
+		return nil
 	case group.FieldDefaultMappedModel:
 		v, ok := value.(string)
 		if !ok {
@@ -17251,6 +17381,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetRpmLimit(v)
+		return nil
+	case group.FieldProxyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProxyID(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Group field %s", name)
@@ -17296,6 +17433,9 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addrpm_limit != nil {
 		fields = append(fields, group.FieldRpmLimit)
 	}
+	if m.addproxy_id != nil {
+		fields = append(fields, group.FieldProxyID)
+	}
 	return fields
 }
 
@@ -17328,6 +17468,8 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedSortOrder()
 	case group.FieldRpmLimit:
 		return m.AddedRpmLimit()
+	case group.FieldProxyID:
+		return m.AddedProxyID()
 	}
 	return nil, false
 }
@@ -17421,6 +17563,13 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddRpmLimit(v)
 		return nil
+	case group.FieldProxyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddProxyID(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Group numeric field %s", name)
 }
@@ -17461,6 +17610,9 @@ func (m *GroupMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(group.FieldModelRouting) {
 		fields = append(fields, group.FieldModelRouting)
+	}
+	if m.FieldCleared(group.FieldProxyID) {
+		fields = append(fields, group.FieldProxyID)
 	}
 	return fields
 }
@@ -17508,6 +17660,9 @@ func (m *GroupMutation) ClearField(name string) error {
 		return nil
 	case group.FieldModelRouting:
 		m.ClearModelRouting()
+		return nil
+	case group.FieldProxyID:
+		m.ClearProxyID()
 		return nil
 	}
 	return fmt.Errorf("unknown Group nullable field %s", name)
@@ -17601,6 +17756,9 @@ func (m *GroupMutation) ResetField(name string) error {
 	case group.FieldRequirePrivacySet:
 		m.ResetRequirePrivacySet()
 		return nil
+	case group.FieldOpenaiLegacyImagesDefault:
+		m.ResetOpenaiLegacyImagesDefault()
+		return nil
 	case group.FieldDefaultMappedModel:
 		m.ResetDefaultMappedModel()
 		return nil
@@ -17609,6 +17767,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldRpmLimit:
 		m.ResetRpmLimit()
+		return nil
+	case group.FieldProxyID:
+		m.ResetProxyID()
 		return nil
 	}
 	return fmt.Errorf("unknown Group field %s", name)

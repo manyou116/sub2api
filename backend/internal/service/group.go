@@ -56,8 +56,10 @@ type Group struct {
 	AllowMessagesDispatch       bool
 	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
 	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
+	OpenAILegacyImagesDefault   bool // OpenAI OAuth 账号默认启用旧版 ChatGPT Web 生图/改图链路
 	DefaultMappedModel          string
 	MessagesDispatchModelConfig OpenAIMessagesDispatchModelConfig
+	ProxyID                     *int64 // 分组默认代理；账号未设置代理时使用
 
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制）。
 	// 一旦设置即接管该分组用户的限流（覆盖用户级 rpm_limit），可被 user-group rpm_override 进一步覆盖。

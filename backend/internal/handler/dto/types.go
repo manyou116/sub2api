@@ -111,6 +111,12 @@ type Group struct {
 	RequireOAuthOnly  bool `json:"require_oauth_only"`
 	RequirePrivacySet bool `json:"require_privacy_set"`
 
+	// OpenAI OAuth 旧版 Web 生图/改图默认开关（账号未覆盖时生效）。
+	OpenAILegacyImagesDefault bool `json:"openai_legacy_images_default"`
+
+	// ProxyID 分组默认代理；账号未设置代理时使用。
+	ProxyID *int64 `json:"proxy_id"`
+
 	// RPMLimit 分组级每分钟请求数上限（0 = 不限制），设置后覆盖用户级 rpm_limit。
 	RPMLimit int `json:"rpm_limit"`
 

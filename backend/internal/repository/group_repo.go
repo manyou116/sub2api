@@ -62,8 +62,10 @@ func (r *groupRepository) Create(ctx context.Context, groupIn *service.Group) er
 		SetAllowMessagesDispatch(groupIn.AllowMessagesDispatch).
 		SetRequireOauthOnly(groupIn.RequireOAuthOnly).
 		SetRequirePrivacySet(groupIn.RequirePrivacySet).
+		SetOpenaiLegacyImagesDefault(groupIn.OpenAILegacyImagesDefault).
 		SetDefaultMappedModel(groupIn.DefaultMappedModel).
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
+		SetNillableProxyID(groupIn.ProxyID).
 		SetRpmLimit(groupIn.RPMLimit)
 
 	// 设置模型路由配置
@@ -130,6 +132,7 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetAllowMessagesDispatch(groupIn.AllowMessagesDispatch).
 		SetRequireOauthOnly(groupIn.RequireOAuthOnly).
 		SetRequirePrivacySet(groupIn.RequirePrivacySet).
+		SetOpenaiLegacyImagesDefault(groupIn.OpenAILegacyImagesDefault).
 		SetDefaultMappedModel(groupIn.DefaultMappedModel).
 		SetMessagesDispatchModelConfig(groupIn.MessagesDispatchModelConfig).
 		SetRpmLimit(groupIn.RPMLimit)
@@ -177,6 +180,11 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		builder = builder.SetFallbackGroupIDOnInvalidRequest(*groupIn.FallbackGroupIDOnInvalidRequest)
 	} else {
 		builder = builder.ClearFallbackGroupIDOnInvalidRequest()
+	}
+	if groupIn.ProxyID != nil {
+		builder = builder.SetProxyID(*groupIn.ProxyID)
+	} else {
+		builder = builder.ClearProxyID()
 	}
 
 	// 处理 ModelRouting：nil 时清除，否则设置
