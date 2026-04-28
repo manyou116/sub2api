@@ -24,8 +24,8 @@ func TestBootstrap_ParsesScriptsAndDataBuild(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t", UserAgent: "UA"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t", UserAgent: "UA"}, fingerprints[0])
 	scripts, dataBuild := bootstrap(context.Background(), client, headers, srv.URL+"/")
 
 	if dataBuild != "prod-2025-01-15" {
@@ -49,8 +49,8 @@ func TestBootstrap_FallbackOnFailure(t *testing.T) {
 		w.WriteHeader(500)
 	}))
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	scripts, _ := bootstrap(context.Background(), client, headers, srv.URL+"/")
 	if len(scripts) != 1 || scripts[0] != defaultSentinelSDKURL {
 		t.Errorf("expect fallback, got %v", scripts)
@@ -68,8 +68,8 @@ func TestFetchChatRequirements_HappyPath(t *testing.T) {
 		}`))
 	}))
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	r, err := fetchChatRequirements(context.Background(), client, headers, srv.URL, []string{defaultSentinelSDKURL}, "")
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -91,8 +91,8 @@ func TestFetchChatRequirements_RetriesOn4xx(t *testing.T) {
 		_, _ = w.Write([]byte(`{"token":"second-try"}`))
 	}))
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	r, err := fetchChatRequirements(context.Background(), client, headers, srv.URL, nil, "")
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -111,8 +111,8 @@ func TestFetchChatRequirements_RateLimit(t *testing.T) {
 		_, _ = w.Write([]byte(`{"detail":{"message":"slow down","reset_after":60}}`))
 	}))
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	_, err := fetchChatRequirements(context.Background(), client, headers, srv.URL, nil, "")
 	if err == nil {
 		t.Fatal("expect error")
@@ -128,8 +128,8 @@ func TestInitConversation_Auth(t *testing.T) {
 		_, _ = w.Write([]byte(`{"detail":"token expired"}`))
 	}))
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	err := initConversation(context.Background(), client, headers, srv.URL)
 	if _, ok := err.(*AuthError); !ok {
 		t.Errorf("expect AuthError, got %T %v", err, err)

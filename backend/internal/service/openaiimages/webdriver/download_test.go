@@ -16,8 +16,8 @@ func TestFetchDownloadURL_FileService(t *testing.T) {
 		_, _ = w.Write([]byte(`{"download_url":"https://cdn.example/img.png"}`))
 	}))
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	url, err := fetchDownloadURL(context.Background(), client, headers, srv.URL+"/files", "https://chatgpt.com/backend-api/conversation", "conv-1", "file-service://file-xyz")
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -28,8 +28,8 @@ func TestFetchDownloadURL_FileService(t *testing.T) {
 }
 
 func TestFetchDownloadURL_UnsupportedPointer(t *testing.T) {
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	_, err := fetchDownloadURL(context.Background(), client, headers, "x", "y", "c", "https://random/url")
 	if err == nil || !strings.Contains(err.Error(), "unsupported pointer") {
 		t.Errorf("expect unsupported, got %v", err)
@@ -42,8 +42,8 @@ func TestDownloadBytes_Success(t *testing.T) {
 		_, _ = w.Write([]byte("\x89PNG\r\n\x1a\nXYZ"))
 	}))
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	data, ct, err := downloadBytes(context.Background(), client, headers, srv.URL)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -58,8 +58,8 @@ func TestDownloadBytes_5xx(t *testing.T) {
 		w.WriteHeader(503)
 	}))
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	_, _, err := downloadBytes(context.Background(), client, headers, srv.URL)
 	if err == nil {
 		t.Fatal("expect error")
@@ -73,8 +73,8 @@ func TestClassifyHTTPError_RateLimit(t *testing.T) {
 		_, _ = w.Write([]byte(`{"detail":{"message":"hold on","reset_after":30}}`))
 	}))
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	_, err := fetchDownloadURL(context.Background(), client, headers, srv.URL+"/files", "y", "c", "file-service://x")
 	if err == nil {
 		t.Fatal("expect err")

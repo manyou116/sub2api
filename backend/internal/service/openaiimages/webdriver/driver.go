@@ -55,12 +55,13 @@ func (d *Driver) Forward(ctx context.Context, in *Request) (*Result, error) {
 	}
 	startTime := time.Now()
 
-	client, err := newHTTPClient(in.Account.ProxyURL)
+	fp := PickFingerprint(in.Account.AccountID)
+	client, err := newHTTPClient(in.Account.ProxyURL, fp)
 	if err != nil {
 		return nil, err
 	}
-	headers := buildHeaders(in.Account)
-	bootstrapHdrs := buildBootstrapHeaders(in.Account)
+	headers := buildHeaders(in.Account, fp)
+	bootstrapHdrs := buildBootstrapHeaders(in.Account, fp)
 
 	scriptSources, dataBuild := bootstrap(ctx, client, bootstrapHdrs, d.endpoints.start())
 

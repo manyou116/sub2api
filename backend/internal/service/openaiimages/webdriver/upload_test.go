@@ -60,8 +60,8 @@ func TestUploadFiles_ThreeStepProtocol(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	out, err := uploadFiles(context.Background(), client, headers, srv.URL+"/files", []Upload{
 		{Filename: "x.png", ContentType: "image/png", Data: []byte("PNG-DATA"), Width: 16, Height: 16},
 	})
@@ -91,8 +91,8 @@ func TestUploadFiles_SkipsAzureWhenURLEmpty(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	out, err := uploadFiles(context.Background(), client, headers, srv.URL+"/files", []Upload{
 		{ContentType: "image/png", Data: []byte("X")},
 	})
@@ -109,8 +109,8 @@ func TestUploadFiles_FailsOnEmptyFileID(t *testing.T) {
 		_, _ = w.Write([]byte(`{"file_id":"","upload_url":""}`))
 	}))
 	defer srv.Close()
-	client, _ := newHTTPClient("")
-	headers := buildHeaders(AccountInfo{AccessToken: "t"})
+	client, _ := newHTTPClient("", fingerprints[0])
+	headers := buildHeaders(AccountInfo{AccessToken: "t"}, fingerprints[0])
 	_, err := uploadFiles(context.Background(), client, headers, srv.URL, []Upload{
 		{ContentType: "image/png", Data: []byte("X")},
 	})

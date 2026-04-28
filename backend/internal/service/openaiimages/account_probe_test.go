@@ -128,8 +128,10 @@ func checkProbeHeaders(t *testing.T, r *http.Request, wantPath string) bool {
 		t.Errorf("authorization=%q", got)
 		return false
 	}
-	if got := r.Header.Get("x-openai-target-path"); got != wantPath {
-		t.Errorf("target-path=%q want %q", got, wantPath)
+	// 旧实现走自家反代，会带 x-openai-target-path；新实现直连 chatgpt.com，
+	// 仅校验存在 Origin/Referer 等浏览器化头即可。
+	if got := r.Header.Get("origin"); got != "https://chatgpt.com" {
+		t.Errorf("origin=%q want https://chatgpt.com (path=%s)", got, wantPath)
 		return false
 	}
 	return true

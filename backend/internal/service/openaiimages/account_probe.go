@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/service/openaiimages/webdriver"
 	"github.com/imroc/req/v3"
-	utls "github.com/refraction-networking/utls"
 )
 
 // ProbeRepo 是 AccountProbe 写入 extra 所需的最小仓储接口；
@@ -74,7 +74,8 @@ func (p *AccountProbe) httpClient() *req.Client {
 	if p.HTTPClient != nil {
 		return p.HTTPClient
 	}
-	c := req.C().ImpersonateChrome().SetTLSFingerprint(utls.HelloChrome_133).SetTimeout(25 * time.Second)
+	// 默认 client；调用方实际请求时会基于账号 ID 重建 fingerprint-bound client。
+	c, _ := webdriver.NewProbeClient("", webdriver.PickFingerprint(0))
 	p.Client = c
 	return c
 }
@@ -104,22 +105,15 @@ func (p *AccountProbe) RefreshAccount(ctx context.Context, acc ProbeAccount) (*P
 		return nil, errors.New("openai-image probe: access token required")
 	}
 
-	c := p.httpClient()
-	headers := map[string]string{
-		"authorization":      "Bearer " + acc.AccessToken,
-		"accept":             "*/*",
-		"accept-language":    "zh-CN,zh;q=0.9,en;q=0.8",
-		"oai-language":       "zh-CN",
-		"origin":             "https://chatgpt.com",
-		"referer":            "https://chatgpt.com/",
-		"sec-fetch-dest":     "empty",
-		"sec-fetch-mode":     "cors",
-		"sec-fetch-site":     "same-origin",
-		"sec-ch-ua":          `"Google Chrome";v="131", "Chromium";v="131", "Not A(Brand";v="24"`,
-		"sec-ch-ua-mobile":   "?0",
-		"sec-ch-ua-platform": `"macOS"`,
-		"user-agent":         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+	fp := webdriver.PickFingerprint(acc.ID)
+	c, err := webdriver.NewProbeClient(acc.ProxyURL, fp)
+	if err != nil {
+		return nil, fmt.Errorf("probe client: %w", err)
 	}
+	// 必须先模拟浏览器导航到 chatgpt.com，让 client 持有 cf_clearance 等 anti-bot cookie；
+	// 否则后续 /backend-api/me 会被 CF 直接 403。
+	_ = webdriver.PrimeChatGPTSession(ctx, c, fp)
+	headers := webdriver.BuildBearerHeadersMap(acc.AccessToken, fp)
 
 	type respBody struct {
 		status int
@@ -130,13 +124,7 @@ func (p *AccountProbe) RefreshAccount(ctx context.Context, acc ProbeAccount) (*P
 	initPromise := make(chan respBody, 1)
 
 	go func() {
-		client := c
-		if acc.ProxyURL != "" {
-			client = c.Clone().SetProxyURL(acc.ProxyURL)
-		}
-		r := client.R().SetContext(ctx).SetHeaders(headers).
-			SetHeader("x-openai-target-path", "/backend-api/me").
-			SetHeader("x-openai-target-route", "/backend-api/me")
+		r := c.R().SetContext(ctx).SetHeaders(headers)
 		resp, err := r.Get(p.meURL())
 		if err != nil {
 			mePromise <- respBody{err: err}
@@ -146,19 +134,12 @@ func (p *AccountProbe) RefreshAccount(ctx context.Context, acc ProbeAccount) (*P
 	}()
 	go func() {
 		body := map[string]any{
-			"gizmo_id":                 nil,
-			"requested_default_model":  nil,
-			"conversation_id":          nil,
-			"timezone_offset_min":      -480,
+			"gizmo_id":                nil,
+			"requested_default_model": nil,
+			"conversation_id":         nil,
+			"timezone_offset_min":     -480,
 		}
-		client := c
-		if acc.ProxyURL != "" {
-			client = c.Clone().SetProxyURL(acc.ProxyURL)
-		}
-		r := client.R().SetContext(ctx).SetHeaders(headers).
-			SetHeader("x-openai-target-path", "/backend-api/conversation/init").
-			SetHeader("x-openai-target-route", "/backend-api/conversation/init").
-			SetHeader("content-type", "application/json").
+		r := c.R().SetContext(ctx).SetHeaders(headers).
 			SetBodyJsonMarshal(body)
 		resp, err := r.Post(p.initURL())
 		if err != nil {
