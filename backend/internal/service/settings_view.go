@@ -104,6 +104,10 @@ type SystemSettings struct {
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
 
+	// OpenAI 图片网关
+	ImageCacheBaseURL          string // response_format=url 时签发短链使用的 base URL
+	DefaultImageResponseFormat string // auto / b64_json / url / markdown
+
 	DefaultConcurrency           int
 	DefaultBalance               float64
 	AffiliateEnabled             bool

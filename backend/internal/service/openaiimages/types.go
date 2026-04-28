@@ -56,7 +56,10 @@ type ImagesRequest struct {
 	Style          string
 	Background     string
 	ResponseFormat ResponseFormat
-	Stream         bool
+	// ResponseFormatExplicit 标记 ResponseFormat 是否由客户端显式指定。
+	// 为 false 时，dispatcher 可用全局默认值覆盖（见 SettingKeyDefaultImageResponseFormat）。
+	ResponseFormatExplicit bool
+	Stream                 bool
 	User           string
 
 	// edits / chat 图片输入：第一张作为 base，余下作为 mask / 多图参考。

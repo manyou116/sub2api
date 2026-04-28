@@ -183,6 +183,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		TablePageSizeOptions:                   settings.TablePageSizeOptions,
 		CustomMenuItems:                        dto.ParseCustomMenuItems(settings.CustomMenuItems),
 		CustomEndpoints:                        dto.ParseCustomEndpoints(settings.CustomEndpoints),
+		ImageCacheBaseURL:                      settings.ImageCacheBaseURL,
+		DefaultImageResponseFormat:             settings.DefaultImageResponseFormat,
 		DefaultConcurrency:                     settings.DefaultConcurrency,
 		DefaultBalance:                         settings.DefaultBalance,
 		AffiliateRebateRate:                    settings.AffiliateRebateRate,
@@ -340,6 +342,10 @@ type UpdateSettingsRequest struct {
 	TablePageSizeOptions        []int                 `json:"table_page_size_options"`
 	CustomMenuItems             *[]dto.CustomMenuItem `json:"custom_menu_items"`
 	CustomEndpoints             *[]dto.CustomEndpoint `json:"custom_endpoints"`
+
+	// OpenAI 图片网关
+	ImageCacheBaseURL          *string `json:"image_cache_base_url"`
+	DefaultImageResponseFormat *string `json:"default_image_response_format"`
 
 	// 默认配置
 	DefaultConcurrency                       int                               `json:"default_concurrency"`
@@ -1167,6 +1173,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TablePageSizeOptions:             req.TablePageSizeOptions,
 		CustomMenuItems:                  customMenuJSON,
 		CustomEndpoints:                  customEndpointsJSON,
+		ImageCacheBaseURL:                resolveOptionalStr(req.ImageCacheBaseURL, previousSettings.ImageCacheBaseURL),
+		DefaultImageResponseFormat:       normalizeDefaultImageResponseFormat(resolveOptionalStr(req.DefaultImageResponseFormat, previousSettings.DefaultImageResponseFormat)),
 		DefaultConcurrency:               req.DefaultConcurrency,
 		DefaultBalance:                   req.DefaultBalance,
 		AffiliateRebateRate:              affiliateRebateRate,
@@ -1491,6 +1499,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		TablePageSizeOptions:                   updatedSettings.TablePageSizeOptions,
 		CustomMenuItems:                        dto.ParseCustomMenuItems(updatedSettings.CustomMenuItems),
 		CustomEndpoints:                        dto.ParseCustomEndpoints(updatedSettings.CustomEndpoints),
+		ImageCacheBaseURL:                      updatedSettings.ImageCacheBaseURL,
+		DefaultImageResponseFormat:             updatedSettings.DefaultImageResponseFormat,
 		DefaultConcurrency:                     updatedSettings.DefaultConcurrency,
 		DefaultBalance:                         updatedSettings.DefaultBalance,
 		AffiliateRebateRate:                    updatedSettings.AffiliateRebateRate,
@@ -1881,6 +1891,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.CustomEndpoints != after.CustomEndpoints {
 		changed = append(changed, "custom_endpoints")
+	}
+	if before.ImageCacheBaseURL != after.ImageCacheBaseURL {
+		changed = append(changed, "image_cache_base_url")
+	}
+	if before.DefaultImageResponseFormat != after.DefaultImageResponseFormat {
+		changed = append(changed, "default_image_response_format")
 	}
 	if before.EnableFingerprintUnification != after.EnableFingerprintUnification {
 		changed = append(changed, "enable_fingerprint_unification")
@@ -2680,4 +2696,24 @@ func (h *SettingHandler) TestWebSearchEmulation(c *gin.Context) {
 		return
 	}
 	response.Success(c, result)
+}
+
+// resolveOptionalStr 把 *string 字段（可空）解析为最终 string：
+// nil 表示未提交（保留旧值），非 nil 则取指针所指 trimmed 值。
+func resolveOptionalStr(p *string, fallback string) string {
+if p == nil {
+return fallback
+}
+return strings.TrimSpace(*p)
+}
+
+// normalizeDefaultImageResponseFormat 把外部输入收敛到合法集合。
+// 合法值：auto / b64_json / url / markdown；其他视为 auto。
+func normalizeDefaultImageResponseFormat(v string) string {
+switch strings.ToLower(strings.TrimSpace(v)) {
+case "b64_json", "url", "markdown":
+return strings.ToLower(strings.TrimSpace(v))
+default:
+return "auto"
+}
 }

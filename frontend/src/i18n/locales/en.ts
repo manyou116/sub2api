@@ -4984,6 +4984,15 @@ export default {
         maxVersionHint:
           'Reject Claude Code clients above this version (semver format). Leave empty to allow any version.'
       },
+      imageGateway: {
+        title: 'OpenAI Image Gateway',
+        description: 'Global behavior for /v1/images/* and image-aware chat/responses endpoints',
+        cacheBaseURL: 'Image Cache Base URL',
+        cacheBaseURLHint: 'When response_format=url, signed short URLs use this base (e.g. https://gateway.example.com). Leave empty to infer from request headers.',
+        defaultResponseFormat: 'Default Image Response Format',
+        defaultResponseFormatHint: 'Used when the client does not specify response_format. auto = keep entry-point default (images/* → b64_json, chat/responses → markdown).',
+        formatAuto: 'Auto (entry-point default)'
+      },
       scheduling: {
         title: 'Gateway Scheduling Settings',
         description: 'Control API Key scheduling behavior',

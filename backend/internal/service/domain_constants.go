@@ -187,6 +187,10 @@ const (
 	SettingKeyCustomMenuItems             = "custom_menu_items"             // 自定义菜单项（JSON 数组）
 	SettingKeyCustomEndpoints             = "custom_endpoints"              // 自定义端点列表（JSON 数组）
 
+	// OpenAI 图片网关设置
+	SettingKeyImageCacheBaseURL          = "image_cache_base_url"          // response_format=url 时签发短链使用的 base URL（如 https://api.example.com）
+	SettingKeyDefaultImageResponseFormat = "default_image_response_format" // 客户端未指定 response_format 时使用的默认值（auto/b64_json/url/markdown）
+
 	// 默认配置
 	SettingKeyDefaultConcurrency   = "default_concurrency"    // 新用户默认并发量
 	SettingKeyDefaultBalance       = "default_balance"        // 新用户默认余额

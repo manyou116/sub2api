@@ -45,6 +45,8 @@ type OpenAIImagesV2Handler struct {
 	source    *openaiimages.PoolBackedSource
 	registry  openaiimages.MapDriverRegistry
 	dispatchO openaiimages.DispatchOptions
+	cache     *openaiimages.ImageCache
+	settings  *service.SettingService
 }
 
 // NewOpenAIImagesV2Handler 装配新图片网关。
@@ -55,6 +57,7 @@ func NewOpenAIImagesV2Handler(
 	billingCacheService *service.BillingCacheService,
 	apiKeyService *service.APIKeyService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
+	settingService *service.SettingService,
 ) *OpenAIImagesV2Handler {
 	probe := openaiimages.NewAccountProbe(accountRepo)
 
@@ -75,6 +78,7 @@ func NewOpenAIImagesV2Handler(
 		usageRecordWorkerPool: usageRecordWorkerPool,
 		pool:                  pool,
 		probe:                 probe,
+		settings:              settingService,
 		registry: openaiimages.MapDriverRegistry{
 			openaiimages.DriverAPIKey:    openaiimages.NewAPIKeyDriver(),
 			openaiimages.DriverResponses: openaiimages.NewResponsesToolDriver(),
@@ -86,6 +90,12 @@ func NewOpenAIImagesV2Handler(
 			DefaultRateLimitCooldown: 5 * time.Minute,
 			Sleep:                    time.Sleep,
 		},
+	}
+
+	if cache, cacheErr := openaiimages.NewImageCache("", 24*time.Hour); cacheErr == nil {
+		h.cache = cache
+	} else {
+		logger.L().Warn("openaiimages.image_cache_init_failed", zap.Error(cacheErr))
 	}
 
 	h.source = openaiimages.NewPoolBackedSource(openaiimages.PoolSourceDeps{
@@ -207,6 +217,8 @@ func (h *OpenAIImagesV2Handler) run(c *gin.Context, req *openaiimages.ImagesRequ
 		return
 	}
 
+	h.applyDefaultResponseFormat(c, req)
+
 	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
 	groupID := int64(0)
 	if apiKey != nil && apiKey.GroupID != nil {
@@ -260,6 +272,10 @@ func (h *OpenAIImagesV2Handler) run(c *gin.Context, req *openaiimages.ImagesRequ
 	)
 
 	setOpsSelectedAccount(c, res.Account.ID(), service.PlatformOpenAI)
+
+	if req.ResponseFormat == openaiimages.ResponseFormatURL {
+		h.materializeAsURLs(c, res.Result, reqLog)
+	}
 
 	sink := openaiimages.NewGinSink(c)
 	if err := openaiimages.WriteResult(sink, req, res.Result, openaiimages.WriteOptions{
@@ -574,4 +590,131 @@ func cloneExtra(in map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// materializeAsURLs 把每个 ImageItem 的字节落入 ImageCache，签发本服务可访问的短链。
+//
+// 适用场景：用户传 response_format=url，但 driver（WebDriver / ResponsesToolDriver）
+// 拿到的是上游签名 URL（带短期 token + 强鉴权），无法直接给客户端访问。
+//
+// 处理规则：
+//   - 已有可用 URL（http/https 直连，例如 ApiKeyDriver 透传 OpenAI 官方签名）→ 保留
+//   - 否则用 Bytes（webdriver 默认）或 base64-decoded B64JSON 写入 cache
+//   - 写入后清空 B64JSON / Bytes，避免响应体重复携带二进制
+func (h *OpenAIImagesV2Handler) materializeAsURLs(c *gin.Context, res *openaiimages.ImageResult, reqLog *zap.Logger) {
+if h.cache == nil || res == nil {
+return
+}
+base := h.publicBaseURL(c)
+for i := range res.Items {
+it := &res.Items[i]
+if strings.HasPrefix(it.URL, "http://") || strings.HasPrefix(it.URL, "https://") {
+continue
+}
+data := it.Bytes
+if len(data) == 0 && it.B64JSON != "" {
+if decoded, err := openaiimages.DecodeBase64(it.B64JSON); err == nil {
+data = decoded
+}
+}
+if len(data) == 0 {
+continue
+}
+mime := it.MimeType
+if mime == "" {
+mime = "image/png"
+}
+id, err := h.cache.Put(data, mime)
+if err != nil {
+reqLog.Warn("openaiimages.cache_put_failed", zap.Error(err))
+continue
+}
+it.URL = base + "/v1/files/cached/" + id + extForMimePublic(mime)
+it.B64JSON = ""
+it.Bytes = nil
+}
+}
+
+// ServeCachedFile 处理 GET /v1/files/cached/:id，返回原始字节。
+// 公开访问（id 不可猜，且 24h 后 GC）。
+func (h *OpenAIImagesV2Handler) ServeCachedFile(c *gin.Context) {
+if h.cache == nil {
+c.AbortWithStatus(http.StatusNotFound)
+return
+}
+raw := c.Param("id")
+id := raw
+if dot := strings.IndexByte(raw, '.'); dot > 0 {
+id = raw[:dot]
+}
+data, mime, ok := h.cache.Get(id)
+if !ok {
+c.AbortWithStatus(http.StatusNotFound)
+return
+}
+c.Header("Cache-Control", "public, max-age=86400, immutable")
+c.Data(http.StatusOK, mime, data)
+}
+
+// applyDefaultResponseFormat 在客户端未显式指定 response_format 时，
+// 用管理后台「默认图片返回方式」(SettingKeyDefaultImageResponseFormat) 覆盖请求。
+//   - "auto"：保持解析阶段的入口默认（images/* → b64_json，chat/responses → markdown）
+//   - "b64_json" / "url" / "markdown"：覆盖为指定值
+func (h *OpenAIImagesV2Handler) applyDefaultResponseFormat(c *gin.Context, req *openaiimages.ImagesRequest) {
+	if req == nil || req.ResponseFormatExplicit || h.settings == nil {
+		return
+	}
+	cfg, err := h.settings.GetAllSettings(c.Request.Context())
+	if err != nil {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.DefaultImageResponseFormat)) {
+	case "b64_json":
+		req.ResponseFormat = openaiimages.ResponseFormatB64JSON
+	case "url":
+		req.ResponseFormat = openaiimages.ResponseFormatURL
+	case "markdown":
+		req.ResponseFormat = openaiimages.ResponseFormatMarkdown
+	}
+}
+
+// publicBaseURL 解析签发短链所用的 base URL：
+//   - 优先读管理后台「图片缓存 Base URL」(SettingKeyImageCacheBaseURL)
+//   - 缺省时回落到请求头推断（X-Forwarded-Proto / X-Forwarded-Host），
+//     再回落到 c.Request.Host
+//
+// 返回值不带末尾 slash，调用方负责拼接 path（须以 "/" 起始）。
+func (h *OpenAIImagesV2Handler) publicBaseURL(c *gin.Context) string {
+	if h.settings != nil {
+		if cfg, err := h.settings.GetAllSettings(c.Request.Context()); err == nil {
+			if v := strings.TrimRight(strings.TrimSpace(cfg.ImageCacheBaseURL), "/"); v != "" {
+				return v
+			}
+		}
+	}
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if proto := c.GetHeader("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	host := c.GetHeader("X-Forwarded-Host")
+	if host == "" {
+		host = c.Request.Host
+	}
+	return scheme + "://" + host
+}
+
+func extForMimePublic(mime string) string {
+switch strings.ToLower(mime) {
+case "image/jpeg", "image/jpg":
+return ".jpg"
+case "image/webp":
+return ".webp"
+case "image/gif":
+return ".gif"
+default:
+return ".png"
+}
 }

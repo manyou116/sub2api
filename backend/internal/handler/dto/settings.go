@@ -106,6 +106,10 @@ type SystemSettings struct {
 	CustomMenuItems             []CustomMenuItem `json:"custom_menu_items"`
 	CustomEndpoints             []CustomEndpoint `json:"custom_endpoints"`
 
+	// OpenAI 图片网关
+	ImageCacheBaseURL          string `json:"image_cache_base_url"`
+	DefaultImageResponseFormat string `json:"default_image_response_format"`
+
 	DefaultConcurrency           int                          `json:"default_concurrency"`
 	DefaultBalance               float64                      `json:"default_balance"`
 	AffiliateRebateRate          float64                      `json:"affiliate_rebate_rate"`

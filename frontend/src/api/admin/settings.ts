@@ -350,6 +350,8 @@ export interface SystemSettings {
   backend_mode_enabled: boolean;
   custom_menu_items: CustomMenuItem[];
   custom_endpoints: CustomEndpoint[];
+  image_cache_base_url: string;
+  default_image_response_format: string;
   // SMTP settings
   smtp_host: string;
   smtp_port: number;
@@ -537,6 +539,8 @@ export interface UpdateSettingsRequest {
   backend_mode_enabled?: boolean;
   custom_menu_items?: CustomMenuItem[];
   custom_endpoints?: CustomEndpoint[];
+  image_cache_base_url?: string;
+  default_image_response_format?: string;
   smtp_host?: string;
   smtp_port?: number;
   smtp_username?: string;

@@ -67,9 +67,10 @@ func ParseImagesGenerations(body []byte) (*ImagesRequest, error) {
 		Quality:        raw.Quality,
 		Style:          raw.Style,
 		Background:     raw.Background,
-		ResponseFormat: parseResponseFormat(raw.ResponseFormat, ResponseFormatB64JSON),
-		User:           raw.User,
-		StartedAt:      time.Now(),
+		ResponseFormat:         parseResponseFormat(raw.ResponseFormat, ResponseFormatB64JSON),
+		ResponseFormatExplicit: strings.TrimSpace(raw.ResponseFormat) != "",
+		User:                   raw.User,
+		StartedAt:              time.Now(),
 	}
 	if err := validateCommon(req); err != nil {
 		return nil, err
@@ -148,10 +149,11 @@ func ParseImagesEdits(r *http.Request) (*ImagesRequest, error) {
 		Quality:        formFirst(form, "quality"),
 		Style:          formFirst(form, "style"),
 		Background:     formFirst(form, "background"),
-		ResponseFormat: parseResponseFormat(formFirst(form, "response_format"), ResponseFormatB64JSON),
-		User:           formFirst(form, "user"),
-		Images:         images,
-		StartedAt:      time.Now(),
+		ResponseFormat:         parseResponseFormat(formFirst(form, "response_format"), ResponseFormatB64JSON),
+		ResponseFormatExplicit: strings.TrimSpace(formFirst(form, "response_format")) != "",
+		User:                   formFirst(form, "user"),
+		Images:                 images,
+		StartedAt:              time.Now(),
 	}
 	if err := validateCommon(req); err != nil {
 		return nil, err

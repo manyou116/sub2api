@@ -88,3 +88,25 @@ func IsRateLimit(err error) bool {
 func encodeBase64(b []byte) string {
 	return base64.StdEncoding.EncodeToString(b)
 }
+
+// DecodeBase64 标准 base64 解码；自动剥离 "data:...;base64," 前缀。
+// handler 在把 ResponseFormat=URL 的图片落入 ImageCache 时复用。
+func DecodeBase64(s string) ([]byte, error) {
+	if i := indexComma(s); i >= 0 && hasDataPrefix(s) {
+		s = s[i+1:]
+	}
+	return base64.StdEncoding.DecodeString(s)
+}
+
+func indexComma(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			return i
+		}
+	}
+	return -1
+}
+
+func hasDataPrefix(s string) bool {
+	return len(s) >= 5 && (s[:5] == "data:" || s[:5] == "DATA:")
+}

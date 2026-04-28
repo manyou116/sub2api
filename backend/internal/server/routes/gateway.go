@@ -233,6 +233,9 @@ func RegisterGatewayRoutes(
 		antigravityV1Beta.POST("/models/*modelAction", h.Gateway.GeminiV1BetaModels)
 	}
 
+	// 图片短链：response_format=url 时返回的链接，公开 GET，无需 API Key（id 不可猜，TTL 24h）
+	r.GET("/v1/files/cached/:id", h.OpenAIImagesV2.ServeCachedFile)
+
 }
 
 // getGroupPlatform extracts the group platform from the API Key stored in context.

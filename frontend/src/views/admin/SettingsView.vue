@@ -2662,6 +2662,61 @@
             </div>
           </div>
 
+          <!-- OpenAI Image Gateway Settings -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.imageGateway.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.imageGateway.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div>
+                <label
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{ t("admin.settings.imageGateway.cacheBaseURL") }}
+                </label>
+                <input
+                  v-model="form.image_cache_base_url"
+                  type="text"
+                  class="input"
+                  placeholder="https://gateway.example.com"
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.imageGateway.cacheBaseURLHint") }}
+                </p>
+              </div>
+              <div>
+                <label
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{ t("admin.settings.imageGateway.defaultResponseFormat") }}
+                </label>
+                <select
+                  v-model="form.default_image_response_format"
+                  class="input max-w-xs"
+                >
+                  <option value="auto">
+                    {{ t("admin.settings.imageGateway.formatAuto") }}
+                  </option>
+                  <option value="b64_json">b64_json</option>
+                  <option value="url">url</option>
+                  <option value="markdown">markdown</option>
+                </select>
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{
+                    t("admin.settings.imageGateway.defaultResponseFormatHint")
+                  }}
+                </p>
+              </div>
+            </div>
+          </div>
+
           <!-- Gateway Scheduling Settings -->
           <div class="card">
             <div
@@ -5434,6 +5489,8 @@ const form = reactive<SettingsForm>({
     endpoint: string;
     description: string;
   }>,
+  image_cache_base_url: "",
+  default_image_response_format: "auto",
   frontend_url: "",
   smtp_host: "",
   smtp_port: 587,
@@ -6334,6 +6391,8 @@ async function saveSettings() {
       table_page_size_options: form.table_page_size_options,
       custom_menu_items: form.custom_menu_items,
       custom_endpoints: form.custom_endpoints,
+      image_cache_base_url: form.image_cache_base_url,
+      default_image_response_format: form.default_image_response_format,
       frontend_url: form.frontend_url,
       smtp_host: form.smtp_host,
       smtp_port: form.smtp_port,

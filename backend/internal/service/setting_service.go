@@ -1169,6 +1169,8 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyTablePageSizeOptions] = string(tablePageSizeOptionsJSON)
 	updates[SettingKeyCustomMenuItems] = settings.CustomMenuItems
 	updates[SettingKeyCustomEndpoints] = settings.CustomEndpoints
+	updates[SettingKeyImageCacheBaseURL] = strings.TrimSpace(settings.ImageCacheBaseURL)
+	updates[SettingKeyDefaultImageResponseFormat] = normalizeDefaultImageResponseFormatValue(settings.DefaultImageResponseFormat)
 
 	// 默认配置
 	updates[SettingKeyDefaultConcurrency] = strconv.Itoa(settings.DefaultConcurrency)
@@ -1886,6 +1888,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingPaymentVisibleMethodAlipayEnabled: "false",
 		SettingPaymentVisibleMethodWxpayEnabled:  "false",
 		openAIAdvancedSchedulerSettingKey:        "false",
+
+		// OpenAI 图片网关
+		SettingKeyImageCacheBaseURL:          "",
+		SettingKeyDefaultImageResponseFormat: "auto",
 	}
 
 	return s.settingRepo.SetMultiple(ctx, defaults)
@@ -1924,6 +1930,8 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		PurchaseSubscriptionURL:          strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
+		ImageCacheBaseURL:                strings.TrimSpace(settings[SettingKeyImageCacheBaseURL]),
+		DefaultImageResponseFormat:       normalizeDefaultImageResponseFormatValue(settings[SettingKeyDefaultImageResponseFormat]),
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
 	}
 	result.TableDefaultPageSize, result.TablePageSizeOptions = parseTablePreferences(
@@ -3289,4 +3297,15 @@ func (s *SettingService) SetStreamTimeoutSettings(ctx context.Context, settings 
 	}
 
 	return s.settingRepo.Set(ctx, SettingKeyStreamTimeoutSettings, string(data))
+}
+
+// normalizeDefaultImageResponseFormatValue 归一化「图片接口默认 response_format」枚举。
+// 合法值：auto / b64_json / url / markdown，其它（含空）回落到 auto。
+func normalizeDefaultImageResponseFormatValue(v string) string {
+switch strings.ToLower(strings.TrimSpace(v)) {
+case "b64_json", "url", "markdown":
+return strings.ToLower(strings.TrimSpace(v))
+default:
+return "auto"
+}
 }
