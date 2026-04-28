@@ -52,6 +52,14 @@ type DispatchOptions struct {
 	// 设置后，每次 driver.Forward 都使用一个独立的 derived ctx，
 	// 防止单个尝试因上游卡住吃满整个客户端 timeout，导致后续重试无意义。
 	AttemptBudget time.Duration
+	// RefusalRetryLimit 控制对 ContentPolicyError（上游账号级 moderation 拒绝）
+	// 在不同账号间的内部重试上限。<=0 表示不重试（refusal 立即返客户端 4xx）。
+	//
+	// 上游 moderation 是账号级随机决策，同一 prompt 在 A 账号被拒、B 账号可成。
+	// 实测对照 chatgpt2api：换号重试 3 次可让成功率从 0% 提升至 ~30-40%。
+	// 单次 refusal 不消耗本地配额、不冷却账号（账号本身没问题）。
+	// 当 refusal 累计达到该上限或耗尽 MaxAttempts，返回最后一次 ContentPolicyError。
+	RefusalRetryLimit int
 	// Sleep 用于在 transient 重试之间退避；<=0 不睡。测试可注入 no-op。
 	Sleep func(time.Duration)
 	// Now 时钟注入；nil 用 time.Now。
@@ -109,6 +117,7 @@ func Dispatch(
 	}
 
 	var lastErr error
+	refusalCount := 0
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -171,6 +180,15 @@ func Dispatch(
 			_ = src.OnTransient(ctx, account, callErr)
 			if opts.Sleep != nil && attempt < maxAttempts {
 				opts.Sleep(backoffFor(attempt))
+			}
+			continue
+
+		case IsContentPolicy(callErr):
+			// Refusal 是上游账号级随机 moderation：换号重试可能成功。
+			// 不调 OnRateLimit / OnTransient（账号本身健康，不应惩罚）。
+			refusalCount++
+			if refusalCount >= opts.RefusalRetryLimit || attempt >= maxAttempts {
+				return nil, callErr
 			}
 			continue
 

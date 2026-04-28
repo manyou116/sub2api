@@ -90,6 +90,7 @@ func NewOpenAIImagesV2Handler(
 			AuthCooldown:             time.Hour,
 			DefaultRateLimitCooldown: 5 * time.Minute,
 			AttemptBudget:            75 * time.Second,
+			RefusalRetryLimit:        3,
 			Sleep:                    time.Sleep,
 		},
 	}
