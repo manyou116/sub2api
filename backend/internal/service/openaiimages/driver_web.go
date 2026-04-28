@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service/openaiimages/webdriver"
@@ -49,44 +50,79 @@ func (d *WebDriverAdapter) Forward(ctx context.Context, account AccountView, req
 		})
 	}
 
-	wreq := &webdriver.Request{
-		Account: webdriver.AccountInfo{
-			AccountID:        account.ID(),
-			AccessToken:      account.AccessToken(),
-			ChatGPTAccountID: account.ChatGPTAccountID(),
-			UserAgent:        account.UserAgent(),
-			DeviceID:         account.DeviceID(),
-			SessionID:        account.SessionID(),
-			ProxyURL:         account.ProxyURL(),
-		},
-		Model:          req.Model,
-		Prompt:         req.Prompt,
-		N:              req.N,
-		Uploads:        uploads,
-		AllowEarlyExit: len(uploads) == 0,
-		ResponseFormat: string(req.ResponseFormat),
+	// ChatGPT Web 单次 conversation 只产出一张图，n>1 在适配层做并行 fan-out。
+	n := req.N
+	if n <= 0 {
+		n = 1
 	}
 
-	wres, err := d.inner.Forward(ctx, wreq)
-	if err != nil {
-		return nil, translateWebError(err)
+	type result struct {
+		items []ImageItem
+		err   error
 	}
+	results := make([]result, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			wreq := &webdriver.Request{
+				Account: webdriver.AccountInfo{
+					AccountID:        account.ID(),
+					AccessToken:      account.AccessToken(),
+					ChatGPTAccountID: account.ChatGPTAccountID(),
+					UserAgent:        account.UserAgent(),
+					DeviceID:         account.DeviceID(),
+					SessionID:        account.SessionID(),
+					ProxyURL:         account.ProxyURL(),
+				},
+				Model:          req.Model,
+				Prompt:         req.Prompt,
+				N:              1,
+				Uploads:        uploads,
+				AllowEarlyExit: len(uploads) == 0,
+				ResponseFormat: string(req.ResponseFormat),
+			}
+			wres, err := d.inner.Forward(ctx, wreq)
+			if err != nil {
+				results[idx] = result{err: translateWebError(err)}
+				return
+			}
+			items := make([]ImageItem, 0, len(wres.Images))
+			for _, img := range wres.Images {
+				mt := img.ContentType
+				if mt == "" {
+					mt = "image/png"
+				}
+				items = append(items, ImageItem{
+					B64JSON:  encodeBase64(img.Bytes),
+					MimeType: mt,
+					Bytes:    img.Bytes,
+				})
+			}
+			results[idx] = result{items: items}
+		}(i)
+	}
+	wg.Wait()
 
-	items := make([]ImageItem, 0, len(wres.Images))
-	for _, img := range wres.Images {
-		mt := img.ContentType
-		if mt == "" {
-			mt = "image/png"
+	allItems := make([]ImageItem, 0, n)
+	var firstErr error
+	for _, r := range results {
+		if r.err != nil {
+			if firstErr == nil {
+				firstErr = r.err
+			}
+			continue
 		}
-		items = append(items, ImageItem{
-			B64JSON:  encodeBase64(img.Bytes),
-			MimeType: mt,
-			Bytes:    img.Bytes,
-		})
+		allItems = append(allItems, r.items...)
+	}
+	// 全部失败才向上抛错；部分成功则降级返回（可观测性靠日志/usage）
+	if len(allItems) == 0 && firstErr != nil {
+		return nil, firstErr
 	}
 
 	return &ImageResult{
-		Items:   items,
+		Items:   allItems,
 		Model:   req.Model,
 		Created: time.Now().Unix(),
 	}, nil

@@ -160,7 +160,7 @@ func (d *Driver) Forward(ctx context.Context, in *Request) (*Result, error) {
 		return nil, err
 	}
 	if len(images) == 0 {
-		return nil, &ProtocolError{Reason: "all returned images matched source upload hash", ConversationID: conversationID}
+		return nil, &ProtocolError{Reason: fmt.Sprintf("downloads failed for %d pointer(s)", len(ptrs)), ConversationID: conversationID}
 	}
 
 	return &Result{
@@ -183,7 +183,6 @@ func (d *Driver) downloadAll(
 	for _, p := range pointers {
 		downloadURL, err := fetchDownloadURL(ctx, client, headers, d.endpoints.files(), d.endpoints.baseConv(), conversationID, p.Pointer)
 		if err != nil {
-			// 单张失败继续尝试其他 pointer
 			continue
 		}
 		data, ct, err := downloadBytes(ctx, client, headers, downloadURL)
