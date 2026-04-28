@@ -161,13 +161,13 @@ func (d *Driver) Forward(ctx context.Context, in *Request) (*Result, error) {
 		return nil, &ProtocolError{Reason: "no downloadable image pointers", ConversationID: conversationID}
 	}
 
-	// 下载预算：每个 pointer 独立 45s 上限，整体最多 max(60s, 45s*N)。
-	// 之前所有 pointer 共享 30s 容易在第一个 pointer 慢速时把后续全部饿死，
-	// 加上下载阶段已加 retry，整体放宽以提升成功率。
-	perPointerBudget := 45 * time.Second
+	// 下载预算：每个 pointer 独立 200s = 3 次 retry × 60s + buffer。
+	// chatgpt.com estuary CDN 在并发/限流时下发图片可能整次 hung 60s+，
+	// 必须给重试留独立窗口；测得 120s 远不够。
+	perPointerBudget := 200 * time.Second
 	overall := perPointerBudget * time.Duration(len(ptrs))
-	if overall < 60*time.Second {
-		overall = 60 * time.Second
+	if overall < 120*time.Second {
+		overall = 120 * time.Second
 	}
 	dlCtx, dlCancel := detachContext(ctx, overall)
 	images, err := d.downloadAll(dlCtx, client, headers, conversationID, ptrs, perPointerBudget)
@@ -197,32 +197,67 @@ func (d *Driver) downloadAll(
 	perPointerBudget time.Duration,
 ) ([]Image, error) {
 	out := make([]Image, 0, len(pointers))
+	// fetchDownloadURL 只是几 KB JSON：限 15s 即可，剩余 budget 全留给字节传输。
+	urlBudget := 15 * time.Second
+	if urlBudget > perPointerBudget/4 {
+		urlBudget = perPointerBudget / 4
+	}
+	// 单签名 URL 可能绑死在某个 chatgpt edge 节点上一直挂；
+	// 整个 (refresh-URL → bytes) 链路重试 maxURLAttempts 次，
+	// 每次都拿一个全新签名，绕开僵死边缘。
+	const maxURLAttempts = 3
+	// 字节阶段每次给 perPointerBudget / maxURLAttempts，留出给后续 attempt。
+	bytesBudget := perPointerBudget / maxURLAttempts
+	if bytesBudget < 45*time.Second {
+		bytesBudget = 45 * time.Second
+	}
 	for i, p := range pointers {
-		pCtx, pCancel := context.WithTimeout(ctx, perPointerBudget)
-		downloadURL, err := fetchDownloadURL(pCtx, client, headers, d.endpoints.files(), d.endpoints.baseConv(), conversationID, p.Pointer)
-		if err != nil {
-			pCancel()
-			pkglogger.L().Warn("openaiimages.download_url_failed",
-				zap.String("conversation_id", conversationID),
-				zap.Int("pointer_index", i),
-				zap.String("pointer", truncate(p.Pointer, 120)),
-				zap.String("error", err.Error()),
-			)
-			continue
-		}
-		data, ct, err := downloadBytes(pCtx, client, headers, downloadURL)
-		pCancel()
-		if err != nil {
+		var lastErr error
+		var downloadURL string
+		for attempt := 1; attempt <= maxURLAttempts; attempt++ {
+			urlCtx, urlCancel := context.WithTimeout(ctx, urlBudget)
+			downloadURL, lastErr = fetchDownloadURL(urlCtx, client, headers, d.endpoints.files(), d.endpoints.baseConv(), conversationID, p.Pointer)
+			urlCancel()
+			if lastErr != nil {
+				pkglogger.L().Warn("openaiimages.download_url_failed",
+					zap.String("conversation_id", conversationID),
+					zap.Int("pointer_index", i),
+					zap.Int("attempt", attempt),
+					zap.String("pointer", truncate(p.Pointer, 120)),
+					zap.String("error", lastErr.Error()),
+				)
+				if ctx.Err() != nil {
+					break
+				}
+				continue
+			}
+			byteCtx, byteCancel := context.WithTimeout(ctx, bytesBudget)
+			data, ct, berr := downloadBytes(byteCtx, client, headers, downloadURL)
+			byteCancel()
+			if berr == nil {
+				out = append(out, Image{Bytes: data, ContentType: ct, Pointer: p.Pointer})
+				lastErr = nil
+				break
+			}
+			lastErr = berr
 			pkglogger.L().Warn("openaiimages.download_bytes_failed",
 				zap.String("conversation_id", conversationID),
 				zap.Int("pointer_index", i),
+				zap.Int("attempt", attempt),
 				zap.String("pointer", truncate(p.Pointer, 120)),
 				zap.String("download_url", truncate(downloadURL, 200)),
-				zap.String("error", err.Error()),
+				zap.String("error", berr.Error()),
 			)
-			continue
+			if ctx.Err() != nil {
+				break
+			}
+			// 短暂回退，避免立刻打到同一边缘节点。
+			select {
+			case <-time.After(500 * time.Millisecond):
+			case <-ctx.Done():
+			}
 		}
-		out = append(out, Image{Bytes: data, ContentType: ct, Pointer: p.Pointer})
+		_ = lastErr
 	}
 	return out, nil
 }

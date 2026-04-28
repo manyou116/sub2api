@@ -91,37 +91,16 @@ func fetchDownloadURL(
 	return "", lastErr
 }
 
-// downloadBytes 下载 download_url 指向的图片字节。对 transport / 5xx 自动重试 3 次。
+// downloadBytes 下载 download_url 指向的图片字节。
+// 单次尝试 — 重试由上层 (driver.downloadAll) 通过重新签名的 URL 完成，
+// 因为 chatgpt edge 的签名 URL 可能绑定僵死连接，重试同一 URL 通常无效。
 func downloadBytes(
 	ctx context.Context,
 	client *req.Client,
 	headers http.Header,
 	downloadURL string,
 ) ([]byte, string, error) {
-	var lastErr error
-	const maxAttempts = 3
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		data, ct, err := downloadBytesOnce(ctx, client, headers, downloadURL)
-		if err == nil {
-			return data, ct, nil
-		}
-		lastErr = err
-		if !retriable(err) {
-			return nil, "", err
-		}
-		if attempt == maxAttempts-1 {
-			break
-		}
-		backoff := time.Duration(500*(1<<uint(attempt))) * time.Millisecond
-		t := time.NewTimer(backoff)
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return nil, "", ctx.Err()
-		case <-t.C:
-		}
-	}
-	return nil, "", lastErr
+	return downloadBytesOnce(ctx, client, headers, downloadURL)
 }
 
 func downloadBytesOnce(
