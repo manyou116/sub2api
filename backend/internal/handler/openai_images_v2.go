@@ -277,7 +277,10 @@ func (h *OpenAIImagesV2Handler) run(c *gin.Context, req *openaiimages.ImagesRequ
 	setOpsSelectedAccount(c, res.Account.ID(), service.PlatformOpenAI)
 
 	if req.ResponseFormat == openaiimages.ResponseFormatURL {
-		h.materializeAsURLs(c, res.Result, reqLog)
+		// 仅当客户端显式要 url 时清空 b64_json；
+		// 否则（管理后台默认覆盖触发）保留 b64_json，让 Cherry/Vercel-AI-SDK 等
+		// 强 zod schema 校验 b64_json 的客户端也能解析。
+		h.materializeAsURLs(c, res.Result, reqLog, req.ResponseFormatExplicit)
 	}
 
 	sink := openaiimages.NewGinSink(c)
@@ -612,8 +615,9 @@ func cloneExtra(in map[string]any) map[string]any {
 // 处理规则：
 //   - 已有可用 URL（http/https 直连，例如 ApiKeyDriver 透传 OpenAI 官方签名）→ 保留
 //   - 否则用 Bytes（webdriver 默认）或 base64-decoded B64JSON 写入 cache
-//   - 写入后清空 B64JSON / Bytes，避免响应体重复携带二进制
-func (h *OpenAIImagesV2Handler) materializeAsURLs(c *gin.Context, res *openaiimages.ImageResult, reqLog *zap.Logger) {
+//   - clearB64=true（客户端显式要 url）→ 清空 b64_json/Bytes
+//   - clearB64=false（管理后台默认覆盖）→ 同时保留 b64_json，兼容 Cherry/Vercel SDK
+func (h *OpenAIImagesV2Handler) materializeAsURLs(c *gin.Context, res *openaiimages.ImageResult, reqLog *zap.Logger, clearB64 bool) {
 if h.cache == nil || res == nil {
 return
 }
@@ -624,8 +628,9 @@ if strings.HasPrefix(it.URL, "http://") || strings.HasPrefix(it.URL, "https://")
 continue
 }
 data := it.Bytes
-if len(data) == 0 && it.B64JSON != "" {
-if decoded, err := openaiimages.DecodeBase64(it.B64JSON); err == nil {
+b64 := it.B64JSON
+if len(data) == 0 && b64 != "" {
+if decoded, err := openaiimages.DecodeBase64(b64); err == nil {
 data = decoded
 }
 }
@@ -642,7 +647,11 @@ reqLog.Warn("openaiimages.cache_put_failed", zap.Error(err))
 continue
 }
 it.URL = base + "/v1/files/cached/" + id + extForMimePublic(mime)
+if clearB64 {
 it.B64JSON = ""
+} else if b64 == "" {
+it.B64JSON = openaiimages.EncodeBase64(data)
+}
 it.Bytes = nil
 }
 }

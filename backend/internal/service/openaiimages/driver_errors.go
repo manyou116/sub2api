@@ -112,6 +112,11 @@ func encodeBase64(b []byte) string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 
+// EncodeBase64 是 encodeBase64 的导出形式，供 handler 在双格式响应时复用。
+func EncodeBase64(b []byte) string {
+	return encodeBase64(b)
+}
+
 // DecodeBase64 标准 base64 解码；自动剥离 "data:...;base64," 前缀。
 // handler 在把 ResponseFormat=URL 的图片落入 ImageCache 时复用。
 func DecodeBase64(s string) ([]byte, error) {
