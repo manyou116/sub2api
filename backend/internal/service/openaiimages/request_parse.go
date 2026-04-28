@@ -103,6 +103,25 @@ func ParseImagesEdits(r *http.Request) (*ImagesRequest, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 兼容客户端写法：image[] (Cherry Studio / 多图惯例) 与 image_0/image_1/... 序号字段
+	if extra, err := readMultipartImages(form, "image[]"); err != nil {
+		return nil, err
+	} else if len(extra) > 0 {
+		images = append(images, extra...)
+	}
+	for k := range form.File {
+		if k == "image" || k == "image[]" || k == "mask" {
+			continue
+		}
+		if !strings.HasPrefix(k, "image[") && !strings.HasPrefix(k, "image_") {
+			continue
+		}
+		extra, err := readMultipartImages(form, k)
+		if err != nil {
+			return nil, err
+		}
+		images = append(images, extra...)
+	}
 	if len(images) == 0 {
 		return nil, errors.New("at least one image file is required")
 	}
