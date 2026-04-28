@@ -391,6 +391,18 @@ func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, e
 }
 
 // GetFrontendURL 获取前端基础URL（数据库优先，fallback 到配置文件）
+// PricingDataDir 返回配置文件里的 pricing.data_dir，作为本地数据根目录。
+// 用于 image_cache 等需要落盘的子目录共享同一个 data 根。
+// 缺省回落到 "./data"。
+func (s *SettingService) PricingDataDir() string {
+	if s != nil && s.cfg != nil {
+		if d := strings.TrimSpace(s.cfg.Pricing.DataDir); d != "" {
+			return d
+		}
+	}
+	return "./data"
+}
+
 func (s *SettingService) GetFrontendURL(ctx context.Context) string {
 	val, err := s.settingRepo.GetValue(ctx, SettingKeyFrontendURL)
 	if err == nil && strings.TrimSpace(val) != "" {

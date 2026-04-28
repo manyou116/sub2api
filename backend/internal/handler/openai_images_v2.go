@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -92,7 +93,7 @@ func NewOpenAIImagesV2Handler(
 		},
 	}
 
-	if cache, cacheErr := openaiimages.NewImageCache("", 24*time.Hour); cacheErr == nil {
+	if cache, cacheErr := openaiimages.NewImageCache(filepath.Join(settingService.PricingDataDir(), "image_cache"), 24*time.Hour); cacheErr == nil {
 		h.cache = cache
 	} else {
 		logger.L().Warn("openaiimages.image_cache_init_failed", zap.Error(cacheErr))
