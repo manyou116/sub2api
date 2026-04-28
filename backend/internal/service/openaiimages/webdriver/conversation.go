@@ -23,15 +23,23 @@ import (
 // mappingDiag 汇总一次 conversation REST 拉取里所有 message 的 role / recipient / content_type 计数 +
 // 最近的 assistant 文本 / 最近的 tool message recipient & 摘要。仅用于诊断「模型不生图」问题。
 type mappingDiag struct {
-	Roles                 map[string]int
-	Recipients            map[string]int
-	ContentTypes          map[string]int
-	ToolMessages          int
-	AssistantTextSnippet  string
-	LastToolRecipient     string
-	LastToolContentType   string
-	LastToolBodySnippet   string
-	HasMapping            bool
+	Roles                map[string]int
+	Recipients           map[string]int
+	ContentTypes         map[string]int
+	ToolMessages         int
+	AssistantTextSnippet string
+	LastToolRecipient    string
+	LastToolContentType  string
+	LastToolBodySnippet  string
+	HasMapping           bool
+
+	// 用于 "silent refusal" 早退判定：
+	LastAssistantStatus      string // 比如 "in_progress" / "finished_successfully" / "finished_partial_completion"
+	LastAssistantEndTurn     string // end_turn 字段：true / false / null
+	LastAssistantContentRaw  string // 原始 content snippet（即使 parts 为空也能看到结构）
+	LastAssistantPartsLen    int    // content.parts 数组长度
+	LastAssistantRecipient   string
+	LastUserContentTypeFinal string // 用户消息最终的 content_type（例如 multimodal_text 验证 attach 是否被认）
 }
 
 func summarizeMapping(body []byte) mappingDiag {
@@ -45,7 +53,7 @@ func summarizeMapping(body []byte) mappingDiag {
 		return d
 	}
 	d.HasMapping = true
-	var lastToolTime float64
+	var lastToolTime, lastAssistantTime, lastUserTime float64
 	mapping.ForEach(func(_, node gjson.Result) bool {
 		msg := node.Get("message")
 		if !msg.Exists() {
@@ -54,6 +62,7 @@ func summarizeMapping(body []byte) mappingDiag {
 		role := msg.Get("author.role").String()
 		recipient := msg.Get("recipient").String()
 		ct := msg.Get("content.content_type").String()
+		ts := msg.Get("create_time").Float()
 		if role != "" {
 			d.Roles[role]++
 		}
@@ -63,15 +72,33 @@ func summarizeMapping(body []byte) mappingDiag {
 		if ct != "" {
 			d.ContentTypes[ct]++
 		}
-		if role == "tool" {
+		switch role {
+		case "tool":
 			d.ToolMessages++
-			ts := msg.Get("create_time").Float()
 			if ts >= lastToolTime {
 				lastToolTime = ts
 				d.LastToolRecipient = recipient
 				d.LastToolContentType = ct
 				raw := msg.Get("content").Raw
 				d.LastToolBodySnippet = truncate(strings.ReplaceAll(raw, "\n", " "), 320)
+			}
+		case "assistant":
+			// 跳过 system 注入的结构化 context (非真实回复)
+			if ct == "model_editable_context" || ct == "system_message" || ct == "user_editable_context" {
+				return true
+			}
+			if ts >= lastAssistantTime {
+				lastAssistantTime = ts
+				d.LastAssistantStatus = msg.Get("status").String()
+				d.LastAssistantEndTurn = msg.Get("end_turn").Raw
+				d.LastAssistantRecipient = recipient
+				d.LastAssistantPartsLen = int(msg.Get("content.parts.#").Int())
+				d.LastAssistantContentRaw = truncate(strings.ReplaceAll(msg.Get("content").Raw, "\n", " "), 320)
+			}
+		case "user":
+			if ts >= lastUserTime {
+				lastUserTime = ts
+				d.LastUserContentTypeFinal = ct
 			}
 		}
 		return true
@@ -81,20 +108,48 @@ func summarizeMapping(body []byte) mappingDiag {
 }
 
 func (d mappingDiag) zapFields(prefix string) []zap.Field {
-	rolesKV := mapToSortedString(d.Roles)
-	recKV := mapToSortedString(d.Recipients)
-	ctKV := mapToSortedString(d.ContentTypes)
 	return []zap.Field{
 		zap.Bool(prefix+"_has_mapping", d.HasMapping),
-		zap.String(prefix+"_roles", rolesKV),
-		zap.String(prefix+"_recipients", recKV),
-		zap.String(prefix+"_content_types", ctKV),
+		zap.String(prefix+"_roles", mapToSortedString(d.Roles)),
+		zap.String(prefix+"_recipients", mapToSortedString(d.Recipients)),
+		zap.String(prefix+"_content_types", mapToSortedString(d.ContentTypes)),
 		zap.Int(prefix+"_tool_messages", d.ToolMessages),
 		zap.String(prefix+"_last_tool_recipient", d.LastToolRecipient),
 		zap.String(prefix+"_last_tool_content_type", d.LastToolContentType),
 		zap.String(prefix+"_last_tool_body_snippet", d.LastToolBodySnippet),
 		zap.String(prefix+"_assistant_text_snippet", d.AssistantTextSnippet),
+		zap.String(prefix+"_assistant_status", d.LastAssistantStatus),
+		zap.String(prefix+"_assistant_end_turn", d.LastAssistantEndTurn),
+		zap.String(prefix+"_assistant_recipient", d.LastAssistantRecipient),
+		zap.Int(prefix+"_assistant_parts_len", d.LastAssistantPartsLen),
+		zap.String(prefix+"_assistant_content_raw", d.LastAssistantContentRaw),
+		zap.String(prefix+"_user_content_type", d.LastUserContentTypeFinal),
 	}
+}
+
+// IsSilentRefusal 判定 "模型悄无声息地结束对话"：
+// assistant 已经存在且状态 finished_*，但 tool_messages==0 且没有可见文本/parts 为空。
+// 这通常是 Cloudflare 路由到非 image_gen backend 或被安全策略静默拦截。
+// 早退避免傻等 4 分钟 polling deadline。
+func (d mappingDiag) IsSilentRefusal() bool {
+	if !d.HasMapping {
+		return false
+	}
+	if d.ToolMessages > 0 {
+		return false
+	}
+	if d.LastAssistantStatus == "" {
+		return false
+	}
+	// 还在 in_progress 就别早退。
+	if strings.HasPrefix(d.LastAssistantStatus, "in_progress") {
+		return false
+	}
+	// finished 但没有 tool 也没有可见文本 → silent refusal
+	if strings.HasPrefix(d.LastAssistantStatus, "finished") && d.AssistantTextSnippet == "" {
+		return true
+	}
+	return false
 }
 
 func mapToSortedString(m map[string]int) string {
@@ -692,6 +747,22 @@ func pollConversation(
 			last = ptrs
 			if countDownloadablePointers(ptrs) > 0 {
 				return ptrs, nil
+			}
+		}
+		// 早退：模型已结束（finished_*）但既无 tool 消息也无可见文本 →
+		// silent refusal（CF 路由到非 image_gen backend / 安全策略静默拦截）。
+		// 抛 ProtocolError 让上层换号重试，避免傻等 4 分钟 polling deadline。
+		// 要求 iter >= 2 避免在 mapping 还在写入时误判。
+		if iter >= 2 && lastDiag.IsSilentRefusal() {
+			pkglogger.L().Warn("openaiimages.silent_refusal_detected",
+				append([]zap.Field{
+					zap.String("conversation_id", conversationID),
+					zap.Int("iter", iter),
+				}, lastDiag.zapFields("silent")...)...,
+			)
+			return last, &ProtocolError{
+				Reason:         fmt.Sprintf("model finished without producing image (status=%s, parts=%d) — likely silent refusal / cf downgrade", lastDiag.LastAssistantStatus, lastDiag.LastAssistantPartsLen),
+				ConversationID: conversationID,
 			}
 		}
 		if t := extractLastAssistantTextFromMapping(body); t != "" && countDownloadablePointers(last) == 0 {

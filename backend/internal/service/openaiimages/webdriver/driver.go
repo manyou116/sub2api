@@ -9,6 +9,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/imroc/req/v3"
+	"go.uber.org/zap"
+
+	pkglogger "github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
 // Driver 是 web 反代图片网关的对外入口。
@@ -158,10 +161,16 @@ func (d *Driver) Forward(ctx context.Context, in *Request) (*Result, error) {
 		return nil, &ProtocolError{Reason: "no downloadable image pointers", ConversationID: conversationID}
 	}
 
-	// downloadAll 使用 detached ctx：即使调用方 ctx 已死（client 提前断开），
-	// 我们仍尽力下载完整图片，使其有机会进入 url 缓存供后续请求复用。
-	dlCtx, dlCancel := detachContext(ctx, 30*time.Second)
-	images, err := d.downloadAll(dlCtx, client, headers, conversationID, ptrs)
+	// 下载预算：每个 pointer 独立 45s 上限，整体最多 max(60s, 45s*N)。
+	// 之前所有 pointer 共享 30s 容易在第一个 pointer 慢速时把后续全部饿死，
+	// 加上下载阶段已加 retry，整体放宽以提升成功率。
+	perPointerBudget := 45 * time.Second
+	overall := perPointerBudget * time.Duration(len(ptrs))
+	if overall < 60*time.Second {
+		overall = 60 * time.Second
+	}
+	dlCtx, dlCancel := detachContext(ctx, overall)
+	images, err := d.downloadAll(dlCtx, client, headers, conversationID, ptrs, perPointerBudget)
 	dlCancel()
 	if err != nil {
 		return nil, err
@@ -185,15 +194,32 @@ func (d *Driver) downloadAll(
 	headers http.Header,
 	conversationID string,
 	pointers []pointerInfo,
+	perPointerBudget time.Duration,
 ) ([]Image, error) {
 	out := make([]Image, 0, len(pointers))
-	for _, p := range pointers {
-		downloadURL, err := fetchDownloadURL(ctx, client, headers, d.endpoints.files(), d.endpoints.baseConv(), conversationID, p.Pointer)
+	for i, p := range pointers {
+		pCtx, pCancel := context.WithTimeout(ctx, perPointerBudget)
+		downloadURL, err := fetchDownloadURL(pCtx, client, headers, d.endpoints.files(), d.endpoints.baseConv(), conversationID, p.Pointer)
 		if err != nil {
+			pCancel()
+			pkglogger.L().Warn("openaiimages.download_url_failed",
+				zap.String("conversation_id", conversationID),
+				zap.Int("pointer_index", i),
+				zap.String("pointer", truncate(p.Pointer, 120)),
+				zap.String("error", err.Error()),
+			)
 			continue
 		}
-		data, ct, err := downloadBytes(ctx, client, headers, downloadURL)
+		data, ct, err := downloadBytes(pCtx, client, headers, downloadURL)
+		pCancel()
 		if err != nil {
+			pkglogger.L().Warn("openaiimages.download_bytes_failed",
+				zap.String("conversation_id", conversationID),
+				zap.Int("pointer_index", i),
+				zap.String("pointer", truncate(p.Pointer, 120)),
+				zap.String("download_url", truncate(downloadURL, 200)),
+				zap.String("error", err.Error()),
+			)
 			continue
 		}
 		out = append(out, Image{Bytes: data, ContentType: ct, Pointer: p.Pointer})

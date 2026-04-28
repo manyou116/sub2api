@@ -2,6 +2,7 @@ package webdriver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,16 @@ import (
 
 	"github.com/imroc/req/v3"
 )
+
+// retriable 判定 fetchDownloadURL/downloadBytes 是否值得重试。
+// TransportError（含 5xx / cf-challenge / 网络抖动）和 sediment 的临时 404 都重试。
+func retriable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var te *TransportError
+	return errors.As(err, &te)
+}
 
 // fetchDownloadURL 把 file-service://{id} 或 sediment://{id} 解析成可直下的 URL。
 // pointer 类型决定调用哪个 ChatGPT 端点。
@@ -35,7 +46,8 @@ func fetchDownloadURL(
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < 8; attempt++ {
+	const maxAttempts = 6
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		var result struct {
 			DownloadURL string `json:"download_url"`
 		}
@@ -50,15 +62,22 @@ func fetchDownloadURL(
 			return strings.TrimSpace(result.DownloadURL), nil
 		} else {
 			classified := classifyHTTPError(resp, "fetch download url failed")
-			if !allowRetry || resp.StatusCode != http.StatusNotFound {
+			// sediment 临时 404（资源还没 ready）总是重试。
+			isSedimentNotFound := allowRetry && resp != nil && resp.StatusCode == http.StatusNotFound
+			if !isSedimentNotFound && !retriable(classified) {
 				return "", classified
 			}
 			lastErr = classified
 		}
-		if attempt == 7 {
+		if attempt == maxAttempts-1 {
 			break
 		}
-		t := time.NewTimer(750 * time.Millisecond)
+		// 指数退避：500ms / 1s / 2s / 4s / 6s
+		backoff := time.Duration(500*(1<<uint(attempt))) * time.Millisecond
+		if backoff > 6*time.Second {
+			backoff = 6 * time.Second
+		}
+		t := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
 			t.Stop()
@@ -72,8 +91,40 @@ func fetchDownloadURL(
 	return "", lastErr
 }
 
-// downloadBytes 下载 download_url 指向的图片字节。
+// downloadBytes 下载 download_url 指向的图片字节。对 transport / 5xx 自动重试 3 次。
 func downloadBytes(
+	ctx context.Context,
+	client *req.Client,
+	headers http.Header,
+	downloadURL string,
+) ([]byte, string, error) {
+	var lastErr error
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		data, ct, err := downloadBytesOnce(ctx, client, headers, downloadURL)
+		if err == nil {
+			return data, ct, nil
+		}
+		lastErr = err
+		if !retriable(err) {
+			return nil, "", err
+		}
+		if attempt == maxAttempts-1 {
+			break
+		}
+		backoff := time.Duration(500*(1<<uint(attempt))) * time.Millisecond
+		t := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return nil, "", ctx.Err()
+		case <-t.C:
+		}
+	}
+	return nil, "", lastErr
+}
+
+func downloadBytesOnce(
 	ctx context.Context,
 	client *req.Client,
 	headers http.Header,
