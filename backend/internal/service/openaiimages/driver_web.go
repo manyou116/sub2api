@@ -80,7 +80,7 @@ func (d *WebDriverAdapter) Forward(ctx context.Context, account AccountView, req
 				Prompt:         req.Prompt,
 				N:              1,
 				Uploads:        uploads,
-				AllowEarlyExit: len(uploads) == 0,
+				AllowEarlyExit: true,
 				ResponseFormat: string(req.ResponseFormat),
 			}
 			wres, err := d.inner.Forward(ctx, wreq)

@@ -410,12 +410,23 @@ func looksLikeContentPolicyRefusal(t string) bool {
 		"adult content",
 		"sexual content",
 		"我无法",
+		"我不能",
 		"无法生成",
 		"无法创建",
 		"无法提供",
+		"无法帮",
+		"不能生成",
+		"不能创建",
+		"不能提供",
+		"不能帮",
 		"违反",
 		"政策",
 		"准则",
+		"色情",
+		"裸体",
+		"成人内容",
+		"露骨",
+		"血腥",
 	} {
 		if strings.Contains(low, marker) {
 			return true
@@ -551,7 +562,15 @@ func pollConversation(
 					ConversationID:  conversationID,
 				}
 			}
-			return last, &ProtocolError{Reason: "text response in poll: " + truncate(t, 240), ConversationID: conversationID}
+			// 兜底：模型在 poll 阶段产出文本而非图片。这通常意味着
+			// （a）内容策略拒绝但措辞未命中关键词；
+			// （b）模型把请求理解为对话而非生图。
+			// 两种情况换号重试都解决不了，按内容策略拒绝处理（4xx 不可重试）
+			// 比让客户端误以为是 5xx 反复重试更友好。
+			return last, &ContentPolicyError{
+				UpstreamMessage: truncate(strings.TrimSpace(t), 480),
+				ConversationID:  conversationID,
+			}
 		}
 		var backoff time.Duration
 		switch {

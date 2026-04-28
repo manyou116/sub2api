@@ -131,7 +131,7 @@ func (d *Driver) Forward(ctx context.Context, in *Request) (*Result, error) {
 		return nil, classifyHTTPError(resp, "conversation request failed")
 	}
 
-	allowEarlyExit := in.AllowEarlyExit && len(in.Uploads) == 0
+	allowEarlyExit := in.AllowEarlyExit
 	conversationID, ptrs, firstTokenMs, earlyExit, sseErr := readSSE(resp, startTime, expectedN, excludedPointers, allowEarlyExit)
 	if sseErr != nil {
 		return nil, sseErr
@@ -140,8 +140,10 @@ func (d *Driver) Forward(ctx context.Context, in *Request) (*Result, error) {
 		streamHandedOff = true
 	}
 
-	// 兜底轮询：edit 场景或 SSE 没拿到可下载 pointer。
-	if conversationID != "" && (len(in.Uploads) > 0 || countDownloadablePointers(ptrs) == 0) {
+	// 兜底轮询：仅当 SSE 没拿到任何可下载 pointer 时触发。
+	// （edits 同样适用：source pointers 已通过 excludedPointers 排除，
+	// SSE 中拿到的非 source pointer 即为模型生成结果，无需再 poll。）
+	if conversationID != "" && countDownloadablePointers(ptrs) == 0 {
 		pollCtx, cancel := detachContext(ctx, lifecycleTimeout)
 		polled, perr := pollConversation(pollCtx, client, headers, d.endpoints.baseConv(), conversationID, excludedPointers, len(in.Uploads) == 0)
 		cancel()
@@ -155,7 +157,11 @@ func (d *Driver) Forward(ctx context.Context, in *Request) (*Result, error) {
 		return nil, &ProtocolError{Reason: "no downloadable image pointers", ConversationID: conversationID}
 	}
 
-	images, err := d.downloadAll(ctx, client, headers, conversationID, ptrs)
+	// downloadAll 使用 detached ctx：即使调用方 ctx 已死（client 提前断开），
+	// 我们仍尽力下载完整图片，使其有机会进入 url 缓存供后续请求复用。
+	dlCtx, dlCancel := detachContext(ctx, 30*time.Second)
+	images, err := d.downloadAll(dlCtx, client, headers, conversationID, ptrs)
+	dlCancel()
 	if err != nil {
 		return nil, err
 	}

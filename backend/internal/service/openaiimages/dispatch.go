@@ -48,6 +48,10 @@ type DispatchOptions struct {
 	AuthCooldown time.Duration
 	// DefaultRateLimitCooldown 当 RateLimitError.ResetAfter==0 时使用的兜底窗口；零值默认 5min。
 	DefaultRateLimitCooldown time.Duration
+	// AttemptBudget 单次尝试上游调用的最大耗时；<=0 表示不限。
+	// 设置后，每次 driver.Forward 都使用一个独立的 derived ctx，
+	// 防止单个尝试因上游卡住吃满整个客户端 timeout，导致后续重试无意义。
+	AttemptBudget time.Duration
 	// Sleep 用于在 transient 重试之间退避；<=0 不睡。测试可注入 no-op。
 	Sleep func(time.Duration)
 	// Now 时钟注入；nil 用 time.Now。
@@ -117,7 +121,15 @@ func Dispatch(
 		}
 
 		// 选号成功后，无论是否成功一律 release lease。
-		result, driverName, callErr := callDriver(ctx, drivers, in, account)
+		callCtx := ctx
+		var attemptCancel context.CancelFunc
+		if opts.AttemptBudget > 0 {
+			callCtx, attemptCancel = context.WithTimeout(ctx, opts.AttemptBudget)
+		}
+		result, driverName, callErr := callDriver(callCtx, drivers, in, account)
+		if attemptCancel != nil {
+			attemptCancel()
+		}
 		release()
 
 		if callErr == nil {
