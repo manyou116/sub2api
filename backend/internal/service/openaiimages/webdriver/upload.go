@@ -10,9 +10,9 @@ import (
 )
 
 // uploadFiles 执行 ChatGPT 三步上传协议：
-//   1. POST /backend-api/files          → 获取 file_id 和 Azure upload_url
-//   2. PUT upload_url (Azure Blob Storage)
-//   3. POST /backend-api/files/{id}/uploaded → 确认完成
+//  1. POST /backend-api/files          → 获取 file_id 和 Azure upload_url
+//  2. PUT upload_url (Azure Blob Storage)
+//  3. POST /backend-api/files/{id}/uploaded → 确认完成
 func uploadFiles(
 	ctx context.Context,
 	client *req.Client,

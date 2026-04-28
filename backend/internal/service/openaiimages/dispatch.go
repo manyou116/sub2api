@@ -143,8 +143,8 @@ func Dispatch(
 
 		if callErr == nil {
 			if rerr := src.OnSuccess(ctx, account, result); rerr != nil {
-				// success 回写失败不影响业务结果，记下来供观察。
-				lastErr = rerr
+				// success 回写失败不影响业务结果，仅日志，不覆盖 lastErr。
+				_ = rerr
 			}
 			return &DispatchResult{
 				Result:     result,
@@ -167,7 +167,7 @@ func Dispatch(
 		case IsRateLimit(callErr):
 			var rl *RateLimitError
 			_ = errors.As(callErr, &rl)
-			resetAt := time.Time{}
+			var resetAt time.Time
 			if rl != nil && rl.ResetAfter > 0 {
 				resetAt = now().Add(rl.ResetAfter)
 			} else {

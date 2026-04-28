@@ -24,21 +24,21 @@ type Driver struct {
 
 // Endpoints 把所有 chatgpt.com URL 集中为可注入字段，方便 httptest 替换。
 type Endpoints struct {
-	Start              string
-	ConversationInit   string
-	Conversation       string
-	ConversationPrep   string
-	ChatRequirements   string
-	Files              string
-	BaseConversation   string // /backend-api/conversation （poll/attachment 拼接用）
+	Start            string
+	ConversationInit string
+	Conversation     string
+	ConversationPrep string
+	ChatRequirements string
+	Files            string
+	BaseConversation string // /backend-api/conversation （poll/attachment 拼接用）
 }
 
-func (e Endpoints) start() string              { return coalesce(e.Start, startURL) }
-func (e Endpoints) convInit() string           { return coalesce(e.ConversationInit, conversationInitURL) }
-func (e Endpoints) conv() string               { return coalesce(e.Conversation, conversationURL) }
-func (e Endpoints) prep() string               { return coalesce(e.ConversationPrep, conversationPrepareURL) }
-func (e Endpoints) reqs() string               { return coalesce(e.ChatRequirements, chatRequirementsURL) }
-func (e Endpoints) files() string              { return coalesce(e.Files, filesURL) }
+func (e Endpoints) start() string    { return coalesce(e.Start, startURL) }
+func (e Endpoints) convInit() string { return coalesce(e.ConversationInit, conversationInitURL) }
+func (e Endpoints) conv() string     { return coalesce(e.Conversation, conversationURL) }
+func (e Endpoints) prep() string     { return coalesce(e.ConversationPrep, conversationPrepareURL) }
+func (e Endpoints) reqs() string     { return coalesce(e.ChatRequirements, chatRequirementsURL) }
+func (e Endpoints) files() string    { return coalesce(e.Files, filesURL) }
 func (e Endpoints) baseConv() string {
 	return coalesce(e.BaseConversation, "https://chatgpt.com/backend-api/conversation")
 }

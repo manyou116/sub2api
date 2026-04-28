@@ -47,7 +47,7 @@ func TestDriver_ForwardEndToEnd(t *testing.T) {
 	defer srv.Close()
 
 	mux.HandleFunc("/files/gen-001/download", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"download_url":"%s/cdn/img.png"}`, srv.URL)))
+		_, _ = fmt.Fprintf(w, `{"download_url":"%s/cdn/img.png"}`, srv.URL)
 	})
 
 	d := New(Endpoints{
@@ -119,8 +119,8 @@ func TestDriver_RejectsArkose(t *testing.T) {
 	})
 	mux.HandleFunc("/chat-requirements", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"token":    "x",
-			"arkose":   map[string]any{"required": true},
+			"token":     "x",
+			"arkose":    map[string]any{"required": true},
 			"turnstile": map[string]any{"required": false},
 		})
 	})

@@ -15,10 +15,10 @@ import (
 
 // RateLimitError 表示账号被上游限流。ResetAfter 来自上游 reset_after 字段（秒）。
 type RateLimitError struct {
-	StatusCode  int
-	Message     string
-	ResetAfter  time.Duration
-	RawBody     string
+	StatusCode int
+	Message    string
+	ResetAfter time.Duration
+	RawBody    string
 }
 
 func (e *RateLimitError) Error() string {

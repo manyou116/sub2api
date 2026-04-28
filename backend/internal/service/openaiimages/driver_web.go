@@ -138,7 +138,7 @@ func translateWebError(err error) error {
 	if errors.As(err, &rl) {
 		return &RateLimitError{
 			HTTPStatus: 429,
-			Reason:    rl.Error(),
+			Reason:     rl.Error(),
 			ResetAfter: rl.ResetAfter,
 		}
 	}

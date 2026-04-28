@@ -31,13 +31,13 @@ type Upload struct {
 
 // Request 描述一次完整的 web 反代生图调用。
 type Request struct {
-	Account         AccountInfo
-	Model           string  // 上游 web 模型 slug 由 Driver 内部映射
-	Prompt          string
-	N               int
-	Uploads         []Upload
-	AllowEarlyExit  bool   // 仅纯生图（无 Uploads）开启 SSE 早退
-	ResponseFormat  string // 仅供日志，不影响行为
+	Account        AccountInfo
+	Model          string // 上游 web 模型 slug 由 Driver 内部映射
+	Prompt         string
+	N              int
+	Uploads        []Upload
+	AllowEarlyExit bool   // 仅纯生图（无 Uploads）开启 SSE 早退
+	ResponseFormat string // 仅供日志，不影响行为
 }
 
 // Image 是 webdriver 返回的单张图片二进制。

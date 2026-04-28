@@ -146,7 +146,7 @@ func TestDispatch_RateLimitThenSucceed(t *testing.T) {
 		&dispAccount{id: 2, apikey: true},
 	}}
 	drv := &scriptedDriver{
-		name: "apikey",
+		name:    "apikey",
 		results: []*ImageResult{nil, {Items: []ImageItem{{B64JSON: "OK"}}}},
 		errors: []error{
 			&RateLimitError{ResetAfter: 90 * time.Second, Reason: "throttled"},

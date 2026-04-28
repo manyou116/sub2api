@@ -1412,7 +1412,9 @@ const handleRefreshImageQuota = async (a: Account) => {
     try {
       const fresh = await adminAPI.accounts.getById(a.id)
       patchAccountInList(fresh)
-    } catch {}
+    } catch {
+      // refresh is best-effort; ignore failures
+    }
   } catch (error: any) {
     console.error('Failed to refresh image quota:', error)
     appStore.showError(error?.message || 'Failed to refresh image quota')

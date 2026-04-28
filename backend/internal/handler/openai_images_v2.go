@@ -618,63 +618,63 @@ func cloneExtra(in map[string]any) map[string]any {
 //   - clearB64=true（客户端显式要 url）→ 清空 b64_json/Bytes
 //   - clearB64=false（管理后台默认覆盖）→ 同时保留 b64_json，兼容 Cherry/Vercel SDK
 func (h *OpenAIImagesV2Handler) materializeAsURLs(c *gin.Context, res *openaiimages.ImageResult, reqLog *zap.Logger, clearB64 bool) {
-if h.cache == nil || res == nil {
-return
-}
-base := h.publicBaseURL(c)
-for i := range res.Items {
-it := &res.Items[i]
-if strings.HasPrefix(it.URL, "http://") || strings.HasPrefix(it.URL, "https://") {
-continue
-}
-data := it.Bytes
-b64 := it.B64JSON
-if len(data) == 0 && b64 != "" {
-if decoded, err := openaiimages.DecodeBase64(b64); err == nil {
-data = decoded
-}
-}
-if len(data) == 0 {
-continue
-}
-mime := it.MimeType
-if mime == "" {
-mime = "image/png"
-}
-id, err := h.cache.Put(data, mime)
-if err != nil {
-reqLog.Warn("openaiimages.cache_put_failed", zap.Error(err))
-continue
-}
-it.URL = base + "/v1/files/cached/" + id + extForMimePublic(mime)
-if clearB64 {
-it.B64JSON = ""
-} else if b64 == "" {
-it.B64JSON = openaiimages.EncodeBase64(data)
-}
-it.Bytes = nil
-}
+	if h.cache == nil || res == nil {
+		return
+	}
+	base := h.publicBaseURL(c)
+	for i := range res.Items {
+		it := &res.Items[i]
+		if strings.HasPrefix(it.URL, "http://") || strings.HasPrefix(it.URL, "https://") {
+			continue
+		}
+		data := it.Bytes
+		b64 := it.B64JSON
+		if len(data) == 0 && b64 != "" {
+			if decoded, err := openaiimages.DecodeBase64(b64); err == nil {
+				data = decoded
+			}
+		}
+		if len(data) == 0 {
+			continue
+		}
+		mime := it.MimeType
+		if mime == "" {
+			mime = "image/png"
+		}
+		id, err := h.cache.Put(data, mime)
+		if err != nil {
+			reqLog.Warn("openaiimages.cache_put_failed", zap.Error(err))
+			continue
+		}
+		it.URL = base + "/v1/files/cached/" + id + extForMimePublic(mime)
+		if clearB64 {
+			it.B64JSON = ""
+		} else if b64 == "" {
+			it.B64JSON = openaiimages.EncodeBase64(data)
+		}
+		it.Bytes = nil
+	}
 }
 
 // ServeCachedFile 处理 GET /v1/files/cached/:id，返回原始字节。
 // 公开访问（id 不可猜，且 24h 后 GC）。
 func (h *OpenAIImagesV2Handler) ServeCachedFile(c *gin.Context) {
-if h.cache == nil {
-c.AbortWithStatus(http.StatusNotFound)
-return
-}
-raw := c.Param("id")
-id := raw
-if dot := strings.IndexByte(raw, '.'); dot > 0 {
-id = raw[:dot]
-}
-data, mime, ok := h.cache.Get(id)
-if !ok {
-c.AbortWithStatus(http.StatusNotFound)
-return
-}
-c.Header("Cache-Control", "public, max-age=86400, immutable")
-c.Data(http.StatusOK, mime, data)
+	if h.cache == nil {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	raw := c.Param("id")
+	id := raw
+	if dot := strings.IndexByte(raw, '.'); dot > 0 {
+		id = raw[:dot]
+	}
+	data, mime, ok := h.cache.Get(id)
+	if !ok {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	c.Header("Cache-Control", "public, max-age=86400, immutable")
+	c.Data(http.StatusOK, mime, data)
 }
 
 // applyDefaultResponseFormat 在客户端未显式指定 response_format 时，
@@ -728,14 +728,14 @@ func (h *OpenAIImagesV2Handler) publicBaseURL(c *gin.Context) string {
 }
 
 func extForMimePublic(mime string) string {
-switch strings.ToLower(mime) {
-case "image/jpeg", "image/jpg":
-return ".jpg"
-case "image/webp":
-return ".webp"
-case "image/gif":
-return ".gif"
-default:
-return ".png"
-}
+	switch strings.ToLower(mime) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".png"
+	}
 }

@@ -15,11 +15,8 @@ func TestSolvePow_HappyPath(t *testing.T) {
 	if !ok || encoded == "" {
 		t.Fatalf("expect success, got ok=%v encoded=%q", ok, encoded)
 	}
-	// 校验：sha3-512(seed||encoded)[0:1] <= 0xff
-	sum := sha3.Sum512(append([]byte("seed-x"), encoded...))
-	if sum[0] > 0xff {
-		t.Errorf("hash prefix %x exceeds difficulty", sum[0])
-	}
+	// 难度比较的实质验证见 TestSolvePow_DifficultyHex；这里只确认 happy-path
+	// 能在第一轮内拿到非空 encoded。
 }
 
 func TestSolvePow_DifficultyHex(t *testing.T) {

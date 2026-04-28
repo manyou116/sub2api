@@ -60,7 +60,7 @@ type ImagesRequest struct {
 	// 为 false 时，dispatcher 可用全局默认值覆盖（见 SettingKeyDefaultImageResponseFormat）。
 	ResponseFormatExplicit bool
 	Stream                 bool
-	User           string
+	User                   string
 
 	// edits / chat 图片输入：第一张作为 base，余下作为 mask / 多图参考。
 	Images []SourceImage
@@ -103,8 +103,8 @@ type ImageResult struct {
 
 // AccountQuotaSnapshot 描述一次 probe 或一次成功调用顺便观测到的账号配额。
 type AccountQuotaSnapshot struct {
-	Plan           string    // free / plus / pro
-	QuotaRemaining int       // 剩余次数（未知则 -1）
+	Plan           string // free / plus / pro
+	QuotaRemaining int    // 剩余次数（未知则 -1）
 	QuotaTotal     int
 	CooldownUntil  time.Time // 零值 = 未限流
 	ObservedAt     time.Time

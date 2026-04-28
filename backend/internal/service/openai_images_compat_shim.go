@@ -15,8 +15,6 @@ package service
 
 import (
 	"strings"
-
-	"github.com/Wei-Shaw/sub2api/internal/service/openaiimages"
 )
 
 // OpenAIImagesCapability 是 scheduler 阶段的图片能力标签。
@@ -49,9 +47,15 @@ func firstNonEmptyString(values ...any) string {
 	return ""
 }
 
-// isOpenAIImageGenerationModel 保留语义：任意 "gpt-image-*" / "dall-e-*" / "imagen-*" 前缀
-// 都视为图片生成模型。这与 openaiimages.IsImageModel（只命中已注册的具体型号）不同——
-// 这里更宽松，给 codex_transform / pricing fallback 用，避免未来新型号无人识别。
+// isOpenAIImageGenerationModel 判断 model 是否是"图片专用"模型——只识别官方
+// 图片生成模型的前缀（gpt-image-* / dall-e-* / imagen-*）。
+//
+// 不再回退到 openaiimages.IsImageModel：那张表里包含 gpt-5 / gpt-5-mini 这类
+// 同名"聊天模型"（chatgpt.com web 多模态时也能出图），如果当成图片模型会让
+// codex_transform 把 "gpt-5" 识别成图片模型而跳过 normalizeCodexModel 的回退。
+//
+// 调用方（codex_transform / pricing fallback）只关心"是否是纯图模型，应当
+// 跳过 codex 文本流水线"，所以前缀判断已经足够。
 func isOpenAIImageGenerationModel(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	switch {
@@ -64,5 +68,5 @@ func isOpenAIImageGenerationModel(model string) bool {
 	case strings.HasPrefix(m, "imagen-"):
 		return true
 	}
-	return openaiimages.IsImageModel(m)
+	return false
 }

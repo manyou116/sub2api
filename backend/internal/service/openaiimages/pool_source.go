@@ -19,13 +19,13 @@ import (
 //	image_cooldown_until   → RFC3339 字符串
 //	image_last_probed_at   → RFC3339
 type PoolAccountView struct {
-	pa             PoolAccount
-	groupLegacy    bool // 分组 default = enabled
-	apiKey         string
-	deviceID       string
-	sessionID      string
-	chatGPTAcctID  string
-	userAgent      string
+	pa            PoolAccount
+	groupLegacy   bool // 分组 default = enabled
+	apiKey        string
+	deviceID      string
+	sessionID     string
+	chatGPTAcctID string
+	userAgent     string
 }
 
 // PoolAccountViewOption 用于注入 PoolAccount 之外的字段（这些字段不在 PoolAccount 里，

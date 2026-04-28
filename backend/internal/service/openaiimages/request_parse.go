@@ -59,14 +59,14 @@ func ParseImagesGenerations(body []byte) (*ImagesRequest, error) {
 		return nil, errors.New("prompt is required")
 	}
 	req := &ImagesRequest{
-		Entry:          EntryImagesGenerations,
-		Model:          raw.Model,
-		Prompt:         strings.TrimSpace(raw.Prompt),
-		N:              valueOr(raw.N, 1),
-		Size:           raw.Size,
-		Quality:        raw.Quality,
-		Style:          raw.Style,
-		Background:     raw.Background,
+		Entry:                  EntryImagesGenerations,
+		Model:                  raw.Model,
+		Prompt:                 strings.TrimSpace(raw.Prompt),
+		N:                      valueOr(raw.N, 1),
+		Size:                   raw.Size,
+		Quality:                raw.Quality,
+		Style:                  raw.Style,
+		Background:             raw.Background,
 		ResponseFormat:         parseResponseFormat(raw.ResponseFormat, ResponseFormatB64JSON),
 		ResponseFormatExplicit: strings.TrimSpace(raw.ResponseFormat) != "",
 		User:                   raw.User,
@@ -141,14 +141,14 @@ func ParseImagesEdits(r *http.Request) (*ImagesRequest, error) {
 	}
 
 	req := &ImagesRequest{
-		Entry:          EntryImagesEdits,
-		Model:          formFirst(form, "model"),
-		Prompt:         prompt,
-		N:              n,
-		Size:           formFirst(form, "size"),
-		Quality:        formFirst(form, "quality"),
-		Style:          formFirst(form, "style"),
-		Background:     formFirst(form, "background"),
+		Entry:                  EntryImagesEdits,
+		Model:                  formFirst(form, "model"),
+		Prompt:                 prompt,
+		N:                      n,
+		Size:                   formFirst(form, "size"),
+		Quality:                formFirst(form, "quality"),
+		Style:                  formFirst(form, "style"),
+		Background:             formFirst(form, "background"),
 		ResponseFormat:         parseResponseFormat(formFirst(form, "response_format"), ResponseFormatB64JSON),
 		ResponseFormatExplicit: strings.TrimSpace(formFirst(form, "response_format")) != "",
 		User:                   formFirst(form, "user"),
@@ -375,9 +375,9 @@ func parseChatContent(raw json.RawMessage) (string, []SourceImage, error) {
 		case "text", "input_text":
 			if t := strings.TrimSpace(p.Text); t != "" {
 				if textBuf.Len() > 0 {
-					textBuf.WriteString("\n")
+					_, _ = textBuf.WriteString("\n")
 				}
-				textBuf.WriteString(t)
+				_, _ = textBuf.WriteString(t)
 			}
 		case "image_url", "input_image":
 			img, err := decodeDataURLOrSkip(p.ImageURL.URL)

@@ -164,7 +164,7 @@ func mapToSortedString(m map[string]int) string {
 	var sb strings.Builder
 	for i, k := range keys {
 		if i > 0 {
-			sb.WriteByte(',')
+			_ = sb.WriteByte(',')
 		}
 		fmt.Fprintf(&sb, "%s=%d", k, m[k])
 	}
@@ -403,7 +403,7 @@ func drainStream(body io.ReadCloser) {
 	if body == nil {
 		return
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	_, _ = io.Copy(io.Discard, io.LimitReader(body, 8<<20))
 }
 
@@ -462,7 +462,7 @@ func collectToolPointersFromMapping(body []byte, excluded map[string]struct{}) (
 	return out, true
 }
 
-func extractAssistantText(body []byte) string {
+func extractAssistantText(body []byte) string { //nolint:unused // kept for future SSE patch parsing; helper covered by tests in extractLastAssistantTextFromMapping
 	candidates := []string{
 		"message.content.parts.0",
 		"v.message.content.parts.0",
@@ -482,7 +482,7 @@ func extractAssistantText(body []byte) string {
 			p := item.Get("p").String()
 			if p == "/message/content/parts/0" || strings.HasPrefix(p, "/message/content/parts/0") {
 				if v := item.Get("v").String(); v != "" {
-					sb.WriteString(v)
+					_, _ = sb.WriteString(v)
 				}
 			}
 			return true
@@ -526,7 +526,7 @@ func extractLastAssistantTextFromMapping(body []byte) string {
 		var sb strings.Builder
 		msg.Get("content.parts").ForEach(func(_, p gjson.Result) bool {
 			if p.Type == gjson.String {
-				sb.WriteString(p.String())
+				_, _ = sb.WriteString(p.String())
 			}
 			return true
 		})

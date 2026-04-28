@@ -26,8 +26,8 @@ import (
 //   - 5xx    → TransportError（可重试）
 //   - 其他 4xx → 透传 OpenAI 错误体（封装为 *UpstreamError）
 type APIKeyDriver struct {
-	BaseURL string         // 默认 https://api.openai.com
-	Client  *req.Client    // 默认 req.C().SetTimeout(180s)
+	BaseURL string      // 默认 https://api.openai.com
+	Client  *req.Client // 默认 req.C().SetTimeout(180s)
 	Now     func() time.Time
 }
 

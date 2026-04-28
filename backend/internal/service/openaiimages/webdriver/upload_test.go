@@ -13,15 +13,15 @@ import (
 
 func TestUploadFiles_ThreeStepProtocol(t *testing.T) {
 	var (
-		azureCalled   atomic.Int32
-		uploadedDone  atomic.Int32
-		azureURL      string
+		azureCalled  atomic.Int32
+		uploadedDone atomic.Int32
+		azureURL     string
 	)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/files", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
-			http.Error(w, "method", 405)
+			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
 		}
 		var body map[string]any
@@ -41,7 +41,7 @@ func TestUploadFiles_ThreeStepProtocol(t *testing.T) {
 
 	azure := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "PUT" {
-			http.Error(w, "method", 405)
+			http.Error(w, "method", http.StatusMethodNotAllowed)
 			return
 		}
 		if r.Header.Get("x-ms-blob-type") != "BlockBlob" {

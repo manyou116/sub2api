@@ -52,9 +52,9 @@ type PoolListAccounts func(ctx context.Context, f PoolFilter) ([]PoolAccount, er
 //   - 不读 model_rate_limits / codex_quota_*
 //   - 内存 lease 表与 codex scheduler 不共享
 type ImagePool struct {
-	List   PoolListAccounts
-	Probe  *AccountProbe
-	Now    func() time.Time
+	List  PoolListAccounts
+	Probe *AccountProbe
+	Now   func() time.Time
 
 	mu     sync.Mutex
 	leased map[int64]time.Time // accountID → lease 到期时刻
@@ -243,7 +243,7 @@ func (p *ImagePool) RecordSuccess(ctx context.Context, accountID int64, currentE
 		return nil
 	}
 	updates := map[string]any{
-		"image_cooldown_until":  "",
+		"image_cooldown_until": "",
 	}
 	if q := readQuotaRemaining(currentExtra); q > 0 {
 		updates["image_quota_remaining"] = q - 1

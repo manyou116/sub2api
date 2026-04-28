@@ -86,7 +86,8 @@ func powFormatTime() string {
 }
 
 // buildPowConfig 构建 PoW 计算配置（18 字段）。
-//   index 3 / index 9 在 solvePow 内部被替换为循环变量 i 与 i>>1。
+//
+//	index 3 / index 9 在 solvePow 内部被替换为循环变量 i 与 i>>1。
 func buildPowConfig(ua, scriptSource, dataBuild string) []any {
 	if strings.TrimSpace(scriptSource) == "" {
 		scriptSource = defaultSentinelSDKURL

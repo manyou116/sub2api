@@ -20,14 +20,14 @@ type Fingerprint struct {
 	// TLSHello 决定 ClientHello 字节序列；同 BoringSSL 系列的 Chrome/Edge 共享。
 	TLSHello utls.ClientHelloID
 
-	UserAgent             string
-	SecChUa               string
-	SecChUaFullVersion    string
+	UserAgent              string
+	SecChUa                string
+	SecChUaFullVersion     string
 	SecChUaFullVersionList string
-	SecChUaPlatform       string // 带引号
+	SecChUaPlatform        string // 带引号
 	SecChUaPlatformVersion string
-	SecChUaArch           string
-	SecChUaBitness        string
+	SecChUaArch            string
+	SecChUaBitness         string
 
 	OAIClientVersion     string
 	OAIClientBuildNumber string

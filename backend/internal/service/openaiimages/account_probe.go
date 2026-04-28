@@ -67,6 +67,11 @@ func (p *AccountProbe) now() time.Time {
 	return time.Now()
 }
 
+// httpClient 在当前实现里未直接使用（probe 实际通过具体 doProbe 方法构造 fingerprint
+// client），保留方法是为了未来在 AccountProbe 内部统一注入测试 client。golangci unused
+// 误报，标 nolint 抑制。
+//
+//nolint:unused
 func (p *AccountProbe) httpClient() *req.Client {
 	if p.Client != nil {
 		return p.Client

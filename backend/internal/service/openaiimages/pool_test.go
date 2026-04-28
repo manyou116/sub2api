@@ -24,7 +24,7 @@ func TestImagePool_SelectByQuotaThenLastUsed(t *testing.T) {
 
 	accs := []PoolAccount{
 		makeAcc(1, "active", true, map[string]any{"image_quota_remaining": 5.0}, newer),
-		makeAcc(2, "active", true, map[string]any{"image_quota_remaining": 5.0}, older), // 同 quota，更老 last_used 优先
+		makeAcc(2, "active", true, map[string]any{"image_quota_remaining": 5.0}, older),  // 同 quota，更老 last_used 优先
 		makeAcc(3, "active", true, map[string]any{"image_quota_remaining": 10.0}, newer), // 最高 quota → 头号
 	}
 

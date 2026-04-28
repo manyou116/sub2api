@@ -3314,10 +3314,10 @@ func (s *SettingService) SetStreamTimeoutSettings(ctx context.Context, settings 
 // normalizeDefaultImageResponseFormatValue 归一化「图片接口默认 response_format」枚举。
 // 合法值：auto / b64_json / url / markdown，其它（含空）回落到 auto。
 func normalizeDefaultImageResponseFormatValue(v string) string {
-switch strings.ToLower(strings.TrimSpace(v)) {
-case "b64_json", "url", "markdown":
-return strings.ToLower(strings.TrimSpace(v))
-default:
-return "auto"
-}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "b64_json", "url", "markdown":
+		return strings.ToLower(strings.TrimSpace(v))
+	default:
+		return "auto"
+	}
 }

@@ -43,7 +43,7 @@ func RenderMarkdown(originalPrompt string, items []ImageItem) string {
 			continue
 		}
 		if i < len(items)-1 {
-			b.WriteString("\n\n")
+			_, _ = b.WriteString("\n\n")
 		}
 	}
 	return b.String()

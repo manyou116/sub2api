@@ -18,17 +18,18 @@ import (
 // 且 account.extra.openai_oauth_legacy_images != "enabled"）。
 //
 // 协议要点：
-//   POST https://api.openai.com/v1/responses
-//   Body:
-//     {
-//       "model": "gpt-image-1" 或别名,
-//       "input": "<prompt>",
-//       "tools": [{"type": "image_generation", "size": "1024x1024", ...}],
-//       "tool_choice": {"type": "image_generation"},
-//       "stream": false
-//     }
-//   Response (非流) 中 output[].type == "image_generation_call"
-//   字段 result 为 base64-encoded PNG。
+//
+//	POST https://api.openai.com/v1/responses
+//	Body:
+//	  {
+//	    "model": "gpt-image-1" 或别名,
+//	    "input": "<prompt>",
+//	    "tools": [{"type": "image_generation", "size": "1024x1024", ...}],
+//	    "tool_choice": {"type": "image_generation"},
+//	    "stream": false
+//	  }
+//	Response (非流) 中 output[].type == "image_generation_call"
+//	字段 result 为 base64-encoded PNG。
 //
 // 注意：图片编辑场景，把第一张 image 的 base64 放进 tool 的 input_image 字段（OpenAI 当前 spec）。
 type ResponsesToolDriver struct {

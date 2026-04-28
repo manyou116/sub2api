@@ -74,7 +74,7 @@ func TestAPIKeyDriver_GenerationsHappy(t *testing.T) {
 	if gotBody["size"] != "1024x1024" {
 		t.Errorf("size: %v", gotBody["size"])
 	}
-	if got := int(gotBody["n"].(float64)); got != 2 {
+	if n, _ := gotBody["n"].(float64); int(n) != 2 {
 		t.Errorf("n: %v", gotBody["n"])
 	}
 	if gotBody["response_format"] != "b64_json" {
@@ -314,8 +314,8 @@ func TestResponsesToolDriver_HappyTextOnly(t *testing.T) {
 	if gotBody["input"] != "a tiger" {
 		t.Errorf("input=%v want string prompt", gotBody["input"])
 	}
-	tools := gotBody["tools"].([]any)
-	tool := tools[0].(map[string]any)
+	tools, _ := gotBody["tools"].([]any)
+	tool, _ := tools[0].(map[string]any)
 	if tool["type"] != "image_generation" || tool["size"] != "512x512" {
 		t.Errorf("tool spec wrong: %v", tool)
 	}
@@ -357,18 +357,19 @@ func TestResponsesToolDriver_EditsBuildsImageInput(t *testing.T) {
 	if !ok || len(inp) != 1 {
 		t.Fatalf("input shape wrong: %T %v", gotBody["input"], gotBody["input"])
 	}
-	msg := inp[0].(map[string]any)
+	msg, _ := inp[0].(map[string]any)
 	if msg["role"] != "user" {
 		t.Errorf("role=%v", msg["role"])
 	}
-	content := msg["content"].([]any)
+	content, _ := msg["content"].([]any)
 	if len(content) != 2 {
 		t.Fatalf("content len=%d", len(content))
 	}
-	if content[0].(map[string]any)["type"] != "input_text" {
+	first, _ := content[0].(map[string]any)
+	if first["type"] != "input_text" {
 		t.Error("first should be input_text")
 	}
-	imgItem := content[1].(map[string]any)
+	imgItem, _ := content[1].(map[string]any)
 	if imgItem["type"] != "input_image" {
 		t.Error("second should be input_image")
 	}

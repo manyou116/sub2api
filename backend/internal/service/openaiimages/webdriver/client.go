@@ -104,4 +104,3 @@ func buildHeaders(account AccountInfo, fp Fingerprint) http.Header {
 	}
 	return h
 }
-

@@ -2701,19 +2701,19 @@ func (h *SettingHandler) TestWebSearchEmulation(c *gin.Context) {
 // resolveOptionalStr 把 *string 字段（可空）解析为最终 string：
 // nil 表示未提交（保留旧值），非 nil 则取指针所指 trimmed 值。
 func resolveOptionalStr(p *string, fallback string) string {
-if p == nil {
-return fallback
-}
-return strings.TrimSpace(*p)
+	if p == nil {
+		return fallback
+	}
+	return strings.TrimSpace(*p)
 }
 
 // normalizeDefaultImageResponseFormat 把外部输入收敛到合法集合。
 // 合法值：auto / b64_json / url / markdown；其他视为 auto。
 func normalizeDefaultImageResponseFormat(v string) string {
-switch strings.ToLower(strings.TrimSpace(v)) {
-case "b64_json", "url", "markdown":
-return strings.ToLower(strings.TrimSpace(v))
-default:
-return "auto"
-}
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "b64_json", "url", "markdown":
+		return strings.ToLower(strings.TrimSpace(v))
+	default:
+		return "auto"
+	}
 }

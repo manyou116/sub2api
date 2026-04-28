@@ -16,13 +16,13 @@ type memSink struct {
 	statusOK bool
 }
 
-func newMemSink() *memSink { return &memSink{headers: map[string]string{}} }
-func (m *memSink) Write(p []byte) (int, error)   { return m.buf.Write(p) }
-func (m *memSink) SetHeader(k, v string)         { m.headers[k] = v }
-func (m *memSink) WriteStatus(code int)          { m.status = code; m.statusOK = true }
-func (m *memSink) Flush()                        { m.flushed++ }
-func (m *memSink) String() string                { return m.buf.String() }
-func (m *memSink) Bytes() []byte                 { return m.buf.Bytes() }
+func newMemSink() *memSink                     { return &memSink{headers: map[string]string{}} }
+func (m *memSink) Write(p []byte) (int, error) { return m.buf.Write(p) }
+func (m *memSink) SetHeader(k, v string)       { m.headers[k] = v }
+func (m *memSink) WriteStatus(code int)        { m.status = code; m.statusOK = true }
+func (m *memSink) Flush()                      { m.flushed++ }
+func (m *memSink) String() string              { return m.buf.String() }
+func (m *memSink) Bytes() []byte               { return m.buf.Bytes() }
 
 // parseSSEFrames 把 SSE 输出按双换行切分；返回 [{event, data, raw}] 顺序列表。
 type sseFrame struct {
@@ -99,7 +99,7 @@ func TestWriteStandard(t *testing.T) {
 
 func TestWriteStandard_URLAndBytes(t *testing.T) {
 	res := &ImageResult{
-		Items: []ImageItem{{URL: "https://x/y.png", B64JSON: "AAAA"}},
+		Items:   []ImageItem{{URL: "https://x/y.png", B64JSON: "AAAA"}},
 		Created: 1, Model: "m",
 	}
 	sink := newMemSink()
@@ -125,16 +125,16 @@ func TestWriteChatSync(t *testing.T) {
 	if out["id"] != "chatcmpl-fixed" || out["object"] != "chat.completion" || out["model"] != "gpt-image-2" {
 		t.Errorf("envelope: %+v", out)
 	}
-	choices := out["choices"].([]any)
+	choices, _ := out["choices"].([]any)
 	if len(choices) != 1 {
 		t.Fatalf("choices len=%d", len(choices))
 	}
-	choice := choices[0].(map[string]any)
+	choice, _ := choices[0].(map[string]any)
 	if choice["finish_reason"] != "stop" {
 		t.Errorf("finish_reason=%v", choice["finish_reason"])
 	}
-	msg := choice["message"].(map[string]any)
-	content := msg["content"].(string)
+	msg, _ := choice["message"].(map[string]any)
+	content, _ := msg["content"].(string)
 	if !strings.Contains(content, "data:image/png;base64,AAAA") {
 		t.Errorf("missing first image in markdown content: %q", content)
 	}
@@ -144,8 +144,9 @@ func TestWriteChatSync(t *testing.T) {
 	if !strings.Contains(content, "Revised prompt:* rev1") {
 		t.Errorf("revised prompt missing: %q", content)
 	}
-	usage := out["usage"].(map[string]any)
-	if int(usage["total_tokens"].(float64)) != 15 {
+	usage, _ := out["usage"].(map[string]any)
+	totalTokens, _ := usage["total_tokens"].(float64)
+	if int(totalTokens) != 15 {
 		t.Errorf("usage: %+v", usage)
 	}
 }
@@ -174,21 +175,21 @@ func TestWriteChatSSE(t *testing.T) {
 	// role frame
 	var f0 map[string]any
 	_ = json.Unmarshal([]byte(frames[0].Data), &f0)
-	role := f0["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)["role"]
+	role := f0["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)["role"] //nolint:errcheck // test-only chained assertion
 	if role != "assistant" {
 		t.Errorf("first frame must have role=assistant, got %v", role)
 	}
 	// content frame
 	var f1 map[string]any
 	_ = json.Unmarshal([]byte(frames[1].Data), &f1)
-	content := f1["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)["content"].(string)
+	content, _ := f1["choices"].([]any)[0].(map[string]any)["delta"].(map[string]any)["content"].(string) //nolint:errcheck // test-only chained assertion
 	if !strings.Contains(content, "AAAA") {
 		t.Errorf("content frame missing image: %q", content)
 	}
 	// finish frame
 	var f2 map[string]any
 	_ = json.Unmarshal([]byte(frames[2].Data), &f2)
-	if f2["choices"].([]any)[0].(map[string]any)["finish_reason"] != "stop" {
+	if f2["choices"].([]any)[0].(map[string]any)["finish_reason"] != "stop" { //nolint:errcheck // test-only chained assertion
 		t.Error("third frame should have finish_reason=stop")
 	}
 	// usage frame
@@ -213,21 +214,23 @@ func TestWriteResponsesSync(t *testing.T) {
 	if out["id"] != "resp_x" || out["status"] != "completed" || out["object"] != "response" {
 		t.Errorf("envelope: %+v", out)
 	}
-	output := out["output"].([]any)
+	output, _ := out["output"].([]any)
 	if len(output) != 1 {
 		t.Fatalf("output len=%d", len(output))
 	}
-	msg := output[0].(map[string]any)
+	msg, _ := output[0].(map[string]any)
 	if msg["type"] != "message" || msg["role"] != "assistant" {
 		t.Errorf("output[0]: %+v", msg)
 	}
-	contentArr := msg["content"].([]any)
-	text := contentArr[0].(map[string]any)["text"].(string)
+	contentArr, _ := msg["content"].([]any)
+	first, _ := contentArr[0].(map[string]any)
+	text, _ := first["text"].(string)
 	if !strings.Contains(text, "AAAA") || !strings.Contains(text, "BBBB") {
 		t.Errorf("text missing images: %q", text)
 	}
-	usage := out["usage"].(map[string]any)
-	if int(usage["total_tokens"].(float64)) != 15 {
+	usage, _ := out["usage"].(map[string]any)
+	totalTokens, _ := usage["total_tokens"].(float64)
+	if int(totalTokens) != 15 {
 		t.Errorf("usage: %+v", usage)
 	}
 }
@@ -267,7 +270,7 @@ func TestWriteResponsesSSE(t *testing.T) {
 	// delta payload check
 	var delta map[string]any
 	_ = json.Unmarshal([]byte(frames[2].Data), &delta)
-	if !strings.Contains(delta["delta"].(string), "AAAA") {
+	if s, _ := delta["delta"].(string); !strings.Contains(s, "AAAA") {
 		t.Errorf("delta payload missing image: %v", delta["delta"])
 	}
 	if delta["item_id"] == nil || delta["item_id"] == "" {
@@ -277,12 +280,13 @@ func TestWriteResponsesSSE(t *testing.T) {
 	// completed payload should include usage
 	var completed map[string]any
 	_ = json.Unmarshal([]byte(frames[5].Data), &completed)
-	resp := completed["response"].(map[string]any)
+	resp, _ := completed["response"].(map[string]any)
 	if resp["status"] != "completed" {
 		t.Errorf("response.status=%v", resp["status"])
 	}
-	usage := resp["usage"].(map[string]any)
-	if int(usage["total_tokens"].(float64)) != 15 {
+	usage, _ := resp["usage"].(map[string]any)
+	totalTokens, _ := usage["total_tokens"].(float64)
+	if int(totalTokens) != 15 {
 		t.Errorf("usage: %+v", usage)
 	}
 }
