@@ -344,3 +344,52 @@ sub2api-bmai/
 - [Ent 文档](https://entgo.io/docs/getting-started)
 - [Vue3 文档](https://vuejs.org/)
 - [pnpm 文档](https://pnpm.io/)
+
+## 八、OpenAI 图片网关（webdriver 反代）
+
+> 代码位置：`backend/internal/service/openaiimages/`、`backend/internal/service/openaiimages/webdriver/`
+> 参考实现：[basketikun/chatgpt2api](https://github.com/basketikun/chatgpt2api)
+
+### 8.1 三个 Driver
+
+| Driver | 上游 | 触发条件 |
+|---|---|---|
+| **WebDriver** | chatgpt.com `/backend-api/f/conversation` | OAuth 账号 + Group/Account 启用 web 生图 |
+| **ResponsesToolDriver** | api.openai.com `/v1/responses` (image_generation tool) | OAuth 账号 + 未启用 web 生图 |
+| **ApiKeyDriver** | api.openai.com `/v1/images/*` | sk-* 账号 |
+
+### 8.2 浏览器指纹与 Cloudflare
+
+* 所有访问 chatgpt.com 的请求（生图链路 + `/backend-api/me` probe）必须使用 **同一套** TLS 指纹 + sec-ch-ua 头组合，否则 Cloudflare 会 100% 返回 403 challenge。
+* 当前统一使用 Edge 143 / utls.HelloChrome_133（`webdriver/fingerprints.go`）。其他备用 profile 保留作未来 A/B 测试，**不**经由 `PickFingerprint` 下发。
+* Probe 与 driver 必须共用 `webdriver.NewProbeClient` / `BuildBearerHeadersMap` / `PrimeChatGPTSession`。
+* **必须**走账号代理（datacenter/家用 IP 直连必被 CF 拦）。`AccountRepository.accountsToService` 已 hydrate `group.proxy_id` fallback 到 `account.Proxy`。
+
+### 8.3 Web 反代 4 个高发坑（chatgpt2api 对照排查）
+
+1. **conduit_token 必须回传到 `/f/conversation` 的 `X-Conduit-Token`**：否则服务器把模型悄悄降级到 `i-mini-m`，永远不生成图，最终 polling 超时。`X-Oai-Turn-Trace-Id` 同样必带。
+2. **`sediment://file_xxx` 与 `file-service://` 一样要排除**：用户上传图在 conversation tree 里以 `sediment://` 引用，否则源图会被全文 regex 误下载并回流到结果里。`buildUploadPointerSet` 同时塞两种前缀。
+3. **指针提取按 `author.role=="tool"` 过滤**：参照 chatgpt2api `_extract_image_tool_records`，避免 user 上传图被当成生成结果。`collectToolPointersFromMapping` (gjson 遍历 mapping)，全文扫描仅作 SSE 路径 fallback。
+4. **不对返回图做 sha256 去重**：edit 结果与原图视觉相近会被误杀。pointer-level (excluded file_ids/sediments) 去重已足够。
+
+### 8.4 隔离 Image Pool
+
+* `account.extra` 4 个 image-only 字段：`image_quota_remaining` / `image_quota_total` / `image_cooldown_until` / `image_account_plan`。
+* **完全不读** `model_rate_limits` / `codex_quota_*`；codex 调度也不读 `image_*`。两个池数据源彻底隔离。
+* Cooldown 过期 → 下次选号自动 probe 复活；命中 429/quota → driver 回写 `image_cooldown_until`。
+
+### 8.5 Probe 触发时机
+
+1. `main.go` 启动并发 probe 所有 OAuth 账号（5 worker，30s 超时）
+2. WebDriver 命中 `ChatGPTAgentToolRateLimitException` 后写 cooldown_until
+3. `ImagePool.SelectAccount` 选不到号时对 cooldown 已过的账号补 probe
+4. 管理后台 `POST /api/v1/admin/accounts/bulk-refresh-image-quota` 手动批量
+
+### 8.6 调试要点
+
+* `kill <数字PID>` 才行（pkill/killall 在受控环境被禁）
+* `git commit -m` 用 heredoc 容易卡住，统一 `git commit -F /tmp/file.txt`
+* `psql` 不支持 `--no-pager`，用 `PAGER=cat psql ...`
+* 软删除：`accounts.deleted_at` 非空 = 不可见，`GetByID` 直接 not found
+* `accounts` 表无 `group_id` 列，关系在 `account_groups (account_id, group_id, priority)`
+
