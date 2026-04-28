@@ -141,7 +141,7 @@
         </div>
       </template>
       <template #table>
-        <AccountBulkActionsBar :selected-ids="selIds" @delete="handleBulkDelete" @reset-status="handleBulkResetStatus" @refresh-token="handleBulkRefreshToken" @edit="showBulkEdit = true" @clear="clearSelection" @select-page="selectPage" @toggle-schedulable="handleBulkToggleSchedulable" />
+        <AccountBulkActionsBar :selected-ids="selIds" @delete="handleBulkDelete" @reset-status="handleBulkResetStatus" @refresh-token="handleBulkRefreshToken" @refresh-image-quota="handleBulkRefreshImageQuota" @edit="showBulkEdit = true" @clear="clearSelection" @select-page="selectPage" @toggle-schedulable="handleBulkToggleSchedulable" />
         <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
         <DataTable
           ref="dataTableRef"
@@ -300,7 +300,7 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @refresh-image-quota="handleRefreshImageQuota" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal :show="showBulkEdit" :account-ids="selIds" :selected-platforms="selPlatforms" :selected-types="selTypes" :proxies="proxies" :groups="groups" @close="showBulkEdit = false" @updated="handleBulkUpdated" />
@@ -1114,6 +1114,21 @@ const handleBulkRefreshToken = async () => {
     appStore.showError(String(error))
   }
 }
+const handleBulkRefreshImageQuota = async () => {
+  if (!confirm(t('common.confirm'))) return
+  try {
+    const result = await adminAPI.accounts.bulkRefreshImageQuota(selIds.value)
+    if (result.failed > 0) {
+      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.succeeded, failed: result.failed }))
+    } else {
+      appStore.showSuccess(`${result.succeeded} / ${result.total} refreshed`)
+    }
+    reload()
+  } catch (error) {
+    console.error('Failed to bulk refresh image quota:', error)
+    appStore.showError(String(error))
+  }
+}
 const updateSchedulableInList = (accountIds: number[], schedulable: boolean) => {
   if (accountIds.length === 0) return
   const idSet = new Set(accountIds)
@@ -1380,6 +1395,27 @@ const handleRefresh = async (a: Account) => {
     enterAutoRefreshSilentWindow()
   } catch (error) {
     console.error('Failed to refresh credentials:', error)
+  }
+}
+const handleRefreshImageQuota = async (a: Account) => {
+  try {
+    const result = await adminAPI.accounts.refreshImageQuota(a.id)
+    const parts: string[] = []
+    if (result.plan) parts.push(`plan=${result.plan}`)
+    if (typeof result.image_quota_remaining === 'number') parts.push(`remaining=${result.image_quota_remaining}`)
+    if (result.image_cooldown_until) {
+      const reset = new Date(result.image_cooldown_until * 1000)
+      parts.push(`cooldown until ${reset.toLocaleString()}`)
+    }
+    appStore.showSuccess(parts.length ? parts.join(' · ') : t('common.success'))
+    // Best-effort refresh of account row to reflect new extra fields
+    try {
+      const fresh = await adminAPI.accounts.getById(a.id)
+      patchAccountInList(fresh)
+    } catch {}
+  } catch (error: any) {
+    console.error('Failed to refresh image quota:', error)
+    appStore.showError(error?.message || 'Failed to refresh image quota')
   }
 }
 const handleRecoverState = async (a: Account) => {

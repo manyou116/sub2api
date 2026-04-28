@@ -32,6 +32,10 @@
                 {{ t('admin.accounts.refreshToken') }}
               </button>
             </template>
+            <button v-if="isOpenAIOAuth" @click="$emit('refresh-image-quota', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-pink-600 hover:bg-gray-100 dark:hover:bg-dark-700">
+              <Icon name="refresh" size="sm" />
+              {{ t('admin.accounts.refreshImageQuota') }}
+            </button>
             <button v-if="supportsPrivacy" @click="$emit('set-privacy', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-gray-100 dark:hover:bg-dark-700">
               <Icon name="shield" size="sm" />
               {{ t('admin.accounts.setPrivacy') }}
@@ -59,7 +63,7 @@ import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
 
 const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
-const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy'])
+const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'reauth', 'refresh-token', 'refresh-image-quota', 'recover-state', 'reset-quota', 'set-privacy'])
 const { t } = useI18n()
 const isRateLimited = computed(() => {
   if (props.account?.rate_limit_reset_at && new Date(props.account.rate_limit_reset_at) > new Date()) {

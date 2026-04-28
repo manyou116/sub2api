@@ -237,9 +237,13 @@ func extractImageQuota(items []any, r *ProbeResult) {
 		if v, ok := obj["limit"].(float64); ok {
 			r.QuotaTotal = int(v)
 		}
-		if reset, _ := obj["reset_after"].(string); reset != "" {
-			if t, err := time.Parse(time.RFC3339, reset); err == nil {
-				r.CooldownUntil = t
+		// reset_after is the rolling-window reset, not a cooldown.
+		// Only treat it as a cooldown when remaining is exhausted.
+		if r.QuotaRemaining == 0 {
+			if reset, _ := obj["reset_after"].(string); reset != "" {
+				if t, err := time.Parse(time.RFC3339, reset); err == nil {
+					r.CooldownUntil = t
+				}
 			}
 		}
 		return

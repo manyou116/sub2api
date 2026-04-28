@@ -106,8 +106,8 @@ func TestAccountProbe_RefreshAccount_HappyPath(t *testing.T) {
 	if res.QuotaTotal != 40 {
 		t.Errorf("total=%d", res.QuotaTotal)
 	}
-	if !res.CooldownUntil.Equal(resetAt) {
-		t.Errorf("cooldown=%v want %v", res.CooldownUntil, resetAt)
+	if !res.CooldownUntil.IsZero() {
+		t.Errorf("cooldown should be empty when remaining>0, got %v", res.CooldownUntil)
 	}
 
 	saved := repo.get(42)
@@ -117,8 +117,8 @@ func TestAccountProbe_RefreshAccount_HappyPath(t *testing.T) {
 	if saved["image_quota_remaining"] != 7 {
 		t.Errorf("quota_remaining: %v", saved["image_quota_remaining"])
 	}
-	if saved["image_cooldown_until"] != resetAt.Format(time.RFC3339) {
-		t.Errorf("cooldown_until: %v", saved["image_cooldown_until"])
+	if saved["image_cooldown_until"] != "" {
+		t.Errorf("cooldown_until should be cleared when remaining>0: %v", saved["image_cooldown_until"])
 	}
 }
 
@@ -222,6 +222,37 @@ func TestExtractImageQuota_NoEntry(t *testing.T) {
 	}, r)
 	if r.QuotaRemaining != -1 {
 		t.Errorf("remaining should stay -1 when no image_gen entry")
+	}
+}
+
+func TestExtractImageQuota_CooldownOnlyWhenExhausted(t *testing.T) {
+	resetAt := time.Date(2025, 1, 1, 8, 0, 0, 0, time.UTC)
+	// remaining > 0: reset_after is just rolling-window reset, not a cooldown
+	r := &ProbeResult{QuotaRemaining: -1}
+	extractImageQuota([]any{
+		map[string]any{
+			"feature_name": "image_gen",
+			"remaining":    3.0,
+			"limit":        40.0,
+			"reset_after":  resetAt.Format(time.RFC3339),
+		},
+	}, r)
+	if !r.CooldownUntil.IsZero() {
+		t.Errorf("cooldown should be zero when remaining>0, got %v", r.CooldownUntil)
+	}
+
+	// remaining == 0: now reset_after IS the cooldown
+	r2 := &ProbeResult{QuotaRemaining: -1}
+	extractImageQuota([]any{
+		map[string]any{
+			"feature_name": "image_gen",
+			"remaining":    0.0,
+			"limit":        40.0,
+			"reset_after":  resetAt.Format(time.RFC3339),
+		},
+	}, r2)
+	if !r2.CooldownUntil.Equal(resetAt) {
+		t.Errorf("cooldown should equal reset_after when remaining=0, got %v", r2.CooldownUntil)
 	}
 }
 

@@ -203,6 +203,38 @@ export async function refreshCredentials(id: number): Promise<Account> {
 }
 
 /**
+ * Refresh OpenAI image-generation quota for an account by probing chatgpt.com.
+ * Returns the latest plan / remaining / cooldown_until snapshot.
+ */
+export interface ImageQuotaProbeResult {
+  account_id: number
+  email?: string
+  plan?: string
+  image_quota_remaining?: number
+  image_quota_total?: number
+  image_cooldown_until?: number
+  probed_at?: number
+}
+
+export async function bulkRefreshImageQuota(accountIds?: number[]): Promise<{
+  total: number
+  succeeded: number
+  failed: number
+  results: ImageQuotaProbeResult[]
+  failures: Array<{ account_id: number; email?: string; error: string }>
+}> {
+  const { data } = await apiClient.post(`/admin/accounts/bulk-refresh-image-quota`, accountIds && accountIds.length ? { account_ids: accountIds } : {})
+  return data
+}
+
+export async function refreshImageQuota(id: number): Promise<ImageQuotaProbeResult> {
+  const { data } = await apiClient.post<ImageQuotaProbeResult>(
+    `/admin/accounts/${id}/refresh-image-quota`
+  )
+  return data
+}
+
+/**
  * Get account usage statistics
  * @param id - Account ID
  * @param days - Number of days (default: 30)
@@ -638,6 +670,8 @@ export const accountsAPI = {
   toggleStatus,
   testAccount,
   refreshCredentials,
+  refreshImageQuota,
+  bulkRefreshImageQuota,
   getStats,
   clearError,
   getUsage,
