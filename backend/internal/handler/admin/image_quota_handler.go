@@ -62,6 +62,7 @@ func (h *ImageQuotaHandler) RefreshImageQuota(c *gin.Context) {
 	res, err := h.probe.RefreshAccount(ctx, openaiimages.ProbeAccount{
 		ID:          account.ID,
 		AccessToken: accessToken,
+		ProxyURL:    accountProxyURL(account),
 	})
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{
@@ -134,7 +135,8 @@ func (h *ImageQuotaHandler) BulkRefreshImageQuota(c *gin.Context) {
 
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int, acc *service.Account, token string) {
+		proxyURL := accountProxyURL(acc)
+		go func(i int, acc *service.Account, token, proxyURL string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -142,13 +144,14 @@ func (h *ImageQuotaHandler) BulkRefreshImageQuota(c *gin.Context) {
 			res, err := h.probe.RefreshAccount(pctx, openaiimages.ProbeAccount{
 				ID:          acc.ID,
 				AccessToken: token,
+				ProxyURL:    proxyURL,
 			})
 			if err != nil {
 				results[i] = itemResult{ID: acc.ID, Email: acc.Name, Err: err.Error()}
 				return
 			}
 			results[i] = itemResult{ID: acc.ID, Email: acc.Name, Payload: buildProbePayload(acc.ID, acc.Name, res)}
-		}(i, acc, token)
+		}(i, acc, token, proxyURL)
 	}
 	wg.Wait()
 
@@ -169,6 +172,15 @@ func (h *ImageQuotaHandler) BulkRefreshImageQuota(c *gin.Context) {
 		"results":   successes,
 		"failures":  failures,
 	})
+}
+
+// accountProxyURL 返回账号生效的代理 URL（账号自带优先；否则 fallback 到分组代理，
+// 此 fallback 已在 accountsToService 中提前 hydrate 到 account.Proxy）。
+func accountProxyURL(a *service.Account) string {
+	if a == nil || a.Proxy == nil {
+		return ""
+	}
+	return a.Proxy.URL()
 }
 
 func buildProbePayload(accountID int64, email string, res *openaiimages.ProbeResult) gin.H {

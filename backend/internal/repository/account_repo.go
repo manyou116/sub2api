@@ -1551,19 +1551,32 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 	}
 
 	accountIDs := make([]int64, 0, len(accounts))
-	proxyIDs := make([]int64, 0, len(accounts))
+	proxyIDSet := make(map[int64]struct{}, len(accounts))
 	for _, acc := range accounts {
 		accountIDs = append(accountIDs, acc.ID)
 		if acc.ProxyID != nil {
-			proxyIDs = append(proxyIDs, *acc.ProxyID)
+			proxyIDSet[*acc.ProxyID] = struct{}{}
 		}
 	}
 
-	proxyMap, err := r.loadProxies(ctx, proxyIDs)
+	groupsByAccount, groupIDsByAccount, accountGroupsByAccount, err := r.loadAccountGroups(ctx, accountIDs)
 	if err != nil {
 		return nil, err
 	}
-	groupsByAccount, groupIDsByAccount, accountGroupsByAccount, err := r.loadAccountGroups(ctx, accountIDs)
+	// 收集分组级代理 ID，用于账号未自带代理时的 fallback。
+	for _, groups := range groupsByAccount {
+		for _, g := range groups {
+			if g != nil && g.ProxyID != nil {
+				proxyIDSet[*g.ProxyID] = struct{}{}
+			}
+		}
+	}
+
+	proxyIDs := make([]int64, 0, len(proxyIDSet))
+	for id := range proxyIDSet {
+		proxyIDs = append(proxyIDs, id)
+	}
+	proxyMap, err := r.loadProxies(ctx, proxyIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -1587,6 +1600,18 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 		}
 		if ags, ok := accountGroupsByAccount[acc.ID]; ok {
 			out.AccountGroups = ags
+		}
+		// Fallback: 账号自身未设置代理时，使用第一个携带代理的分组的代理。
+		if out.Proxy == nil {
+			for _, g := range out.Groups {
+				if g == nil || g.ProxyID == nil {
+					continue
+				}
+				if proxy, ok := proxyMap[*g.ProxyID]; ok && proxy != nil {
+					out.Proxy = proxy
+					break
+				}
+			}
 		}
 		outAccounts = append(outAccounts, *out)
 	}
