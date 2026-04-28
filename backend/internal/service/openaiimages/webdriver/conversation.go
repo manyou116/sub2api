@@ -8,13 +8,113 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/imroc/req/v3"
 	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
+
+	pkglogger "github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
+
+// mappingDiag 汇总一次 conversation REST 拉取里所有 message 的 role / recipient / content_type 计数 +
+// 最近的 assistant 文本 / 最近的 tool message recipient & 摘要。仅用于诊断「模型不生图」问题。
+type mappingDiag struct {
+	Roles                 map[string]int
+	Recipients            map[string]int
+	ContentTypes          map[string]int
+	ToolMessages          int
+	AssistantTextSnippet  string
+	LastToolRecipient     string
+	LastToolContentType   string
+	LastToolBodySnippet   string
+	HasMapping            bool
+}
+
+func summarizeMapping(body []byte) mappingDiag {
+	d := mappingDiag{
+		Roles:        map[string]int{},
+		Recipients:   map[string]int{},
+		ContentTypes: map[string]int{},
+	}
+	mapping := gjson.GetBytes(body, "mapping")
+	if !mapping.Exists() || !mapping.IsObject() {
+		return d
+	}
+	d.HasMapping = true
+	var lastToolTime float64
+	mapping.ForEach(func(_, node gjson.Result) bool {
+		msg := node.Get("message")
+		if !msg.Exists() {
+			return true
+		}
+		role := msg.Get("author.role").String()
+		recipient := msg.Get("recipient").String()
+		ct := msg.Get("content.content_type").String()
+		if role != "" {
+			d.Roles[role]++
+		}
+		if recipient != "" {
+			d.Recipients[recipient]++
+		}
+		if ct != "" {
+			d.ContentTypes[ct]++
+		}
+		if role == "tool" {
+			d.ToolMessages++
+			ts := msg.Get("create_time").Float()
+			if ts >= lastToolTime {
+				lastToolTime = ts
+				d.LastToolRecipient = recipient
+				d.LastToolContentType = ct
+				raw := msg.Get("content").Raw
+				d.LastToolBodySnippet = truncate(strings.ReplaceAll(raw, "\n", " "), 320)
+			}
+		}
+		return true
+	})
+	d.AssistantTextSnippet = truncate(strings.TrimSpace(extractLastAssistantTextFromMapping(body)), 320)
+	return d
+}
+
+func (d mappingDiag) zapFields(prefix string) []zap.Field {
+	rolesKV := mapToSortedString(d.Roles)
+	recKV := mapToSortedString(d.Recipients)
+	ctKV := mapToSortedString(d.ContentTypes)
+	return []zap.Field{
+		zap.Bool(prefix+"_has_mapping", d.HasMapping),
+		zap.String(prefix+"_roles", rolesKV),
+		zap.String(prefix+"_recipients", recKV),
+		zap.String(prefix+"_content_types", ctKV),
+		zap.Int(prefix+"_tool_messages", d.ToolMessages),
+		zap.String(prefix+"_last_tool_recipient", d.LastToolRecipient),
+		zap.String(prefix+"_last_tool_content_type", d.LastToolContentType),
+		zap.String(prefix+"_last_tool_body_snippet", d.LastToolBodySnippet),
+		zap.String(prefix+"_assistant_text_snippet", d.AssistantTextSnippet),
+	}
+}
+
+func mapToSortedString(m map[string]int) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var sb strings.Builder
+	for i, k := range keys {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		fmt.Fprintf(&sb, "%s=%d", k, m[k])
+	}
+	return sb.String()
+}
 
 // conversation.go：prepare → /f/conversation SSE → 兜底 polling。
 
@@ -181,6 +281,10 @@ func readSSE(
 		expectedImages = 1
 	}
 	reader := bufio.NewReader(resp.Body)
+	recipients := map[string]int{}
+	roles := map[string]int{}
+	contentTypes := map[string]int{}
+	frames := 0
 	for {
 		line, rerr := reader.ReadBytes('\n')
 		if len(line) > 0 {
@@ -191,12 +295,31 @@ func readSSE(
 			text := strings.TrimRight(string(line), "\r\n")
 			if data, ok := extractSSEDataLine(text); ok && data != "" && data != "[DONE]" {
 				dataBytes := []byte(data)
+				frames++
 				if id := gjson.GetBytes(dataBytes, "conversation_id").String(); id != "" {
 					conversationID = id
+				}
+				if r := gjson.GetBytes(dataBytes, "message.author.role").String(); r != "" {
+					roles[r]++
+				}
+				if r := gjson.GetBytes(dataBytes, "message.recipient").String(); r != "" {
+					recipients[r]++
+				}
+				if ct := gjson.GetBytes(dataBytes, "message.content.content_type").String(); ct != "" {
+					contentTypes[ct]++
 				}
 				pointers = append(pointers, collectPointers(dataBytes, excludedPointers)...)
 				if allowEarlyExit && conversationID != "" && countDownloadablePointers(pointers) >= expectedImages {
 					go drainStream(resp.Body)
+					pkglogger.L().Info("openaiimages.sse_summary",
+						zap.String("conversation_id", conversationID),
+						zap.String("exit", "early"),
+						zap.Int("frames", frames),
+						zap.Int("downloadable", countDownloadablePointers(pointers)),
+						zap.String("roles", mapToSortedString(roles)),
+						zap.String("recipients", mapToSortedString(recipients)),
+						zap.String("content_types", mapToSortedString(contentTypes)),
+					)
 					return conversationID, pointers, firstTokenMs, true, nil
 				}
 			}
@@ -208,6 +331,16 @@ func readSSE(
 			return conversationID, pointers, firstTokenMs, false, &TransportError{Wrapped: rerr}
 		}
 	}
+	pkglogger.L().Info("openaiimages.sse_summary",
+		zap.String("conversation_id", conversationID),
+		zap.String("exit", "eof"),
+		zap.Int("frames", frames),
+		zap.Int("downloadable", countDownloadablePointers(pointers)),
+		zap.Int("excluded_count", len(excludedPointers)),
+		zap.String("roles", mapToSortedString(roles)),
+		zap.String("recipients", mapToSortedString(recipients)),
+		zap.String("content_types", mapToSortedString(contentTypes)),
+	)
 	return conversationID, pointers, firstTokenMs, false, nil
 }
 
@@ -527,6 +660,7 @@ func pollConversation(
 	deadline := time.Now().Add(pollDeadline)
 	var last []pointerInfo
 	iter := 0
+	var lastDiag mappingDiag
 	for time.Now().Before(deadline) {
 		iter++
 		var body json.RawMessage
@@ -542,6 +676,18 @@ func pollConversation(
 			return last, classifyHTTPError(resp, "poll conversation failed")
 		}
 		ptrs := collectToolPointers(body, excludedPointers)
+		lastDiag = summarizeMapping(body)
+		// 每 4 次或第 1 次 / 第 3 次输出一次诊断日志，避免刷屏。
+		if iter == 1 || iter == 3 || iter%4 == 0 {
+			fields := append([]zap.Field{
+				zap.String("conversation_id", conversationID),
+				zap.Int("iter", iter),
+				zap.Int("pointers_seen", len(ptrs)),
+				zap.Int("downloadable", countDownloadablePointers(ptrs)),
+				zap.Int("excluded_count", len(excludedPointers)),
+			}, lastDiag.zapFields("poll")...)
+			pkglogger.L().Info("openaiimages.poll_iter", fields...)
+		}
 		if len(ptrs) > 0 {
 			last = ptrs
 			if countDownloadablePointers(ptrs) > 0 {
@@ -589,6 +735,14 @@ func pollConversation(
 		case <-t.C:
 		}
 	}
+	pkglogger.L().Warn("openaiimages.poll_deadline_exhausted",
+		append([]zap.Field{
+			zap.String("conversation_id", conversationID),
+			zap.Int("iters", iter),
+			zap.Int("downloadable_at_exit", countDownloadablePointers(last)),
+			zap.Int("excluded_count", len(excludedPointers)),
+		}, lastDiag.zapFields("poll_final")...)...,
+	)
 	return last, nil
 }
 
