@@ -167,6 +167,9 @@ func buildConversationPayload(model, prompt, parentMessageID string, uploads []u
 
 // readSSE 解析 SSE 流，提取 conversation_id 与图片 pointer。
 // allowEarlyExit=true 时，凑齐 expectedImages 张可下载 pointer 即返回。
+// 不在此处提取 assistant 文本：JSON Patch 增量流难以可靠地按 message role 切分；
+// 文本分类（policy refusal / protocol error）统一在 driver.go 通过 polling fallback
+// 拿到完整 message tree 后做。
 func readSSE(
 	resp *req.Response,
 	startTime time.Time,
@@ -192,11 +195,6 @@ func readSSE(
 					conversationID = id
 				}
 				pointers = append(pointers, collectPointers(dataBytes, excludedPointers)...)
-				if t := extractAssistantText(dataBytes); looksLikeTextResponse(t) {
-					return conversationID, pointers, firstTokenMs, false, &ProtocolError{
-						Reason: "text response instead of image: " + truncate(t, 240), ConversationID: conversationID,
-					}
-				}
 				if allowEarlyExit && conversationID != "" && countDownloadablePointers(pointers) >= expectedImages {
 					go drainStream(resp.Body)
 					return conversationID, pointers, firstTokenMs, true, nil
@@ -288,10 +286,73 @@ func extractAssistantText(body []byte) string {
 			return v
 		}
 	}
-	if v := gjson.GetBytes(body, "v").String(); v != "" {
-		return v
+	// JSON Patch 增量格式：顶层为 [{"p":"/message/content/parts/0","o":"append","v":"..."}]
+	// 拼接所有指向 message.content 的 append/replace 字符串值。
+	if root := gjson.ParseBytes(body); root.IsArray() {
+		var sb strings.Builder
+		root.ForEach(func(_, item gjson.Result) bool {
+			p := item.Get("p").String()
+			if p == "/message/content/parts/0" || strings.HasPrefix(p, "/message/content/parts/0") {
+				if v := item.Get("v").String(); v != "" {
+					sb.WriteString(v)
+				}
+			}
+			return true
+		})
+		if s := sb.String(); s != "" {
+			return s
+		}
+	}
+	// 单 patch 对象形式：{"p":"/message/content/parts/0", "o":"append", "v":"text"}
+	if vr := gjson.GetBytes(body, "v"); vr.Type == gjson.String {
+		if p := gjson.GetBytes(body, "p").String(); strings.HasPrefix(p, "/message/content/parts/0") {
+			return vr.String()
+		}
 	}
 	return ""
+}
+
+// extractLastAssistantTextFromMapping 在 REST poll 返回的 conversation tree 中，
+// 找出最新一条 author.role=="assistant" 且 content_type=="text" 的消息文本。
+func extractLastAssistantTextFromMapping(body []byte) string {
+	mapping := gjson.GetBytes(body, "mapping")
+	if !mapping.Exists() {
+		return ""
+	}
+	var (
+		latestText string
+		latestTime float64
+	)
+	mapping.ForEach(func(_, node gjson.Result) bool {
+		msg := node.Get("message")
+		if !msg.Exists() {
+			return true
+		}
+		if msg.Get("author.role").String() != "assistant" {
+			return true
+		}
+		if msg.Get("content.content_type").String() != "text" {
+			return true
+		}
+		ts := msg.Get("create_time").Float()
+		var sb strings.Builder
+		msg.Get("content.parts").ForEach(func(_, p gjson.Result) bool {
+			if p.Type == gjson.String {
+				sb.WriteString(p.String())
+			}
+			return true
+		})
+		text := sb.String()
+		if strings.TrimSpace(text) == "" {
+			return true
+		}
+		if ts >= latestTime {
+			latestTime = ts
+			latestText = text
+		}
+		return true
+	})
+	return latestText
 }
 
 func looksLikeTextResponse(t string) bool {
@@ -301,14 +362,127 @@ func looksLikeTextResponse(t string) bool {
 	}
 	low := strings.ToLower(t)
 	for _, marker := range []string{
-		"i can't generate", "i cannot generate", "i'm unable to generate",
-		"sorry,", "i can't help with", "unable to create", "image generation is",
+		"i can't", "i cannot", "i'm unable", "i am unable",
+		"i won't", "i will not",
+		"sorry,", "i'm sorry",
+		"unable to", "image generation is",
 	} {
 		if strings.Contains(low, marker) {
 			return true
 		}
 	}
 	return false
+}
+
+// looksLikeContentPolicyRefusal 在 looksLikeTextResponse 命中后，
+// 进一步判断是否为内容安全策略拒绝（vs 模型协议跑偏 / 临时不可用）。
+// 命中关键词通常意味着同样 prompt 在任何账号上都会被拒，应该直接返回给客户端
+// 而不是换号重试。
+func looksLikeContentPolicyRefusal(t string) bool {
+	low := strings.ToLower(t)
+	for _, marker := range []string{
+		"can't create",
+		"can't provide",
+		"can't generate",
+		"can't help",
+		"can't make",
+		"can't assist",
+		"cannot create",
+		"cannot provide",
+		"cannot generate",
+		"cannot help",
+		"cannot assist",
+		"won't be able to",
+		"won't help",
+		"won't create",
+		"won't generate",
+		"violates",
+		"violation",
+		"content policy",
+		"usage policies",
+		"safety guidelines",
+		"safety policy",
+		"not allowed",
+		"against our policies",
+		"goes against",
+		"policy prohibits",
+		"explicit content",
+		"adult content",
+		"sexual content",
+		"我无法",
+		"无法生成",
+		"无法创建",
+		"无法提供",
+		"违反",
+		"政策",
+		"准则",
+	} {
+		if strings.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeQuotaExhaustedRefusal 检测上游配额耗尽类文本（free plan limit 等）。
+// 命中后应返回 RateLimitError 让上层换号 + 给当前账号打 cooldown。
+// resetAfter 为从文本中提取的恢复时间（hours/minutes），失败返回 0。
+func looksLikeQuotaExhaustedRefusal(t string) (bool, time.Duration) {
+	low := strings.ToLower(t)
+	markers := []string{
+		"hit the free plan limit",
+		"reached the free plan limit",
+		"plan limit for image",
+		"image generation limit",
+		"limit for image generation",
+		"limit resets in",
+		"rate limit",
+		"too many requests",
+		"please try again later",
+	}
+	hit := false
+	for _, m := range markers {
+		if strings.Contains(low, m) {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return false, 0
+	}
+	return true, parseResetAfterFromText(low)
+}
+
+// parseResetAfterFromText 从 "limit resets in 21 hours and 11 minutes" 类文本中提取恢复时长。
+func parseResetAfterFromText(low string) time.Duration {
+	idx := strings.Index(low, "resets in")
+	if idx < 0 {
+		idx = strings.Index(low, "try again in")
+	}
+	if idx < 0 {
+		return 0
+	}
+	tail := low[idx:]
+	var dur time.Duration
+	var n int
+	var unit string
+	for _, pat := range []string{"%d hours and %d minutes", "%d hour and %d minutes", "%d hours and %d minute", "%d hour and %d minute"} {
+		var h, m int
+		if c, _ := fmt.Sscanf(tail, "resets in "+pat, &h, &m); c == 2 {
+			return time.Duration(h)*time.Hour + time.Duration(m)*time.Minute
+		}
+	}
+	if c, _ := fmt.Sscanf(tail, "resets in %d %s", &n, &unit); c >= 2 {
+		switch {
+		case strings.HasPrefix(unit, "hour"):
+			dur = time.Duration(n) * time.Hour
+		case strings.HasPrefix(unit, "minute"):
+			dur = time.Duration(n) * time.Minute
+		case strings.HasPrefix(unit, "second"):
+			dur = time.Duration(n) * time.Second
+		}
+	}
+	return dur
 }
 
 func countDownloadablePointers(items []pointerInfo) int {
@@ -357,14 +531,27 @@ func pollConversation(
 			return last, classifyHTTPError(resp, "poll conversation failed")
 		}
 		ptrs := collectToolPointers(body, excludedPointers)
-		if t := extractAssistantText(body); looksLikeTextResponse(t) {
-			return last, &ProtocolError{Reason: "text response in poll: " + truncate(t, 240), ConversationID: conversationID}
-		}
 		if len(ptrs) > 0 {
 			last = ptrs
 			if countDownloadablePointers(ptrs) > 0 {
 				return ptrs, nil
 			}
+		}
+		if t := extractLastAssistantTextFromMapping(body); t != "" && countDownloadablePointers(last) == 0 {
+			if hit, reset := looksLikeQuotaExhaustedRefusal(t); hit {
+				return last, &RateLimitError{
+					StatusCode: http.StatusTooManyRequests,
+					Message:    truncate(strings.TrimSpace(t), 480),
+					ResetAfter: reset,
+				}
+			}
+			if looksLikeContentPolicyRefusal(t) {
+				return last, &ContentPolicyError{
+					UpstreamMessage: truncate(strings.TrimSpace(t), 480),
+					ConversationID:  conversationID,
+				}
+			}
+			return last, &ProtocolError{Reason: "text response in poll: " + truncate(t, 240), ConversationID: conversationID}
 		}
 		var backoff time.Duration
 		switch {

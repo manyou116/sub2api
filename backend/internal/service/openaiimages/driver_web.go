@@ -148,6 +148,11 @@ func translateWebError(err error) error {
 		return &AuthError{HTTPStatus: 401, Reason: au.Error()}
 	}
 
+	var cp *webdriver.ContentPolicyError
+	if errors.As(err, &cp) {
+		return &ContentPolicyError{UpstreamMessage: cp.UpstreamMessage}
+	}
+
 	var pe *webdriver.ProtocolError
 	if errors.As(err, &pe) {
 		return &UpstreamError{HTTPStatus: 502, Reason: pe.Error()}

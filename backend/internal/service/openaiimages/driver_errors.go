@@ -7,6 +7,29 @@ import (
 	"time"
 )
 
+// ContentPolicyError 表示上游因内容策略拒绝（NSFW / 暴力 / 仇恨等）。
+// dispatch 不重试（同 prompt 在任何账号上都会被拒），handler 直接 400 透传给客户端，
+// **不计费 / 不写 usage_logs**。
+type ContentPolicyError struct {
+	UpstreamMessage string
+}
+
+func (e *ContentPolicyError) Error() string {
+	if e == nil {
+		return "openai-image content policy violation"
+	}
+	if e.UpstreamMessage != "" {
+		return "openai-image content policy violation: " + e.UpstreamMessage
+	}
+	return "openai-image content policy violation"
+}
+
+// IsContentPolicy 报告 driver 错误是否为内容策略拒绝。
+func IsContentPolicy(err error) bool {
+	var cp *ContentPolicyError
+	return errors.As(err, &cp)
+}
+
 // AuthError 表示账号凭证失效（401/403）。dispatch 层应剔除该账号并重试。
 type AuthError struct {
 	Reason     string

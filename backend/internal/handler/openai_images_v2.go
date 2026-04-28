@@ -485,6 +485,15 @@ func classifyDispatchError(err error) (int, string, string) {
 		return http.StatusServiceUnavailable, "exhausted_retries",
 			"all candidate accounts failed; please retry later"
 	}
+	if openaiimages.IsContentPolicy(err) {
+		var cp *openaiimages.ContentPolicyError
+		errors.As(err, &cp)
+		msg := "request rejected by upstream content policy"
+		if cp != nil && cp.UpstreamMessage != "" {
+			msg = cp.UpstreamMessage
+		}
+		return http.StatusBadRequest, "content_policy_violation", msg
+	}
 	if openaiimages.IsAuth(err) {
 		return http.StatusUnauthorized, "authentication_error", err.Error()
 	}

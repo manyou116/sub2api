@@ -52,6 +52,21 @@ func (e *AuthError) Error() string {
 	return fmt.Sprintf("openai web auth error (status=%d): %s", e.StatusCode, e.Message)
 }
 
+// ContentPolicyError 表示上游因内容安全策略（NSFW / 暴力 / 仇恨等）
+// 拒绝生成。**不应换号重试**——同样的 prompt 在任何账号上都会被同样规则拒绝。
+// UpstreamMessage 保留上游原文，由 handler 透传给客户端。
+type ContentPolicyError struct {
+	UpstreamMessage string
+	ConversationID  string
+}
+
+func (e *ContentPolicyError) Error() string {
+	if e.ConversationID != "" {
+		return fmt.Sprintf("openai web content policy refusal (conversation=%s): %s", e.ConversationID, e.UpstreamMessage)
+	}
+	return "openai web content policy refusal: " + e.UpstreamMessage
+}
+
 // TransportError 表示底层网络/超时等可重试错误。
 type TransportError struct{ Wrapped error }
 
