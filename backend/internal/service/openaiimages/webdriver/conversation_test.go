@@ -77,16 +77,47 @@ func TestModelSlug(t *testing.T) {
 }
 
 func TestBuildPrompt_EditWrapping(t *testing.T) {
-	p := buildPrompt("make it red", true)
-	if !strings.Contains(p, "Generate the image directly") || !strings.Contains(p, "make it red") {
-		t.Errorf("got: %s", p)
+	p := buildPrompt("make it red", true, "")
+	if p != "make it red" {
+		t.Errorf("got: %q", p)
 	}
 }
 
 func TestBuildPrompt_GenerationPassthrough(t *testing.T) {
-	p := buildPrompt("a tiger", false)
-	if !strings.Contains(p, "Generate the image directly") || !strings.Contains(p, "a tiger") {
-		t.Errorf("got: %s", p)
+	p := buildPrompt("a tiger", false, "")
+	if p != "a tiger" {
+		t.Errorf("got: %q", p)
+	}
+}
+
+func TestBuildPrompt_EmptyPromptWithUploads(t *testing.T) {
+	p := buildPrompt("", true, "")
+	if p != "Edit the attached image." {
+		t.Errorf("got: %q", p)
+	}
+}
+
+func TestBuildPrompt_AspectRatioHints(t *testing.T) {
+	cases := map[string]string{
+		"1024x1024": "1:1 正方形",
+		"1792x1024": "16:9 横屏",
+		"1024x1792": "9:16 竖屏",
+		"1536x1024": "3:2",
+		"1:1":       "1:1 正方形",
+		"":          "",
+		"auto":      "",
+	}
+	for size, want := range cases {
+		p := buildPrompt("a tiger", false, size)
+		if want == "" {
+			if p != "a tiger" {
+				t.Errorf("size=%q expect raw, got %q", size, p)
+			}
+			continue
+		}
+		if !strings.Contains(p, want) {
+			t.Errorf("size=%q expect contain %q, got %q", size, want, p)
+		}
 	}
 }
 

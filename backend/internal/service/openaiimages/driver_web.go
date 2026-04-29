@@ -78,6 +78,7 @@ func (d *WebDriverAdapter) Forward(ctx context.Context, account AccountView, req
 				},
 				Model:          req.Model,
 				Prompt:         req.Prompt,
+				Size:           req.Size,
 				N:              1,
 				Uploads:        uploads,
 				AllowEarlyExit: true,

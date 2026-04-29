@@ -93,7 +93,7 @@ func (d *Driver) Forward(ctx context.Context, in *Request) (*Result, error) {
 	// pointer-level 去重已通过 buildUploadPointerSet（file-service:// + sediment://）保证，
 	// 不再做 sha256 内容去重（chatgpt2api 也未做，避免误杀视觉相近的合法 edit 结果）。
 
-	prompt := buildPrompt(in.Prompt, len(uploads) > 0)
+	prompt := buildPrompt(in.Prompt, len(uploads) > 0, in.Size)
 	conduitToken, err := prepareConversation(ctx, client, headers, d.endpoints.prep(), prompt, parentMessageID, reqs.Token, proofToken, in.Model)
 	if err != nil {
 		return nil, err

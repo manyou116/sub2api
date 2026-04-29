@@ -34,6 +34,7 @@ type Request struct {
 	Account        AccountInfo
 	Model          string // 上游 web 模型 slug 由 Driver 内部映射
 	Prompt         string
+	Size           string // 客户端尺寸（如 "1024x1024" / "1792x1024"），用于附加构图提示
 	N              int
 	Uploads        []Upload
 	AllowEarlyExit bool   // 仅纯生图（无 Uploads）开启 SSE 早退

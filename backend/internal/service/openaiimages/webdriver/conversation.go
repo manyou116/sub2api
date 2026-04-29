@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -184,19 +185,82 @@ func modelSlug(model string) string {
 	return "auto"
 }
 
-// buildPrompt 在生成 / 编辑场景统一加上「直接出图」的前缀指令，
-// 与 chatgpt2api `_build_image_prompt` 保持一致：不要让模型回答文字，
-// 也不再叠加任何 "不要 echo 源图" 的负面指令（实测会导致模型反向 echo）。
-func buildPrompt(userPrompt string, hasUploads bool) string {
+// buildPrompt 对齐 chatgpt2api `_build_image_prompt`：原样下发用户 prompt，
+// 仅在已知尺寸时追加中文构图提示。不再叠加任何英文前缀指令——实测前缀
+// 会污染上下文、降低生图精细度（短 prompt 尤甚）。
+//
+// 短/空 prompt 在轮询阶段若上游返回纯文本（如 `{"size":"medium"}`），
+// 会由 ModelNoImageError 通道直接透传给客户端，不再用前缀做防御。
+func buildPrompt(userPrompt string, hasUploads bool, size string) string {
 	prompt := strings.TrimSpace(userPrompt)
 	if prompt == "" && hasUploads {
 		prompt = "Edit the attached image."
 	}
-	instruction := "Generate the image directly from the request. Do not answer with plain text, do not ask for more details, and make reasonable visual choices if details are missing."
-	if prompt == "" {
-		return instruction
+	hint := aspectRatioHint(size)
+	switch {
+	case prompt == "" && hint == "":
+		return ""
+	case prompt == "":
+		return hint
+	case hint == "":
+		return prompt
+	default:
+		return prompt + "\n\n" + hint
 	}
-	return instruction + "\n\n" + prompt
+}
+
+// aspectRatioHint 把 OpenAI 的 size（如 "1024x1024" / "1792x1024" / "1:1"）
+// 翻译成中文构图提示，与 chatgpt2api 一致。未知 size 返回空串（不附加）。
+func aspectRatioHint(size string) string {
+	s := strings.ToLower(strings.TrimSpace(size))
+	if s == "" || s == "auto" {
+		return ""
+	}
+	ratio := s
+	if strings.Contains(s, "x") {
+		parts := strings.SplitN(s, "x", 2)
+		if len(parts) == 2 {
+			w, errW := strconv.Atoi(strings.TrimSpace(parts[0]))
+			h, errH := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if errW == nil && errH == nil && w > 0 && h > 0 {
+				g := gcd(w, h)
+				rw, rh := w/g, h/g
+				ratio = fmt.Sprintf("%d:%d", rw, rh)
+			}
+		}
+	}
+	switch ratio {
+	case "1:1":
+		return "输出为 1:1 正方形构图，主体居中，适合正方形画幅。"
+	case "16:9":
+		return "输出为 16:9 横屏构图，适合宽画幅展示。"
+	case "9:16":
+		return "输出为 9:16 竖屏构图，适合竖版画幅展示。"
+	case "4:3":
+		return "输出为 4:3 比例，兼顾宽度与高度，适合展示画面细节。"
+	case "3:4":
+		return "输出为 3:4 比例，纵向构图，适合人物肖像或竖向场景。"
+	case "7:4":
+		// OpenAI gpt-image-1 横幅档（1792x1024），按 16:9 引导。
+		return "输出为 16:9 横屏构图，适合宽画幅展示。"
+	case "4:7":
+		return "输出为 9:16 竖屏构图，适合竖版画幅展示。"
+	case "3:2":
+		return "输出为 3:2 横向构图，适合风景或宽画面展示。"
+	case "2:3":
+		return "输出为 2:3 纵向构图，适合人物或竖向场景展示。"
+	}
+	return fmt.Sprintf("输出图片，宽高比为 %s。", ratio)
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	if a < 0 {
+		return -a
+	}
+	return a
 }
 
 func prepareConversation(
