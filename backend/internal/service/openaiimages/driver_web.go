@@ -153,6 +153,11 @@ func translateWebError(err error) error {
 		return &ContentPolicyError{UpstreamMessage: cp.UpstreamMessage}
 	}
 
+	var ni *webdriver.ModelNoImageError
+	if errors.As(err, &ni) {
+		return &ModelNoImageError{UpstreamMessage: ni.UpstreamMessage}
+	}
+
 	var pe *webdriver.ProtocolError
 	if errors.As(err, &pe) {
 		return &UpstreamError{HTTPStatus: 502, Reason: pe.Error()}

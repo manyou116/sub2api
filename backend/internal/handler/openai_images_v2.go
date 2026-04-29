@@ -499,6 +499,15 @@ func classifyDispatchError(err error) (int, string, string) {
 		}
 		return http.StatusBadRequest, "content_policy_violation", msg
 	}
+	if openaiimages.IsModelNoImage(err) {
+		var ni *openaiimages.ModelNoImageError
+		errors.As(err, &ni)
+		msg := "model produced no image (please refine your prompt)"
+		if ni != nil && ni.UpstreamMessage != "" {
+			msg = ni.UpstreamMessage
+		}
+		return http.StatusBadRequest, "model_no_image", msg
+	}
 	if openaiimages.IsAuth(err) {
 		return http.StatusUnauthorized, "authentication_error", err.Error()
 	}

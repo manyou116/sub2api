@@ -73,6 +73,24 @@ type TransportError struct{ Wrapped error }
 func (e *TransportError) Error() string { return "openai web transport error: " + e.Wrapped.Error() }
 func (e *TransportError) Unwrap() error { return e.Wrapped }
 
+// ModelNoImageError 表示 conversation 完成后未产出图片资产，
+// 而模型最终给出的是纯文本回复（既不是明显的内容策略拒绝，也不是协议错误）。
+// 典型场景：prompt 过于模糊（如 "随便生成一张图"），模型走了对话/澄清分支
+// 输出问句或 tool params JSON 而非真正调用 image_generation tool。
+// **不应换号重试**——同一 prompt 在其它账号上行为一致；应直接把模型原文透传给
+// 客户端，让用户根据回复内容自行调整 prompt。
+type ModelNoImageError struct {
+	UpstreamMessage string
+	ConversationID  string
+}
+
+func (e *ModelNoImageError) Error() string {
+	if e.ConversationID != "" {
+		return fmt.Sprintf("openai web model produced no image (conversation=%s): %s", e.ConversationID, e.UpstreamMessage)
+	}
+	return "openai web model produced no image: " + e.UpstreamMessage
+}
+
 // classifyHTTPError 把 req.Response.IsErrorState 的响应分类为合适的 typed error。
 // fallback 给出错误信息默认值。
 func classifyHTTPError(resp *req.Response, fallback string) error {

@@ -30,6 +30,25 @@ func IsContentPolicy(err error) bool {
 	return errors.As(err, &cp)
 }
 
+// ModelNoImageError 表示模型 conversation 完成但未产出图片资产，
+// 上层将原文透传给客户端（dispatch 不重试）。
+type ModelNoImageError struct {
+	UpstreamMessage string
+}
+
+func (e *ModelNoImageError) Error() string {
+	if e == nil || e.UpstreamMessage == "" {
+		return "openai-image: model produced no image"
+	}
+	return "openai-image model produced no image: " + e.UpstreamMessage
+}
+
+// IsModelNoImage 报告 driver 错误是否为「模型未生图」。
+func IsModelNoImage(err error) bool {
+	var ni *ModelNoImageError
+	return errors.As(err, &ni)
+}
+
 // AuthError 表示账号凭证失效（401/403）。dispatch 层应剔除该账号并重试。
 type AuthError struct {
 	Reason     string

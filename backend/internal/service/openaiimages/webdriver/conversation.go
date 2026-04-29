@@ -779,12 +779,15 @@ func pollConversation(
 					ConversationID:  conversationID,
 				}
 			}
-			// 兜底：模型在 poll 阶段产出文本而非图片。这通常意味着
-			// （a）内容策略拒绝但措辞未命中关键词；
-			// （b）模型把请求理解为对话而非生图。
-			// 两种情况换号重试都解决不了，按内容策略拒绝处理（4xx 不可重试）
-			// 比让客户端误以为是 5xx 反复重试更友好。
-			return last, &ContentPolicyError{
+			// 兜底：模型在 poll 阶段产出文本而非图片。常见诱因：
+			//   (a) prompt 过于模糊 (如 "随便生成一张图")，模型走对话分支输出
+			//       追问问题或 tool_call 参数 JSON ({"size":"medium"} 等);
+			//   (b) 内容策略拒绝但措辞未命中 looksLikeContentPolicyRefusal 关键词;
+			//   (c) 模型被服务端降级，未能调用 image_generation tool。
+			// 三种情况换号重试都解决不了，按 ModelNoImageError 把模型原文透传给客户端,
+			// 让用户根据回复内容自行判断与调整 prompt——比硬归类为
+			// content_policy_violation 误导更小。
+			return last, &ModelNoImageError{
 				UpstreamMessage: truncate(strings.TrimSpace(t), 480),
 				ConversationID:  conversationID,
 			}
