@@ -428,8 +428,8 @@ func readSSE(
 		if f, ferr := os.Create(fname); ferr == nil {
 			dumpFile = f
 			defer func() {
-				_, _ = dumpFile.WriteString(fmt.Sprintf("{\"__meta__\":true,\"conversation_id\":%q,\"frames\":%d,\"downloadable\":%d}\n",
-					conversationID, frames, countDownloadablePointers(pointers)))
+				_, _ = fmt.Fprintf(dumpFile, "{\"__meta__\":true,\"conversation_id\":%q,\"frames\":%d,\"downloadable\":%d}\n",
+					conversationID, frames, countDownloadablePointers(pointers))
 				_ = dumpFile.Close()
 			}()
 		}
