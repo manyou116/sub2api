@@ -234,7 +234,10 @@ func RegisterGatewayRoutes(
 	}
 
 	// 图片短链：response_format=url 时返回的链接，公开 GET，无需 API Key（id 不可猜，TTL 24h）
+	// 显式注册 OPTIONS 以处理跨域预检（handler 内统一返回 ACAO:* 头）
 	r.GET("/v1/files/cached/:id", h.OpenAIImagesV2.ServeCachedFile)
+	r.OPTIONS("/v1/files/cached/:id", h.OpenAIImagesV2.ServeCachedFile)
+	r.HEAD("/v1/files/cached/:id", h.OpenAIImagesV2.ServeCachedFile)
 
 }
 

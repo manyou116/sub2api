@@ -683,7 +683,19 @@ func (h *OpenAIImagesV2Handler) materializeAsURLs(c *gin.Context, res *openaiima
 
 // ServeCachedFile 处理 GET /v1/files/cached/:id，返回原始字节。
 // 公开访问（id 不可猜，且 24h 后 GC）。
+// 默认放行所有跨域来源，方便前端 <img>/fetch 直接拉取。
 func (h *OpenAIImagesV2Handler) ServeCachedFile(c *gin.Context) {
+	// 公开图片资源：允许任意来源跨域读取。
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+	c.Header("Access-Control-Allow-Headers", "Content-Type, Range")
+	c.Header("Access-Control-Expose-Headers", "Content-Length, Content-Type, Cache-Control, ETag")
+
+	if c.Request.Method == http.MethodOptions {
+		c.AbortWithStatus(http.StatusNoContent)
+		return
+	}
+
 	if h.cache == nil {
 		c.AbortWithStatus(http.StatusNotFound)
 		return

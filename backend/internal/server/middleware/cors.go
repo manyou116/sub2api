@@ -65,6 +65,12 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 	allowHeadersValue := strings.Join(allowHeaders, ", ")
 
 	return func(c *gin.Context) {
+		// 公开图片缓存端点：跳过全局 CORS 校验，由 handler 自行注入 ACAO:*。
+		if strings.HasPrefix(c.Request.URL.Path, "/v1/files/cached/") {
+			c.Next()
+			return
+		}
+
 		origin := strings.TrimSpace(c.GetHeader("Origin"))
 		originAllowed := allowAll
 		if origin != "" && !allowAll {
