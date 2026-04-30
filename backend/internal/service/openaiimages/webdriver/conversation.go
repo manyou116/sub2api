@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -408,6 +411,29 @@ func readSSE(
 	roles := map[string]int{}
 	contentTypes := map[string]int{}
 	frames := 0
+	dataTotalBytes := 0
+	var firstFrameMs int
+	// 信号位：用于诊断"上游有没有真正干活"。任何一个为 true 意味着上游
+	// 已经认领了请求并开始推内容；全为 false 通常对应"静默挂起"。
+	var sawAuthorAssistant, sawRecipientImage, sawTextDelta, sawPatch, sawTool, sawAnyMessageObj bool
+
+	// 调试用：当环境变量 SUB2API_SSE_DUMP_DIR 非空时，将每帧 raw JSON 写入
+	// <dir>/sse_<unixnano>_<seq>.jsonl，便于离线分析当前 ChatGPT 协议结构。
+	// 为避免 conversation_id 还未到时找不到文件名，采用 seq 命名 + 内容里写 conv_id 行。
+	var dumpFile *os.File
+	if dir := strings.TrimSpace(os.Getenv("SUB2API_SSE_DUMP_DIR")); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+		seq := atomic.AddInt64(&sseDumpSeq, 1)
+		fname := filepath.Join(dir, fmt.Sprintf("sse_%d_%d.jsonl", time.Now().UnixNano(), seq))
+		if f, ferr := os.Create(fname); ferr == nil {
+			dumpFile = f
+			defer func() {
+				_, _ = dumpFile.WriteString(fmt.Sprintf("{\"__meta__\":true,\"conversation_id\":%q,\"frames\":%d,\"downloadable\":%d}\n",
+					conversationID, frames, countDownloadablePointers(pointers)))
+				_ = dumpFile.Close()
+			}()
+		}
+	}
 	for {
 		line, rerr := reader.ReadBytes('\n')
 		if len(line) > 0 {
@@ -419,6 +445,35 @@ func readSSE(
 			if data, ok := extractSSEDataLine(text); ok && data != "" && data != "[DONE]" {
 				dataBytes := []byte(data)
 				frames++
+				dataTotalBytes += len(dataBytes)
+				if firstFrameMs == 0 {
+					firstFrameMs = int(time.Since(startTime).Milliseconds())
+				}
+				if dumpFile != nil {
+					_, _ = dumpFile.Write(dataBytes)
+					_, _ = dumpFile.WriteString("\n")
+				}
+				// 多协议探针：旧 message snapshot 协议 + 新 JSON Patch 协议
+				if gjson.GetBytes(dataBytes, "message").Exists() {
+					sawAnyMessageObj = true
+				}
+				if gjson.GetBytes(dataBytes, "v").Exists() || gjson.GetBytes(dataBytes, "p").Exists() || gjson.GetBytes(dataBytes, "o").Exists() {
+					sawPatch = true
+				}
+				lower := strings.ToLower(data)
+				// 鲁棒匹配："role":"assistant" 或 "role": "assistant"（带空格）
+				if strings.Contains(lower, "\"role\":\"assistant\"") || strings.Contains(lower, "\"role\": \"assistant\"") {
+					sawAuthorAssistant = true
+				}
+				if strings.Contains(lower, "image_gen") || strings.Contains(lower, "dalle") || strings.Contains(lower, "imagegen") {
+					sawRecipientImage = true
+				}
+				if strings.Contains(lower, "tool") {
+					sawTool = true
+				}
+				if strings.Contains(lower, "\"delta\"") || strings.Contains(lower, "/parts/") {
+					sawTextDelta = true
+				}
 				if id := gjson.GetBytes(dataBytes, "conversation_id").String(); id != "" {
 					conversationID = id
 				}
@@ -442,6 +497,14 @@ func readSSE(
 						zap.String("roles", mapToSortedString(roles)),
 						zap.String("recipients", mapToSortedString(recipients)),
 						zap.String("content_types", mapToSortedString(contentTypes)),
+						zap.Int("first_frame_ms", firstFrameMs),
+						zap.Int("data_bytes", dataTotalBytes),
+						zap.Bool("saw_msg_obj", sawAnyMessageObj),
+						zap.Bool("saw_patch", sawPatch),
+						zap.Bool("saw_assistant", sawAuthorAssistant),
+						zap.Bool("saw_image_gen", sawRecipientImage),
+						zap.Bool("saw_tool", sawTool),
+						zap.Bool("saw_delta", sawTextDelta),
 					)
 					return conversationID, pointers, firstTokenMs, true, nil
 				}
@@ -463,6 +526,14 @@ func readSSE(
 		zap.String("roles", mapToSortedString(roles)),
 		zap.String("recipients", mapToSortedString(recipients)),
 		zap.String("content_types", mapToSortedString(contentTypes)),
+		zap.Int("first_frame_ms", firstFrameMs),
+		zap.Int("data_bytes", dataTotalBytes),
+		zap.Bool("saw_msg_obj", sawAnyMessageObj),
+		zap.Bool("saw_patch", sawPatch),
+		zap.Bool("saw_assistant", sawAuthorAssistant),
+		zap.Bool("saw_image_gen", sawRecipientImage),
+		zap.Bool("saw_tool", sawTool),
+		zap.Bool("saw_delta", sawTextDelta),
 	)
 	return conversationID, pointers, firstTokenMs, false, nil
 }
@@ -900,3 +971,6 @@ func buildUploadPointerSet(uploads []uploadedFile) map[string]struct{} {
 	}
 	return out
 }
+
+// sseDumpSeq 单调递增序号，用于生成 SSE dump 文件名（避免同一纳秒下名字冲突）。
+var sseDumpSeq int64
