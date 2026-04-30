@@ -116,7 +116,14 @@ WITH combined AS (
     COALESCE(NULLIF(o.request_id,''), NULLIF(o.client_request_id,''), '') AS request_id,
     COALESCE(NULLIF(o.platform, ''), NULLIF(g.platform, ''), NULLIF(a.platform, ''), '') AS platform,
     o.model AS model,
-    o.duration_ms AS duration_ms,
+    COALESCE(
+      o.duration_ms,
+      NULLIF(
+        COALESCE(o.auth_latency_ms,0) + COALESCE(o.routing_latency_ms,0)
+          + COALESCE(o.upstream_latency_ms,0) + COALESCE(o.response_latency_ms,0),
+        0
+      )
+    ) AS duration_ms,
     o.status_code AS status_code,
     o.id AS error_id,
     o.error_phase AS phase,

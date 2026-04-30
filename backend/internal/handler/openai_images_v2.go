@@ -202,6 +202,18 @@ func (h *OpenAIImagesV2Handler) run(c *gin.Context, req *openaiimages.ImagesRequ
 	)
 	reqLog.Info("openaiimages.run_enter")
 
+	// Wire ops monitoring context (model/stream/body) so admin /ops/requests
+	// shows model, and so OpsErrorLoggerMiddleware can record full error rows.
+	// Body cache may be absent for multipart (Edits) — pass nil in that case.
+	var bodyForOps []byte
+	if cached, ok := c.Get("openai_chat_body_cache"); ok {
+		if b, ok2 := cached.([]byte); ok2 {
+			bodyForOps = b
+		}
+	}
+	setOpsRequestContext(c, req.Model, req.Stream, bodyForOps)
+	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
+
 	defer func() {
 		if r := recover(); r != nil {
 			reqLog.Error("openaiimages.run_panic",
@@ -260,7 +272,9 @@ func (h *OpenAIImagesV2Handler) run(c *gin.Context, req *openaiimages.ImagesRequ
 
 	dispatchCtx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer cancel()
+	upstreamStart := time.Now()
 	res, err := openaiimages.Dispatch(dispatchCtx, h.source, h.registry, in, h.dispatchO)
+	service.SetOpsLatencyMs(c, service.OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		reqLog.Warn("openaiimages.dispatch_failed", zap.Error(err))
 		status, code, message := classifyDispatchError(err)
@@ -284,11 +298,13 @@ func (h *OpenAIImagesV2Handler) run(c *gin.Context, req *openaiimages.ImagesRequ
 	}
 
 	sink := openaiimages.NewGinSink(c)
+	writeStart := time.Now()
 	if err := openaiimages.WriteResult(sink, req, res.Result, openaiimages.WriteOptions{
 		ClientModel: req.Model,
 	}); err != nil {
 		reqLog.Warn("openaiimages.write_failed", zap.Error(err))
 	}
+	service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, time.Since(writeStart).Milliseconds())
 
 	// 异步写入 usage_logs / 扣余额 / 更新 api_key 配额，与文本入口保持一致。
 	h.recordImageUsage(c, req, res, apiKey, subscription, channelMapping, requestStart, reqLog)
