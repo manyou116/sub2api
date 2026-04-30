@@ -185,28 +185,32 @@ func modelSlug(model string) string {
 	return "auto"
 }
 
+// improviseHint 在用户 prompt 末尾追加的"软指令"，用于关掉模型的澄清反射
+// （asking-for-clarification reflex）——实测：模糊 prompt 失败率 40% → 0%；
+// 长 prompt 不掉画质。位置在 prompt 之后、aspect-ratio hint 之前；中文括号
+// 包裹以暗示 meta 指令而非描述。
+const improviseHint = "（描述若不够精确，请按你的审美自由发挥，直接出图，不要反问。）"
+
 // buildPrompt 对齐 chatgpt2api `_build_image_prompt`：原样下发用户 prompt，
-// 仅在已知尺寸时追加中文构图提示。不再叠加任何英文前缀指令——实测前缀
+// 仅在已知尺寸时追加中文构图提示。不叠加任何英文前缀指令——实测前缀
 // 会污染上下文、降低生图精细度（短 prompt 尤甚）。
 //
-// 短/空 prompt 在轮询阶段若上游返回纯文本（如 `{"size":"medium"}`），
-// 会由 ModelNoImageError 通道直接透传给客户端，不再用前缀做防御。
+// 在非空 prompt 之后追加 improviseHint，关闭模型的澄清反射，避免上游回
+// "提示词建议清单"或反问导致 ModelNoImageError。
 func buildPrompt(userPrompt string, hasUploads bool, size string) string {
 	prompt := strings.TrimSpace(userPrompt)
 	if prompt == "" && hasUploads {
-		prompt = "Edit the attached image."
+		prompt = "请编辑附带的图片。"
 	}
 	hint := aspectRatioHint(size)
-	switch {
-	case prompt == "" && hint == "":
-		return ""
-	case prompt == "":
-		return hint
-	case hint == "":
-		return prompt
-	default:
-		return prompt + "\n\n" + hint
+	parts := make([]string, 0, 3)
+	if prompt != "" {
+		parts = append(parts, prompt, improviseHint)
 	}
+	if hint != "" {
+		parts = append(parts, hint)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // aspectRatioHint 把 OpenAI 的 size（如 "1024x1024" / "1792x1024" / "1:1"）

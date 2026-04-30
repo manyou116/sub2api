@@ -78,22 +78,44 @@ func TestModelSlug(t *testing.T) {
 
 func TestBuildPrompt_EditWrapping(t *testing.T) {
 	p := buildPrompt("make it red", true, "")
-	if p != "make it red" {
+	if !strings.HasPrefix(p, "make it red") {
 		t.Errorf("got: %q", p)
+	}
+	if !strings.Contains(p, improviseHint) {
+		t.Errorf("missing improvise hint in: %q", p)
 	}
 }
 
 func TestBuildPrompt_GenerationPassthrough(t *testing.T) {
 	p := buildPrompt("a tiger", false, "")
-	if p != "a tiger" {
+	if !strings.HasPrefix(p, "a tiger") {
 		t.Errorf("got: %q", p)
+	}
+	if !strings.Contains(p, improviseHint) {
+		t.Errorf("missing improvise hint in: %q", p)
 	}
 }
 
 func TestBuildPrompt_EmptyPromptWithUploads(t *testing.T) {
 	p := buildPrompt("", true, "")
-	if p != "Edit the attached image." {
+	if !strings.HasPrefix(p, "请编辑附带的图片。") {
 		t.Errorf("got: %q", p)
+	}
+	if !strings.Contains(p, improviseHint) {
+		t.Errorf("missing improvise hint in: %q", p)
+	}
+}
+
+func TestBuildPrompt_EmptyPromptNoUploads(t *testing.T) {
+	if p := buildPrompt("", false, ""); p != "" {
+		t.Errorf("expect empty, got %q", p)
+	}
+	p := buildPrompt("", false, "1024x1024")
+	if strings.Contains(p, improviseHint) {
+		t.Errorf("should not append improvise hint when prompt is empty: %q", p)
+	}
+	if !strings.Contains(p, "1:1 正方形") {
+		t.Errorf("expect ratio hint, got %q", p)
 	}
 }
 
@@ -109,9 +131,12 @@ func TestBuildPrompt_AspectRatioHints(t *testing.T) {
 	}
 	for size, want := range cases {
 		p := buildPrompt("a tiger", false, size)
+		if !strings.Contains(p, improviseHint) {
+			t.Errorf("size=%q missing improvise hint: %q", size, p)
+		}
 		if want == "" {
-			if p != "a tiger" {
-				t.Errorf("size=%q expect raw, got %q", size, p)
+			if strings.Contains(p, "构图") || strings.Contains(p, "比例") || strings.Contains(p, "宽高比") {
+				t.Errorf("size=%q expect no ratio hint, got %q", size, p)
 			}
 			continue
 		}
