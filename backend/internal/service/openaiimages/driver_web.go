@@ -1,12 +1,19 @@
 package openaiimages
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"strings"
 	"sync"
 	"time"
+
+	_ "golang.org/x/image/webp"
 
 	"github.com/Wei-Shaw/sub2api/internal/service/openaiimages/webdriver"
 )
@@ -43,10 +50,13 @@ func (d *WebDriverAdapter) Forward(ctx context.Context, account AccountView, req
 
 	uploads := make([]webdriver.Upload, 0, len(req.Images))
 	for _, img := range req.Images {
+		w, h := decodeImageDimensions(img.Data)
 		uploads = append(uploads, webdriver.Upload{
-			Filename:    img.Filename,
+			Filename:    normalizeImageFilename(img.Filename, img.ContentType),
 			ContentType: img.ContentType,
 			Data:        img.Data,
+			Width:       w,
+			Height:      h,
 		})
 	}
 
@@ -175,4 +185,55 @@ func translateWebError(err error) error {
 		return &TransportError{Reason: msg}
 	}
 	return &UpstreamError{HTTPStatus: 502, Reason: fmt.Sprintf("webdriver: %s", msg)}
+}
+
+// decodeImageDimensions 从原始图片字节推断宽高，失败时返回 (0, 0)。
+// 只读取头部字节，性能影响可忽略。
+func decodeImageDimensions(data []byte) (width, height int) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
+
+// normalizeImageFilename 修正来自客户端的文件名：
+//   - 浏览器 Blob 对象默认文件名 "blob"（无扩展名）→ 替换为 "image.<ext>"
+//   - 空文件名 → 替换为 "image.<ext>"
+//   - 无图片扩展名 → 追加正确扩展名
+//
+// ChatGPT 模型依赖 attachment 的 name 字段（含扩展名）判断是否调用 image_generation tool，
+// 文件名为 "blob" 时模型不会将其识别为图片，导致不调用 tool、edit 失败。
+func normalizeImageFilename(filename, contentType string) string {
+	ext := extFromMIME(contentType)
+	name := strings.TrimSpace(filename)
+	if name == "" || name == "blob" {
+		return "image" + ext
+	}
+	// 如果已有图片扩展名，直接返回。
+	lower := strings.ToLower(name)
+	for _, e := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"} {
+		if strings.HasSuffix(lower, e) {
+			return name
+		}
+	}
+	// 没有扩展名，追加。
+	return name + ext
+}
+
+func extFromMIME(ct string) string {
+	switch strings.ToLower(strings.TrimSpace(ct)) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/bmp":
+		return ".bmp"
+	case "image/tiff":
+		return ".tiff"
+	default:
+		return ".png"
+	}
 }
