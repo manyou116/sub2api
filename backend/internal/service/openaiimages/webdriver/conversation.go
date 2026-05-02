@@ -282,6 +282,10 @@ func prepareConversation(
 	if proofToken != "" {
 		h.Set("openai-sentinel-proof-token", proofToken)
 	}
+	// 与 chatgpt2api `_prepare_image_conversation` 对齐：generate / edit 走完全
+	// 一致的 prepare payload。曾尝试在 edit 分支使用空 system_hints +
+	// attachment_mime_types + 移除 partial_query，结果上游不进入 image_gen
+	// pipeline（不调用 image_generation tool），edit 永远拿不到结果。
 	payload := map[string]any{
 		"action":                "next",
 		"fork_from_shared_post": false,
@@ -865,15 +869,27 @@ func pollConversation(
 			SetSuccessResult(&body).
 			Get(pollURL)
 		if err != nil {
+			pkglogger.L().Warn("openaiimages.poll_transport_error",
+				zap.String("conversation_id", conversationID),
+				zap.Int("iter", iter),
+				zap.String("error", err.Error()),
+			)
 			return last, &TransportError{Wrapped: err}
 		}
 		if !resp.IsSuccessState() {
+			body2, _ := resp.ToBytes()
+			pkglogger.L().Warn("openaiimages.poll_http_error",
+				zap.String("conversation_id", conversationID),
+				zap.Int("iter", iter),
+				zap.Int("status", resp.StatusCode),
+				zap.String("body_snippet", truncate(string(body2), 200)),
+			)
 			return last, classifyHTTPError(resp, "poll conversation failed")
 		}
 		ptrs := collectToolPointers(body, excludedPointers)
 		lastDiag = summarizeMapping(body)
-		// 每 4 次或第 1 次 / 第 3 次输出一次诊断日志，避免刷屏。
-		if iter == 1 || iter == 3 || iter%4 == 0 {
+		// 每 4 次或第 1 次 / 第 2 次 / 第 3 次输出一次诊断日志，避免刷屏。
+		if iter == 1 || iter == 2 || iter == 3 || iter%4 == 0 {
 			fields := append([]zap.Field{
 				zap.String("conversation_id", conversationID),
 				zap.Int("iter", iter),

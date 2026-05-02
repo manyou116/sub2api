@@ -83,7 +83,8 @@ func (d *Driver) Forward(ctx context.Context, in *Request) (*Result, error) {
 	}
 
 	parentMessageID := uuid.NewString()
-	_ = initConversation(ctx, client, headers, d.endpoints.convInit())
+	// 与 chatgpt2api `_stream_picture_conversation` 对齐：不调 /backend-api/conversation/init，
+	// 直接进入 upload→prepare→conversation 流程。
 
 	uploads, err := uploadFiles(ctx, client, headers, d.endpoints.files(), in.Uploads)
 	if err != nil {
