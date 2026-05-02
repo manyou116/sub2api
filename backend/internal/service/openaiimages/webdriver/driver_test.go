@@ -52,7 +52,6 @@ func TestDriver_ForwardEndToEnd(t *testing.T) {
 
 	d := New(Endpoints{
 		Start:            srv.URL + "/",
-		ConversationInit: srv.URL + "/conv-init",
 		Conversation:     srv.URL + "/conversation",
 		ConversationPrep: srv.URL + "/conv-prepare",
 		ChatRequirements: srv.URL + "/chat-requirements",

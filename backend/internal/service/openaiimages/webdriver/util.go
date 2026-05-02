@@ -10,7 +10,6 @@ import (
 // ChatGPT Web 协议常量。
 const (
 	startURL               = "https://chatgpt.com/"
-	conversationInitURL    = "https://chatgpt.com/backend-api/conversation/init"
 	conversationURL        = "https://chatgpt.com/backend-api/f/conversation"
 	conversationPrepareURL = "https://chatgpt.com/backend-api/f/conversation/prepare"
 	chatRequirementsURL    = "https://chatgpt.com/backend-api/sentinel/chat-requirements"
