@@ -53,7 +53,7 @@ func fetchDownloadURL(
 		}
 		resp, err := client.R().
 			SetContext(ctx).
-			SetHeaders(headerToMap(headers)).
+			SetHeaders(headerToMap(withTargetPath(headers, targetPathOf(url)))).
 			SetSuccessResult(&result).
 			Get(url)
 		if err != nil {

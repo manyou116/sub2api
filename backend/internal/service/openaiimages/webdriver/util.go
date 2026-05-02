@@ -2,6 +2,7 @@ package webdriver
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -69,4 +70,24 @@ func coalesce(s, fallback string) string {
 		return s
 	}
 	return fallback
+}
+
+// targetPathOf extracts the path component from a full URL string.
+// ChatGPT's Cloudflare edge uses X-OpenAI-Target-Path / X-OpenAI-Target-Route
+// to route requests to the correct backend; the value is always the URL path.
+func targetPathOf(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil && u.Path != "" {
+		return u.Path
+	}
+	return rawURL
+}
+
+// withTargetPath clones h and injects the two routing headers required by
+// chatgpt.com's Cloudflare edge layer. Must be called on every backend-api
+// request; omitting them causes requests to be routed to a non-image backend.
+func withTargetPath(h http.Header, path string) http.Header {
+	dst := cloneHTTPHeader(h)
+	dst.Set("X-OpenAI-Target-Path", path)
+	dst.Set("X-OpenAI-Target-Route", path)
+	return dst
 }

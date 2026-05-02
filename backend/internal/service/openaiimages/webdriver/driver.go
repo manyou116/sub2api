@@ -100,7 +100,7 @@ func (d *Driver) Forward(ctx context.Context, in *Request) (*Result, error) {
 	}
 
 	convPayload := buildConversationPayload(in.Model, prompt, parentMessageID, uploads)
-	convHeaders := cloneHTTPHeader(headers)
+	convHeaders := withTargetPath(headers, targetPathOf(d.endpoints.conv()))
 	convHeaders.Set("Accept", "text/event-stream")
 	convHeaders.Set("Content-Type", "application/json")
 	convHeaders.Set("openai-sentinel-chat-requirements-token", reqs.Token)

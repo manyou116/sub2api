@@ -139,9 +139,10 @@ func bootstrap(ctx context.Context, client *req.Client, headers http.Header, bas
 
 // initConversation 调 /backend-api/conversation/init。失败不阻塞主流程（与上游 web 行为一致）。
 func initConversation(ctx context.Context, client *req.Client, headers http.Header, baseURL string) error {
+	h := withTargetPath(headers, targetPathOf(baseURL))
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeaders(headerToMap(headers)).
+		SetHeaders(headerToMap(h)).
 		SetBodyJsonMarshal(map[string]any{
 			"gizmo_id":                nil,
 			"requested_default_model": nil,
@@ -175,12 +176,13 @@ func fetchChatRequirements(
 		{"p": reqToken},
 		{"p": nil},
 	}
+	reqHeaders := withTargetPath(headers, targetPathOf(baseURL))
 	var lastErr error
 	for i, payload := range payloads {
 		var result chatRequirements
 		resp, err := client.R().
 			SetContext(ctx).
-			SetHeaders(headerToMap(headers)).
+			SetHeaders(headerToMap(reqHeaders)).
 			SetBodyJsonMarshal(payload).
 			SetSuccessResult(&result).
 			Post(baseURL)

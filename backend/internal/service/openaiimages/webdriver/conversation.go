@@ -277,7 +277,7 @@ func prepareConversation(
 	baseURL string,
 	prompt, parentMessageID, requirementsToken, proofToken, model string,
 ) (string, error) {
-	h := cloneHTTPHeader(headers)
+	h := withTargetPath(headers, targetPathOf(baseURL))
 	h.Set("openai-sentinel-chat-requirements-token", requirementsToken)
 	if proofToken != "" {
 		h.Set("openai-sentinel-proof-token", proofToken)
@@ -851,6 +851,7 @@ func pollConversation(
 	allowEarlyReturn bool,
 ) ([]pointerInfo, error) {
 	pollURL := fmt.Sprintf("%s/%s", baseConvURL, conversationID)
+	pollHeaders := withTargetPath(headers, targetPathOf(pollURL))
 	deadline := time.Now().Add(pollDeadline)
 	var last []pointerInfo
 	iter := 0
@@ -860,7 +861,7 @@ func pollConversation(
 		var body json.RawMessage
 		resp, err := client.R().
 			SetContext(ctx).
-			SetHeaders(headerToMap(headers)).
+			SetHeaders(headerToMap(pollHeaders)).
 			SetSuccessResult(&body).
 			Get(pollURL)
 		if err != nil {
@@ -905,30 +906,43 @@ func pollConversation(
 			}
 		}
 		if t := extractLastAssistantTextFromMapping(body); t != "" && countDownloadablePointers(last) == 0 {
-			if hit, reset := looksLikeQuotaExhaustedRefusal(t); hit {
-				return last, &RateLimitError{
-					StatusCode: http.StatusTooManyRequests,
-					Message:    truncate(strings.TrimSpace(t), 480),
-					ResetAfter: reset,
+			// 如果 end_turn=false，说明本轮对话尚未结束——通常是 image_generation tool
+			// 已被调用但图片仍在异步生成或排队中（tool 回复 "正在处理图片" 等）。
+			// 此时不应基于文本内容提前退出，继续轮询直到 pointer 出现或截止时间到。
+			if lastDiag.LastAssistantEndTurn == "false" {
+				pkglogger.L().Info("openaiimages.poll_image_queued",
+					zap.String("conversation_id", conversationID),
+					zap.Int("iter", iter),
+					zap.String("end_turn", lastDiag.LastAssistantEndTurn),
+					zap.String("tool_snippet", truncate(lastDiag.LastToolBodySnippet, 120)),
+				)
+				// fall through to backoff and continue polling
+			} else {
+				if hit, reset := looksLikeQuotaExhaustedRefusal(t); hit {
+					return last, &RateLimitError{
+						StatusCode: http.StatusTooManyRequests,
+						Message:    truncate(strings.TrimSpace(t), 480),
+						ResetAfter: reset,
+					}
 				}
-			}
-			if looksLikeContentPolicyRefusal(t) {
-				return last, &ContentPolicyError{
+				if looksLikeContentPolicyRefusal(t) {
+					return last, &ContentPolicyError{
+						UpstreamMessage: truncate(strings.TrimSpace(t), 480),
+						ConversationID:  conversationID,
+					}
+				}
+				// 兜底：模型在 poll 阶段产出文本而非图片。常见诱因：
+				//   (a) prompt 过于模糊 (如 "随便生成一张图")，模型走对话分支输出
+				//       追问问题或 tool_call 参数 JSON ({"size":"medium"} 等);
+				//   (b) 内容策略拒绝但措辞未命中 looksLikeContentPolicyRefusal 关键词;
+				//   (c) 模型被服务端降级，未能调用 image_generation tool。
+				// 三种情况换号重试都解决不了，按 ModelNoImageError 把模型原文透传给客户端,
+				// 让用户根据回复内容自行判断与调整 prompt——比硬归类为
+				// content_policy_violation 误导更小。
+				return last, &ModelNoImageError{
 					UpstreamMessage: truncate(strings.TrimSpace(t), 480),
 					ConversationID:  conversationID,
 				}
-			}
-			// 兜底：模型在 poll 阶段产出文本而非图片。常见诱因：
-			//   (a) prompt 过于模糊 (如 "随便生成一张图")，模型走对话分支输出
-			//       追问问题或 tool_call 参数 JSON ({"size":"medium"} 等);
-			//   (b) 内容策略拒绝但措辞未命中 looksLikeContentPolicyRefusal 关键词;
-			//   (c) 模型被服务端降级，未能调用 image_generation tool。
-			// 三种情况换号重试都解决不了，按 ModelNoImageError 把模型原文透传给客户端,
-			// 让用户根据回复内容自行判断与调整 prompt——比硬归类为
-			// content_policy_violation 误导更小。
-			return last, &ModelNoImageError{
-				UpstreamMessage: truncate(strings.TrimSpace(t), 480),
-				ConversationID:  conversationID,
 			}
 		}
 		var backoff time.Duration

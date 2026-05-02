@@ -35,9 +35,10 @@ func uploadFiles(
 			FileID    string `json:"file_id"`
 			UploadURL string `json:"upload_url"`
 		}
+		filesPath := targetPathOf(baseFilesURL)
 		resp, err := client.R().
 			SetContext(ctx).
-			SetHeaders(headerToMap(headers)).
+			SetHeaders(headerToMap(withTargetPath(headers, filesPath))).
 			SetBodyJsonMarshal(map[string]any{
 				"file_name":    fileName,
 				"file_size":    len(up.Data),
@@ -71,11 +72,12 @@ func uploadFiles(
 			}
 		}
 
+		uploadedURL := fmt.Sprintf("%s/%s/uploaded", baseFilesURL, created.FileID)
 		resp3, err3 := client.R().
 			SetContext(ctx).
-			SetHeaders(headerToMap(headers)).
+			SetHeaders(headerToMap(withTargetPath(headers, targetPathOf(uploadedURL)))).
 			SetBodyJsonMarshal(map[string]any{}).
-			Post(fmt.Sprintf("%s/%s/uploaded", baseFilesURL, created.FileID))
+			Post(uploadedURL)
 		if err3 != nil {
 			return nil, &TransportError{Wrapped: fmt.Errorf("confirm upload: %w", err3)}
 		}
