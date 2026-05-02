@@ -27,6 +27,18 @@ func newHTTPClient(proxyURL string, fp Fingerprint) (*req.Client, error) {
 		SetTimeout(180 * time.Second).
 		ImpersonateChrome().
 		SetTLSFingerprint(fp.TLSHello)
+	// ImpersonateChrome 把一组「浏览器地址栏导航」专用头注册为公共头
+	// （Upgrade-Insecure-Requests / Sec-Fetch-User / Sec-Fetch-Mode=navigate /
+	//  Sec-Fetch-Dest=document / Sec-Fetch-Site=none / Accept=text/html…）。
+	// 这些头只应出现在 GET chatgpt.com/ 这种导航请求里；XHR/fetch 调用 backend-api
+	// 时绝对不会出现。Cloudflare 通过 JA4H（请求头指纹）识别出这种异常组合后会
+	// 直接 403。buildHeaders / buildBootstrapHeaders 已经为各自场景显式声明了
+	// 应该出现的 Sec-Fetch-* 与 Accept；这里把"只在导航时出现"的两个头从公共
+	// 头里删除，避免它们作为默认值附加到 XHR 请求上。
+	if c.Headers != nil {
+		c.Headers.Del("Upgrade-Insecure-Requests")
+		c.Headers.Del("Sec-Fetch-User")
+	}
 	if trimmed := strings.TrimSpace(proxyURL); trimmed != "" {
 		c.SetProxyURL(trimmed)
 	}

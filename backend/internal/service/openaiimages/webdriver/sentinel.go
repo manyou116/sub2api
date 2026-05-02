@@ -75,10 +75,37 @@ func bootstrap(ctx context.Context, client *req.Client, headers http.Header, bas
 		DisableAutoReadResponse().
 		Get(baseURL)
 	if err != nil || resp == nil || resp.Body == nil {
+		if err != nil {
+			pkglogger.L().Warn("openaiimages.bootstrap_transport_failed",
+				zap.String("url", baseURL),
+				zap.String("error", err.Error()),
+			)
+		}
 		return []string{defaultSentinelSDKURL}, ""
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	_ = resp.Body.Close()
+
+	// chatgpt.com 首页非 2xx 时，body 通常是 Cloudflare 挑战 HTML，
+	// 既无法解析出 sentinel script，也意味着拿不到 cf_clearance Cookie。
+	// 后续 backend-api 调用必然 403。这里显式记录 CF-Ray / Server / 状态码，
+	// 直接退回兜底且不缓存，让上层基于真实失败决策（继续或换号）。
+	if !resp.IsSuccessState() {
+		preview := string(body)
+		if len(preview) > 400 {
+			preview = preview[:400]
+		}
+		pkglogger.L().Warn("openaiimages.bootstrap_non_success",
+			zap.String("url", baseURL),
+			zap.Int("status", resp.StatusCode),
+			zap.String("cf_ray", resp.Header.Get("CF-Ray")),
+			zap.String("cf_mitigated", resp.Header.Get("CF-Mitigated")),
+			zap.String("server", resp.Header.Get("Server")),
+			zap.String("content_type", resp.Header.Get("Content-Type")),
+			zap.String("body_preview", preview),
+		)
+		return []string{defaultSentinelSDKURL}, ""
+	}
 
 	html := string(body)
 	var scripts []string
