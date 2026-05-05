@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# sub2api pre-commit hook: gofmt + golangci-lint on staged Go files,
+# plus eslint check on staged frontend files.
+#
+# Skip with: `git commit --no-verify` (NOT recommended — CI will catch it).
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+red()    { printf "\033[0;31m%s\033[0m\n" "$*" >&2; }
+yellow() { printf "\033[0;33m%s\033[0m\n" "$*" >&2; }
+green()  { printf "\033[0;32m%s\033[0m\n" "$*" >&2; }
+
+# ---- 1. Go: gofmt + golangci-lint on staged *.go files ----
+mapfile -t STAGED_GO < <(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.go$' || true)
+
+if [ "${#STAGED_GO[@]}" -gt 0 ]; then
+  green "[pre-commit] checking ${#STAGED_GO[@]} staged Go file(s)..."
+
+  # 1a. gofmt — list files needing reformat
+  if command -v gofmt >/dev/null 2>&1; then
+    UNFORMATTED="$(gofmt -l "${STAGED_GO[@]}" 2>/dev/null || true)"
+    if [ -n "$UNFORMATTED" ]; then
+      red "[pre-commit] FAIL — these files are not gofmt'd:"
+      red "$UNFORMATTED"
+      yellow "Fix with:  gofmt -w $UNFORMATTED"
+      exit 1
+    fi
+  else
+    yellow "[pre-commit] gofmt not found, skipping format check"
+  fi
+
+  # 1b. golangci-lint — only on staged files (fast)
+  if command -v golangci-lint >/dev/null 2>&1; then
+    # golangci-lint must run from the module dir so .golangci.yml is picked up
+    if [ -d backend ]; then
+      pushd backend >/dev/null
+      # Filter staged Go paths to those under backend/
+      BACKEND_FILES=()
+      for f in "${STAGED_GO[@]}"; do
+        case "$f" in
+          backend/*) BACKEND_FILES+=("${f#backend/}") ;;
+        esac
+      done
+      if [ "${#BACKEND_FILES[@]}" -gt 0 ]; then
+        if ! golangci-lint run --timeout=120s "${BACKEND_FILES[@]}" 2>&1; then
+          red "[pre-commit] FAIL — golangci-lint reported issues in staged files"
+          popd >/dev/null
+          exit 1
+        fi
+      fi
+      popd >/dev/null
+    fi
+  else
+    yellow "[pre-commit] golangci-lint not installed, skipping deep lint"
+    yellow "  install: brew install golangci-lint   (or see https://golangci-lint.run)"
+  fi
+fi
+
+# ---- 2. Frontend: eslint on staged frontend files ----
+mapfile -t STAGED_FE < <(git diff --cached --name-only --diff-filter=ACMR | grep -E '^frontend/.*\.(vue|ts|tsx|js|jsx)$' || true)
+
+if [ "${#STAGED_FE[@]}" -gt 0 ]; then
+  if [ -d frontend/node_modules ] && command -v node >/dev/null 2>&1; then
+    green "[pre-commit] checking ${#STAGED_FE[@]} staged frontend file(s)..."
+    REL_FE=()
+    for f in "${STAGED_FE[@]}"; do
+      REL_FE+=("${f#frontend/}")
+    done
+    if ! (cd frontend && npx --no-install eslint --no-warn-ignored "${REL_FE[@]}" 2>&1); then
+      red "[pre-commit] FAIL — eslint reported issues"
+      yellow "Fix with:  cd frontend && npm run lint"
+      exit 1
+    fi
+  else
+    yellow "[pre-commit] frontend/node_modules missing — skip eslint (run 'cd frontend && npm install' once)"
+  fi
+fi
+
+green "[pre-commit] OK"
+exit 0
