@@ -62,12 +62,17 @@ func NewOpenAIImagesV2Handler(
 ) *OpenAIImagesV2Handler {
 	probe := openaiimages.NewAccountProbe(accountRepo)
 
+	listAccounts := func(ctx context.Context, f openaiimages.PoolFilter) ([]openaiimages.PoolAccount, error) {
+		return listOpenAIImageAccounts(ctx, accountRepo, f)
+	}
 	pool := &openaiimages.ImagePool{
-		Probe: probe,
-		Now:   time.Now,
-		List: func(ctx context.Context, f openaiimages.PoolFilter) ([]openaiimages.PoolAccount, error) {
-			return listOpenAIImageAccounts(ctx, accountRepo, f)
-		},
+		Probe:              probe,
+		Now:                time.Now,
+		List:               listAccounts,
+		TopKPick:           10,   // 排序后 top-10 内随机,把负载打散避免热点账号反复被打到 429
+		ExploreUnknownProb: 0.05, // 5% 概率从 quota=0/未探测 账号里挑,让几千账号池真正流动
+		WaitMaxFraction:    0.5,  // 突发并发时 SelectAccount 最多等 ctx 剩余的 50% 让其它请求 release lease,避免瞬时 503
+		WaitMaxDuration:    30 * time.Second,
 	}
 
 	h := &OpenAIImagesV2Handler{
@@ -88,7 +93,7 @@ func NewOpenAIImagesV2Handler(
 		dispatchO: openaiimages.DispatchOptions{
 			MaxAttempts:              8,
 			AuthCooldown:             time.Hour,
-			DefaultRateLimitCooldown: 5 * time.Minute,
+			DefaultRateLimitCooldown: 30 * time.Minute, // free plan 实际限流恢复窗口 >> 5min,5min 后选回去几乎一定再 429
 			AttemptBudget:            75 * time.Second,
 			RefusalRetryLimit:        3,
 			Sleep:                    time.Sleep,
@@ -108,7 +113,44 @@ func NewOpenAIImagesV2Handler(
 		},
 	})
 
+	// 启动后异步 BootProbe:扫一遍 OAuth 账号,把 image_quota_remaining / image_account_plan
+	// 缓存写齐;否则池子里几千账号 quota=0 会被永远排到末位,只有少数 lazy_probe 触发的账号
+	// 才能进入主梯队,导致负载严重集中。BootProbe 5 worker × 30s 限速,不阻塞主流程。
+	go openaiimages.BootProbe(context.Background(), probe, listAccounts, openaiimages.BootProbeOptions{
+		Workers: 5,
+		Timeout: 30 * time.Second,
+	})
+
+	// 周期采样 pool stats,便于线上观察池利用率/cooldown 比例。
+	go h.runPoolStatsLogger(context.Background(), listAccounts)
+
 	return h
+}
+
+// runPoolStatsLogger 每 5 分钟采样一次 image pool 健康度并写日志,辅助排查"几千账号池为何只用了少数"。
+func (h *OpenAIImagesV2Handler) runPoolStatsLogger(ctx context.Context, _ openaiimages.PoolListAccounts) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			st, err := h.pool.Stats(ctx, openaiimages.PoolFilter{Driver: openaiimages.DriverWeb})
+			if err != nil {
+				logger.L().Warn("openaiimages.pool_stats_failed", zap.Error(err))
+				continue
+			}
+			logger.L().Info("openaiimages.pool_stats",
+				zap.Int("total", st.Total),
+				zap.Int("ready", st.Ready),
+				zap.Int("unknown", st.Unknown),
+				zap.Int("cooldown", st.Cooldown),
+				zap.Int("leased", st.Leased),
+				zap.Int("inactive", st.Inactive),
+			)
+		}
+	}
 }
 
 // Generations 处理 POST /v1/images/generations。
@@ -270,13 +312,17 @@ func (h *OpenAIImagesV2Handler) run(c *gin.Context, req *openaiimages.ImagesRequ
 		zap.String("driver", cap.DriverName),
 	)
 
-	dispatchCtx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	// 总预算 120s = wait queue 上限 30s + 实际 chatgpt 生图 ~45s + 兜底 retry 余量
+	dispatchCtx, cancel := context.WithTimeout(c.Request.Context(), 120*time.Second)
 	defer cancel()
 	upstreamStart := time.Now()
 	res, err := openaiimages.Dispatch(dispatchCtx, h.source, h.registry, in, h.dispatchO)
 	service.SetOpsLatencyMs(c, service.OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
-		reqLog.Warn("openaiimages.dispatch_failed", zap.Error(err))
+		reqLog.Warn("openaiimages.dispatch_failed",
+			zap.Error(err),
+			zap.Int64("last_account_id", h.source.LastSelectedAccountID()),
+		)
 		status, code, message := classifyDispatchError(err)
 		writeOpenAIImageError(c, status, code, message)
 		return

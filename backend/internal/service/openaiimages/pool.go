@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -56,8 +57,52 @@ type ImagePool struct {
 	Probe *AccountProbe
 	Now   func() time.Time
 
-	mu     sync.Mutex
-	leased map[int64]time.Time // accountID → lease 到期时刻
+	// TopKPick 在排序后从前 K 个候选中随机挑 1 个，用于把负载分散到多账号上避免热点。
+	// <=1 退化为强单调（旧行为）；生产建议 10。
+	TopKPick int
+
+	// ExploreUnknownProb 给 quota=0 / 未探测过的账号一定概率被选中，让几千账号池
+	// 真正"流动"起来，避免少数已 probe 账号被反复打。范围 [0, 1]，<=0 关闭。
+	// 生产建议 0.05（5%）。
+	ExploreUnknownProb float64
+
+	// Rand 可注入测试随机源；nil 时按需用全局 rand。
+	Rand *rand.Rand
+
+	// WaitMaxFraction：SelectAccount 第一次 pick 失败时，最多等多久（占 ctx 剩余时间的比例）让其他请求 release lease。
+	// 范围 (0, 1)；<=0 关闭 wait（保留旧行为：直接返回 ErrNoImageAccount）。生产建议 0.5。
+	WaitMaxFraction float64
+	// WaitMaxDuration：wait 的绝对上限，避免 ctx 巨大时无限等。<=0 表示无绝对上限（仅受 fraction/ctx 限制）。
+	// 生产建议 30s。
+	WaitMaxDuration time.Duration
+
+	mu      sync.Mutex
+	leased  map[int64]time.Time // accountID → lease 到期时刻
+	waiters []*poolWaiter       // FIFO 等待队列：lease release 时按顺序唤醒
+}
+
+// poolWaiter 表示一个等待 lease 释放的 SelectAccount 调用。
+// ch 用 buffered(1)，唤醒方非阻塞 send；done 标记 waiter 已离开（超时/ctx 取消），唤醒时跳过。
+type poolWaiter struct {
+	ch   chan struct{}
+	done bool
+}
+
+func (p *ImagePool) intn(n int) int {
+	if n <= 1 {
+		return 0
+	}
+	if p.Rand != nil {
+		return p.Rand.Intn(n)
+	}
+	return rand.Intn(n)
+}
+
+func (p *ImagePool) float64Rand() float64 {
+	if p.Rand != nil {
+		return p.Rand.Float64()
+	}
+	return rand.Float64()
 }
 
 // NewImagePool 构造 pool。
@@ -86,10 +131,12 @@ var ErrNoImageAccount = errors.New("no image account available")
 // SelectAccount 选号：
 //  1. List(ctx, filter) 拿候选
 //  2. 过滤 status != active / 不可调度 / 已 lease / 仍在 cooldown
-//  3. 按 (image_quota_remaining DESC, last_used_at ASC) 排序
-//  4. 取第一个并加 30 秒 lease（防 SSE 阶段并发重选）
+//  3. 按 (image_quota_remaining DESC, last_used_at ASC) 排序 + top-K 随机
+//  4. 取一个并加 2min lease（防 SSE 阶段并发重选 / dispatch 卡死兜底）
 //
-// 若全部账号仍在 cooldown，对最近一个到期的账号触发一次 probe（带节流），再重试一轮。
+// 若全部账号在 cooldown，对最近过期的账号触发一次 probe 后重试。
+// 若 ready 候选都被 lease 占用且 WaitMaxFraction>0，进入 FIFO 等待队列，
+// 等其它请求 release（或超时/ctx 取消），避免突发并发瞬时 503。
 func (p *ImagePool) SelectAccount(ctx context.Context, filter PoolFilter) (PoolAccount, ReleaseFn, error) {
 	candidates, err := p.List(ctx, filter)
 	if err != nil {
@@ -97,25 +144,159 @@ func (p *ImagePool) SelectAccount(ctx context.Context, filter PoolFilter) (PoolA
 	}
 	now := p.now()
 
-	picked, ok := p.pickLocked(candidates, now)
-	if ok {
+	if picked, ok := p.pickLocked(candidates, now); ok {
 		p.maybeStaleProbe(picked, now)
 		return picked, p.lease(picked.ID, now), nil
 	}
 
 	// 全部 cooldown：找到 cooldown 最早过期的账号补 probe（异步可能不及时，故同步）
 	if probed := p.probeEarliestExpired(ctx, candidates, now); probed {
-		// 重新读一次（可能 probe 写了新的 cooldown_until）
 		candidates, err = p.List(ctx, filter)
 		if err == nil {
 			now = p.now()
-			if picked, ok = p.pickLocked(candidates, now); ok {
+			if picked, ok := p.pickLocked(candidates, now); ok {
 				p.maybeStaleProbe(picked, now)
 				return picked, p.lease(picked.ID, now), nil
 			}
 		}
 	}
+
+	// 等待队列：若启用 WaitMaxFraction 且池子里"如果没 lease 就有候选"，等其它请求 release。
+	if p.WaitMaxFraction > 0 && p.hasLeaseBlockedCandidate(candidates, p.now()) {
+		picked, ok := p.waitForLease(ctx, filter)
+		if ok {
+			now = p.now()
+			p.maybeStaleProbe(picked, now)
+			return picked, p.lease(picked.ID, now), nil
+		}
+	}
+
 	return PoolAccount{}, noopRelease, ErrNoImageAccount
+}
+
+// hasLeaseBlockedCandidate 判断：是否存在"被 lease 挡掉但本来 ready 的账号"。
+// 只有这种情况才值得排队等 release；如果池子里全是 cooldown / inactive，等也没用。
+func (p *ImagePool) hasLeaseBlockedCandidate(candidates []PoolAccount, now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.gcLeaseLocked(now)
+	for _, a := range candidates {
+		if (a.Status != "" && a.Status != "active") || !a.Schedulable {
+			continue
+		}
+		if cool := readCooldown(a.Extra); !cool.IsZero() && cool.After(now) {
+			continue
+		}
+		if _, busy := p.leased[a.ID]; busy {
+			return true
+		}
+	}
+	return false
+}
+
+// waitForLease 注册 FIFO waiter，等待其它请求 release lease 后重新 pick。
+// 返回 (account, true) 表示成功；(_, false) 表示超时 / ctx 取消 / 池子已空。
+func (p *ImagePool) waitForLease(ctx context.Context, filter PoolFilter) (PoolAccount, bool) {
+	maxWait := p.computeMaxWait(ctx)
+	if maxWait <= 0 {
+		return PoolAccount{}, false
+	}
+	deadline := p.now().Add(maxWait)
+
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return PoolAccount{}, false
+		}
+
+		w := p.enqueueWaiter()
+		timer := time.NewTimer(remaining)
+		select {
+		case <-w.ch:
+			timer.Stop()
+		case <-timer.C:
+			p.markWaiterDone(w)
+			return PoolAccount{}, false
+		case <-ctx.Done():
+			p.markWaiterDone(w)
+			timer.Stop()
+			return PoolAccount{}, false
+		}
+
+		// 被唤醒后重新拉一次 list（last_used_at / extra 可能变了）
+		candidates, err := p.List(ctx, filter)
+		if err != nil {
+			return PoolAccount{}, false
+		}
+		if picked, ok := p.pickLocked(candidates, p.now()); ok {
+			return picked, true
+		}
+		// 被唤醒但仍抢不到（其它 waiter 抢先 / 新 lease 立刻到来）→ 继续等
+	}
+}
+
+func (p *ImagePool) computeMaxWait(ctx context.Context) time.Duration {
+	frac := p.WaitMaxFraction
+	if frac <= 0 {
+		return 0
+	}
+	if frac > 1 {
+		frac = 1
+	}
+	// 默认上限：避免 ctx 没设 deadline 时无限等。
+	upper := p.WaitMaxDuration
+	if upper <= 0 {
+		upper = 30 * time.Second
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		remaining := time.Until(dl)
+		if remaining <= 0 {
+			return 0
+		}
+		w := time.Duration(float64(remaining) * frac)
+		if w > upper {
+			w = upper
+		}
+		return w
+	}
+	return upper
+}
+
+func (p *ImagePool) enqueueWaiter() *poolWaiter {
+	w := &poolWaiter{ch: make(chan struct{}, 1)}
+	p.mu.Lock()
+	p.waiters = append(p.waiters, w)
+	p.mu.Unlock()
+	return w
+}
+
+func (p *ImagePool) markWaiterDone(w *poolWaiter) {
+	p.mu.Lock()
+	w.done = true
+	// 如果 chan 已有信号（race：release 唤醒到了同一时刻），转发给下一个 waiter
+	select {
+	case <-w.ch:
+		p.wakeOneLocked()
+	default:
+	}
+	p.mu.Unlock()
+}
+
+// wakeOneLocked 在持锁状态下唤醒队首一个未 done 的 waiter；调用方持 p.mu。
+func (p *ImagePool) wakeOneLocked() {
+	for len(p.waiters) > 0 {
+		w := p.waiters[0]
+		p.waiters = p.waiters[1:]
+		if w.done {
+			continue
+		}
+		select {
+		case w.ch <- struct{}{}:
+		default:
+			// chan 已有信号（不应该，但兜底）
+		}
+		return
+	}
 }
 
 func (p *ImagePool) pickLocked(candidates []PoolAccount, now time.Time) (PoolAccount, bool) {
@@ -128,7 +309,7 @@ func (p *ImagePool) pickLocked(candidates []PoolAccount, now time.Time) (PoolAcc
 		quota int
 		used  time.Time
 	}
-	var ready []scored
+	var known, unknown []scored // known: quota 已探测 (>0)；unknown: quota=0 / 未 probe (-1)
 	for _, a := range candidates {
 		if a.Status != "" && a.Status != "active" {
 			continue
@@ -147,18 +328,48 @@ func (p *ImagePool) pickLocked(candidates []PoolAccount, now time.Time) (PoolAcc
 		if a.LastUsedAt != nil {
 			used = *a.LastUsedAt
 		}
-		ready = append(ready, scored{a, quota, used})
+		s := scored{a, quota, used}
+		if quota > 0 {
+			known = append(known, s)
+		} else {
+			unknown = append(unknown, s)
+		}
 	}
-	if len(ready) == 0 {
+	if len(known) == 0 && len(unknown) == 0 {
 		return PoolAccount{}, false
 	}
-	sort.SliceStable(ready, func(i, j int) bool {
-		if ready[i].quota != ready[j].quota {
-			return ready[i].quota > ready[j].quota
+
+	// 二级梯队：以 ExploreUnknownProb 概率从未探测账号里挑（"自然探测"）。
+	// 池里只有 unknown 时直接走 unknown 分支。
+	useUnknown := len(known) == 0 || (len(unknown) > 0 && p.ExploreUnknownProb > 0 && p.float64Rand() < p.ExploreUnknownProb)
+
+	pickFrom := known
+	sortByQuota := true
+	if useUnknown {
+		pickFrom = unknown
+		sortByQuota = false
+	}
+
+	sort.SliceStable(pickFrom, func(i, j int) bool {
+		if sortByQuota && pickFrom[i].quota != pickFrom[j].quota {
+			return pickFrom[i].quota > pickFrom[j].quota
 		}
-		return ready[i].used.Before(ready[j].used)
+		return pickFrom[i].used.Before(pickFrom[j].used)
 	})
-	return ready[0].PoolAccount, true
+
+	// top-K 随机：在前 K 个里随机挑 1 个，避免 ready[0] 永远被打。
+	// TopKPick <= 0 退化为强单调（旧行为），便于测试与渐进上线。
+	idx := 0
+	if p.TopKPick > 1 {
+		upper := p.TopKPick
+		if upper > len(pickFrom) {
+			upper = len(pickFrom)
+		}
+		if upper > 1 {
+			idx = p.intn(upper)
+		}
+	}
+	return pickFrom[idx].PoolAccount, true
 }
 
 func (p *ImagePool) lease(accountID int64, now time.Time) ReleaseFn {
@@ -171,6 +382,7 @@ func (p *ImagePool) lease(accountID int64, now time.Time) ReleaseFn {
 	return func() {
 		p.mu.Lock()
 		delete(p.leased, accountID)
+		p.wakeOneLocked()
 		p.mu.Unlock()
 	}
 }
@@ -180,10 +392,16 @@ func (p *ImagePool) gcLeaseLocked(now time.Time) {
 		p.leased = map[int64]time.Time{}
 		return
 	}
+	expired := 0
 	for id, expire := range p.leased {
 		if !expire.After(now) {
 			delete(p.leased, id)
+			expired++
 		}
+	}
+	// 兜底过期也应该唤醒等待方（dispatch 卡死场景）
+	for i := 0; i < expired; i++ {
+		p.wakeOneLocked()
 	}
 }
 
@@ -286,6 +504,55 @@ func readQuotaRemaining(extra map[string]any) int {
 		return int(v)
 	}
 	return -1
+}
+
+// PoolStats 描述当前 pool 的健康度，供 handler 周期日志/可观测使用。
+type PoolStats struct {
+	Total    int // 候选账号总数（已 active+schedulable 过滤）
+	Ready    int // quota>0 且未 leased / 未 cooldown 的账号
+	Unknown  int // quota=0 / 未探测的账号（可被 ExploreUnknownProb 自然探测）
+	Cooldown int // 仍在 cooldown 的账号
+	Leased   int // 当前持有 lease 的账号
+	Inactive int // status!=active 或 !schedulable
+}
+
+// Stats 拉一次候选并统计当前池子分布。仅用于观测，可重型。
+func (p *ImagePool) Stats(ctx context.Context, filter PoolFilter) (PoolStats, error) {
+	candidates, err := p.List(ctx, filter)
+	if err != nil {
+		return PoolStats{}, err
+	}
+	now := p.now()
+
+	p.mu.Lock()
+	p.gcLeaseLocked(now)
+	leasedSnapshot := make(map[int64]struct{}, len(p.leased))
+	for id := range p.leased {
+		leasedSnapshot[id] = struct{}{}
+	}
+	p.mu.Unlock()
+
+	st := PoolStats{Total: len(candidates)}
+	for _, a := range candidates {
+		if (a.Status != "" && a.Status != "active") || !a.Schedulable {
+			st.Inactive++
+			continue
+		}
+		if _, busy := leasedSnapshot[a.ID]; busy {
+			st.Leased++
+			continue
+		}
+		if cool := readCooldown(a.Extra); !cool.IsZero() && cool.After(now) {
+			st.Cooldown++
+			continue
+		}
+		if readQuotaRemaining(a.Extra) > 0 {
+			st.Ready++
+		} else {
+			st.Unknown++
+		}
+	}
+	return st, nil
 }
 
 func noopRelease() {}

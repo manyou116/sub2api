@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -121,7 +122,14 @@ type PoolSourceDeps struct {
 // 不直接依赖 service.Account，组装上下文由 LookupAccount 注入回调完成；
 // 这样保持 service/openaiimages 与 service 包解耦。
 type PoolBackedSource struct {
-	deps PoolSourceDeps
+	deps   PoolSourceDeps
+	lastID atomic.Int64 // 最近一次 Select 成功返回的 account ID,供 handler 在 dispatch_failed 时溯源
+}
+
+// LastSelectedAccountID 返回最近一次 Select 选中的账号 ID（0 表示从未选号成功）。
+// 仅供观测/日志使用，不参与调度。
+func (s *PoolBackedSource) LastSelectedAccountID() int64 {
+	return s.lastID.Load()
 }
 
 func NewPoolBackedSource(deps PoolSourceDeps) *PoolBackedSource {
@@ -142,6 +150,7 @@ func (s *PoolBackedSource) Select(ctx context.Context, filter PoolFilter) (Accou
 		release()
 		return nil, nil, errors.New("openaiimages: lookup returned nil view")
 	}
+	s.lastID.Store(view.ID())
 	return view, release, nil
 }
 
