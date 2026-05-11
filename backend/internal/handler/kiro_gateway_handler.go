@@ -117,6 +117,9 @@ func (h *OpenAIGatewayHandler) KiroChatCompletions(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 
 	kiroChatService := service.NewKiroChatService()
+	if h.kiroTokenProvider != nil {
+		kiroChatService.SetTokenProvider(h.kiroTokenProvider)
+	}
 
 	for {
 		reqLog.Debug("kiro_chat_completions.account_selecting", zap.Int("excluded", len(failedAccountIDs)))

@@ -59,12 +59,58 @@ type KiroChatResult struct {
 
 // KiroChatService 转发 OpenAI Chat Completions 到 Kiro CodeWhisperer。
 type KiroChatService struct {
-	tokenSvc *KiroTokenService
+	tokenSvc      *KiroTokenService
+	tokenProvider *KiroTokenProvider // 可选：提供 access_token 自动刷新；nil 时回退到 account.KiroAccessToken()
 }
 
 // NewKiroChatService 构造服务。
 func NewKiroChatService() *KiroChatService {
 	return &KiroChatService{tokenSvc: NewKiroTokenService()}
+}
+
+// SetTokenProvider 注入 token provider，启用 access_token 自动刷新与 401/403 兜底重试。
+// 通常由 wire 在构造 handler 时调用一次。
+func (s *KiroChatService) SetTokenProvider(p *KiroTokenProvider) {
+	s.tokenProvider = p
+}
+
+// resolveAccessToken 返回当前应使用的 access_token。
+// 若注入了 provider，则按需 refresh；否则回退到 account 字段。
+func (s *KiroChatService) resolveAccessToken(ctx context.Context, account *Account) (string, *Account, error) {
+	if s.tokenProvider == nil {
+		return account.KiroAccessToken(), account, nil
+	}
+	tok, err := s.tokenProvider.EnsureFreshToken(ctx, account)
+	if err != nil {
+		// refresh 失败时回退到现有 token，让上游自己报错（可能仍未过期）；
+		// 401/403 阶段会触发 ForceRefresh 兜底。
+		logger.L().Warn("kiro_chat.token_ensure_failed_fallback",
+			zap.Int64("account_id", account.ID),
+			zap.Error(err),
+		)
+		return account.KiroAccessToken(), account, nil
+	}
+	return tok, account, nil
+}
+
+// isKiroAuthError 判断上游响应是否为可通过 refresh 解决的 token 失效错误
+func isKiroAuthError(status int, body []byte) bool {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return false
+	}
+	low := strings.ToLower(string(body))
+	// Kiro 上游典型 401/403 token 失效响应特征：
+	//   "bearer token included in the request is invalid"
+	//   "ExpiredTokenException"
+	//   "The security token included in the request is expired"
+	//   "InvalidSignatureException" (token 被服务端拒签)
+	return strings.Contains(low, "invalid bearer token") ||
+		strings.Contains(low, "bearer token") ||
+		strings.Contains(low, "expiredtoken") ||
+		strings.Contains(low, "expired token") ||
+		strings.Contains(low, "invalidsignature") ||
+		strings.Contains(low, "token expired") ||
+		strings.Contains(low, "unauthorized")
 }
 
 // ============== 模型映射 ==============
@@ -550,31 +596,11 @@ func (s *KiroChatService) ChatCompletions(
 	}
 	endpoint := fmt.Sprintf(kiroGenerateEndpointTmpl, region)
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body2))
-	if err != nil {
-		return nil, fmt.Errorf("kiro: build request: %w", err)
-	}
-
 	machineID := account.KiroMachineID()
 	if machineID == "" {
 		machineID = "sub2api"
 	}
 	ua := fmt.Sprintf(KiroIDEUserAgentTmpl, machineID)
-
-	httpReq.Header.Set("Authorization", "Bearer "+account.KiroAccessToken())
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/vnd.amazon.eventstream")
-	httpReq.Header.Set("X-Amz-User-Agent", ua)
-	httpReq.Header.Set("User-Agent", ua)
-	httpReq.Header.Set("amz-sdk-invocation-id", uuid.NewString())
-	httpReq.Header.Set("amz-sdk-request", "attempt=1; max=3")
-	httpReq.Header.Set("x-amzn-kiro-agent-mode", kiroAgentMode)
-	if account.KiroProfileArn() != "" {
-		httpReq.Header.Set("x-amzn-kiro-profile-arn", account.KiroProfileArn())
-	}
-	if strings.EqualFold(account.KiroProvider(), "Internal") {
-		httpReq.Header.Set("redirect-for-internal", "true")
-	}
 
 	client, err := httpclient.GetClient(httpclient.Options{
 		Timeout:            kiroChatHTTPTimeout,
@@ -584,13 +610,78 @@ func (s *KiroChatService) ChatCompletions(
 		return nil, fmt.Errorf("kiro: build http client: %w", err)
 	}
 
+	// doRequest 用给定的 access_token 发起一次上游调用。
+	// 返回的 *http.Response 调用方负责关闭 body。
+	doRequest := func(accessToken string) (*http.Response, error) {
+		httpReq, herr := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body2))
+		if herr != nil {
+			return nil, fmt.Errorf("kiro: build request: %w", herr)
+		}
+		httpReq.Header.Set("Authorization", "Bearer "+accessToken)
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "application/vnd.amazon.eventstream")
+		httpReq.Header.Set("X-Amz-User-Agent", ua)
+		httpReq.Header.Set("User-Agent", ua)
+		httpReq.Header.Set("amz-sdk-invocation-id", uuid.NewString())
+		httpReq.Header.Set("amz-sdk-request", "attempt=1; max=3")
+		httpReq.Header.Set("x-amzn-kiro-agent-mode", kiroAgentMode)
+		if account.KiroProfileArn() != "" {
+			httpReq.Header.Set("x-amzn-kiro-profile-arn", account.KiroProfileArn())
+		}
+		if strings.EqualFold(account.KiroProvider(), "Internal") {
+			httpReq.Header.Set("redirect-for-internal", "true")
+		}
+		return client.Do(httpReq)
+	}
+
+	accessToken, account, _ := s.resolveAccessToken(ctx, account)
+
 	startedAt := time.Now()
-	resp, err := client.Do(httpReq)
+	resp, err := doRequest(accessToken)
 	if err != nil {
 		return nil, &UpstreamFailoverError{
 			StatusCode:             http.StatusBadGateway,
 			ResponseBody:           []byte(err.Error()),
 			RetryableOnSameAccount: false,
+		}
+	}
+
+	// 401/403 invalid_token 兜底：主动 ForceRefresh 后用同账号重试一次。
+	// 只在注入了 provider 且首次失败时尝试。
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		peekBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		if s.tokenProvider != nil && isKiroAuthError(resp.StatusCode, peekBody) {
+			logger.L().Info("kiro_chat.auth_error_force_refresh",
+				zap.Int64("account_id", account.ID),
+				zap.Int("status", resp.StatusCode),
+			)
+			newToken, refreshedAccount, ferr := s.tokenProvider.ForceRefresh(ctx, account)
+			if ferr == nil && newToken != "" {
+				account = refreshedAccount
+				resp, err = doRequest(newToken)
+				if err != nil {
+					return nil, &UpstreamFailoverError{
+						StatusCode:             http.StatusBadGateway,
+						ResponseBody:           []byte(err.Error()),
+						RetryableOnSameAccount: false,
+					}
+				}
+			} else {
+				// refresh 失败：返回原始 401/403，让上层 quarantine + 切账号
+				return nil, &UpstreamFailoverError{
+					StatusCode:      resp.StatusCode,
+					ResponseBody:    peekBody,
+					ResponseHeaders: resp.Header.Clone(),
+				}
+			}
+		} else {
+			// 非 token 失效类的 401/403（账号被封等），直接走切号路径
+			return nil, &UpstreamFailoverError{
+				StatusCode:      resp.StatusCode,
+				ResponseBody:    peekBody,
+				ResponseHeaders: resp.Header.Clone(),
+			}
 		}
 	}
 	defer func() { _ = resp.Body.Close() }()

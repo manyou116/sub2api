@@ -36,6 +36,7 @@ type OpenAIGatewayHandler struct {
 	imageLimiter            *imageConcurrencyLimiter
 	maxAccountSwitches      int
 	cfg                     *config.Config
+	kiroTokenProvider       *service.KiroTokenProvider
 }
 
 func resolveOpenAIMessagesDispatchMappedModel(apiKey *service.APIKey, requestedModel string) string {
@@ -54,6 +55,7 @@ func NewOpenAIGatewayHandler(
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	errorPassthroughService *service.ErrorPassthroughService,
 	cfg *config.Config,
+	kiroTokenProvider *service.KiroTokenProvider,
 ) *OpenAIGatewayHandler {
 	pingInterval := time.Duration(0)
 	maxAccountSwitches := 3
@@ -73,6 +75,7 @@ func NewOpenAIGatewayHandler(
 		imageLimiter:            &imageConcurrencyLimiter{},
 		maxAccountSwitches:      maxAccountSwitches,
 		cfg:                     cfg,
+		kiroTokenProvider:       kiroTokenProvider,
 	}
 }
 

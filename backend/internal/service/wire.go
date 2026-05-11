@@ -128,6 +128,15 @@ func ProvideAntigravityTokenProvider(
 	return p
 }
 
+// ProvideKiroTokenProvider 创建 KiroTokenProvider，注入 OAuthRefreshAPI + KiroTokenRefresher
+func ProvideKiroTokenProvider(
+	accountRepo AccountRepository,
+	refreshAPI *OAuthRefreshAPI,
+) *KiroTokenProvider {
+	executor := NewKiroTokenRefresher(NewKiroTokenService())
+	return NewKiroTokenProvider(accountRepo, refreshAPI, executor)
+}
+
 // ProvideDashboardAggregationService 创建并启动仪表盘聚合服务
 func ProvideDashboardAggregationService(repo DashboardAggregationRepository, timingWheel *TimingWheelService, cfg *config.Config) *DashboardAggregationService {
 	svc := NewDashboardAggregationService(repo, timingWheel, cfg)
@@ -461,6 +470,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAntigravityTokenProvider,
 	ProvideOpenAITokenProvider,
 	ProvideClaudeTokenProvider,
+	ProvideKiroTokenProvider,
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,
 	NewAccountUsageService,
