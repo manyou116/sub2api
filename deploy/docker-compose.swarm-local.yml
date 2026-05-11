@@ -1,0 +1,137 @@
+# =============================================================================
+# Sub2API Swarm 本地验证版 (Mac/Linux 单节点)
+# =============================================================================
+# 复用宿主机已有的 PostgreSQL / Redis（不在容器内启动 DB）
+# 用本地构建的 sub2api:latest 镜像
+# 单 stack 即可验证：滚动升级、零停机、graceful shutdown
+#
+# 使用：
+#   1. 停掉 air：  pkill -f 'go/bin/air'  （或 Ctrl+C 退出 air 终端）
+#   2. 构建镜像：  bash deploy/build_image.sh        # 产出 sub2api:latest
+#   3. 初始化：    docker swarm init                   # 已 init 过可跳过
+#   4. 部署：      docker stack deploy -c deploy/docker-compose.swarm-local.yml sub2api
+#   5. 看状态：    docker stack ps sub2api
+#   6. 看日志：    docker service logs -f sub2api_sub2api
+#   7. 健康检查：  curl http://127.0.0.1:8080/health
+#
+# 滚动升级验证（改完代码重 build 后）：
+#   bash deploy/build_image.sh
+#   docker service update --force --image sub2api:latest sub2api_sub2api
+#
+# 扩到 2 副本（先验证 1 副本通了再做）：
+#   docker service scale sub2api_sub2api=2
+#
+# 卸载：
+#   docker stack rm sub2api
+# =============================================================================
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "127.0.0.1:8080:8080"
+    configs:
+      - source: caddyfile_swarm_local
+        target: /etc/caddy/Caddyfile
+    networks:
+      - sub2api-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 128M
+
+  sub2api:
+    image: sub2api:latest
+    # 不再暴露 host 端口，由 caddy 反代
+    environment:
+      - AUTO_SETUP=true
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8080
+      - SERVER_MODE=debug
+      - RUN_MODE=standard
+
+      # 连宿主机 PostgreSQL / Redis（host.docker.internal 在 Docker Desktop 内置）
+      - DATABASE_HOST=host.docker.internal
+      - DATABASE_PORT=5432
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=123456
+      - DATABASE_DBNAME=sub2api
+      - DATABASE_SSLMODE=disable
+
+      - REDIS_HOST=host.docker.internal
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+
+      # Admin（首次启动 AUTO_SETUP 用）
+      - ADMIN_EMAIL=admin@sub2api.local
+      - ADMIN_PASSWORD=Admin@123456
+
+      # 关键：JWT 与 TOTP 多副本必须固定（与 air 期间使用的同一份 JWT_SECRET）
+      - JWT_SECRET=8b8c7c531f3fd2137e9e46e85c3d3b8742d92148bd0c003ab5571e21f25faa95
+      - TOTP_ENCRYPTION_KEY=efad53a7df5d538cce963e9cf877b1a255d7fb252c41f8bb0ef723faf3bec881
+
+      - TZ=Asia/Shanghai
+
+      # Graceful shutdown：应用 Server.Shutdown 不设超时，等所有 in-flight 请求结束；
+      # 进程卡死则由下方 stop_grace_period 后 SIGKILL 兜底。
+      # 图片网关常用配置（沿用 docker-compose.dev.yml 的默认值）
+      - GATEWAY_IMAGE_STREAM_DATA_INTERVAL_TIMEOUT=900
+      - GATEWAY_IMAGE_STREAM_KEEPALIVE_INTERVAL=10
+
+    volumes:
+      # 复用宿主机 ./data 目录（缓存图、日志等），air 时期产生的数据保留
+      - ../backend/data:/app/data
+
+    # Mac/Linux 都能识别 host.docker.internal（Linux 需 host-gateway 映射）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    networks:
+      - sub2api-net
+
+    deploy:
+      endpoint_mode: dnsrr
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: start-first
+        delay: 5s
+        monitor: 10s
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+        window: 60s
+      resources:
+        limits:
+          memory: 2G
+
+    # 应用就绪检查（service 必须 healthy 才算 running，新版才会替换旧版）
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    # graceful shutdown 上限：超过则 SIGKILL（强制终止 in-flight 请求）。
+    # 调大可让长流（图像生成、长上下文 SSE）有更多时间自然结束。
+    stop_grace_period: 305s
+
+networks:
+  sub2api-net:
+    driver: overlay
+    attachable: true
+
+configs:
+  caddyfile_swarm_local:
+    file: ./Caddyfile.swarm-local

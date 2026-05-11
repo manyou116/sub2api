@@ -1,0 +1,45 @@
+# =============================================================================
+# Caddy 7 层反代（仅用于本地 Swarm 零停机滚动更新验证）
+# =============================================================================
+# 关键设计：
+#   - 后端 sub2api 用 endpoint_mode: dnsrr，service DNS (tasks.sub2api)
+#     直接返回所有 task IP；某 task 进入 shutting_down 时 swarm 会立刻把它
+#     从 DNS 中移除，新连接只发给健康 task。
+#   - 已建立的 upstream 连接保持不动 —— 旧 sub2api 进程的 Server.Shutdown
+#     会等待 in-flight handler 自然返回，长流不被切断。
+#   - Caddy 自身只单实例，滚动更新只针对后端 sub2api。
+# =============================================================================
+
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	@health path /caddy-health
+	respond @health "caddy ok" 200
+
+	reverse_proxy tasks.sub2api:8080 {
+		lb_policy round_robin
+		lb_try_duration 30s
+		lb_try_interval 250ms
+
+		# 被动失败检测（避免 dynamic resolver 主动 cancel 已活跃 upstream）
+		fail_duration 10s
+		max_fails 1
+		unhealthy_status 5xx
+
+		# 流式响应：放宽超时，让 SSE / 长上下文响应能流到底
+		transport http {
+			read_timeout 10m
+			write_timeout 10m
+			response_header_timeout 60s
+			dial_timeout 5s
+			keepalive 30s
+			keepalive_idle_conns 64
+			versions 1.1
+		}
+
+		header_up X-Real-IP {remote_host}
+	}
+}
