@@ -127,12 +127,12 @@ type ssoRegisterClientReq struct {
 }
 
 type ssoRegisterClientResp struct {
-	ClientID                string `json:"clientId"`
-	ClientSecret            string `json:"clientSecret"`
-	ClientIDIssuedAt        int64  `json:"clientIdIssuedAt"`
-	ClientSecretExpiresAt   int64  `json:"clientSecretExpiresAt"`
-	AuthorizationEndpoint   string `json:"authorizationEndpoint,omitempty"`
-	TokenEndpoint           string `json:"tokenEndpoint,omitempty"`
+	ClientID              string `json:"clientId"`
+	ClientSecret          string `json:"clientSecret"`
+	ClientIDIssuedAt      int64  `json:"clientIdIssuedAt"`
+	ClientSecretExpiresAt int64  `json:"clientSecretExpiresAt"`
+	AuthorizationEndpoint string `json:"authorizationEndpoint,omitempty"`
+	TokenEndpoint         string `json:"tokenEndpoint,omitempty"`
 }
 
 func (s *KiroOAuthDeviceService) registerClient(ctx context.Context, region, proxyURL string) (string, string, error) {

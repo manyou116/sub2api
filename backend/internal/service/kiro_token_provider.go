@@ -12,9 +12,6 @@ const (
 	// kiroTokenRefreshSkew 距离 expires_at 还剩多少时主动 refresh
 	// 与 OpenAI 一致：3 分钟（足够覆盖一次完整请求 + 重试）
 	kiroTokenRefreshSkew = 3 * time.Minute
-
-	// kiroForceRefreshLockTTL 主动 refresh（401/403 invalid_token 兜底）的锁 TTL
-	kiroForceRefreshLockTTL = 30 * time.Second
 )
 
 // KiroTokenProvider 提供按需获取有效 Kiro access_token 的能力。
@@ -23,7 +20,7 @@ const (
 //   - 不引入 token cache 层（直接落 DB；Kiro 请求频次远低于 OpenAI）
 //   - 复用 OAuthRefreshAPI 的分布式锁 + DB 重读 + 竞争恢复
 //   - 提供两种入口：EnsureFreshToken（按需，过期前 skew 内才刷）
-//                   ForceRefresh（401/403 兜底，强制刷一次）
+//     ForceRefresh（401/403 兜底，强制刷一次）
 type KiroTokenProvider struct {
 	accountRepo AccountRepository
 	refreshAPI  *OAuthRefreshAPI

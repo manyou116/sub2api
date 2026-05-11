@@ -136,7 +136,9 @@ func (r *HTTPRequest) DisableAutoReadResponse() *HTTPRequest {
 func (r *HTTPRequest) Get(rawURL string) (*HTTPResponse, error) { return r.do(http.MethodGet, rawURL) }
 
 // Post 发送 POST 请求。
-func (r *HTTPRequest) Post(rawURL string) (*HTTPResponse, error) { return r.do(http.MethodPost, rawURL) }
+func (r *HTTPRequest) Post(rawURL string) (*HTTPResponse, error) {
+	return r.do(http.MethodPost, rawURL)
+}
 
 // Put 发送 PUT 请求。
 func (r *HTTPRequest) Put(rawURL string) (*HTTPResponse, error) { return r.do(http.MethodPut, rawURL) }

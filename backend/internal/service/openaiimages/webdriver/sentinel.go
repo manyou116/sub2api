@@ -3,13 +3,13 @@ package webdriver
 import (
 	"context"
 	"errors"
+	"go.uber.org/zap"
 	"io"
 	"net/http"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
-	"go.uber.org/zap"
 
 	pkglogger "github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
