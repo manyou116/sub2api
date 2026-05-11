@@ -3,10 +3,10 @@ package webdriver
 import (
 	"errors"
 	"fmt"
+	"github.com/tidwall/gjson"
 	"net/http"
 	"strings"
 	"time"
-	"github.com/tidwall/gjson"
 )
 
 // 四类 typed error，给上层 pool / dispatch 做精确错误分支。

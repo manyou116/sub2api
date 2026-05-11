@@ -8,8 +8,8 @@ import (
 // KiroTokenRefresher 处理 Kiro OAuth token 自动刷新。
 //
 // 实现 TokenRefresher + OAuthRefreshExecutor 接口，被两处使用：
-//   1. TokenRefreshService 后台 worker：周期扫描快过期的 active 账号，提前 refresh
-//   2. OAuthRefreshAPI：按需 refresh（带分布式锁，避免多副本竞态）
+//  1. TokenRefreshService 后台 worker：周期扫描快过期的 active 账号，提前 refresh
+//  2. OAuthRefreshAPI：按需 refresh（带分布式锁，避免多副本竞态）
 //
 // 与 Claude/OpenAI 一致的策略：
 //   - 仅处理 Kiro 平台账号
