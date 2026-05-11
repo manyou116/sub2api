@@ -167,10 +167,10 @@ func runMainServer() {
 
 	log.Println("Shutting down server...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := app.Server.Shutdown(ctx); err != nil {
+	// 不设应用层超时：让 Server.Shutdown 等所有 in-flight 请求（含长流 SSE）
+	// 自然结束。若进程卡死，由容器编排的 stop_grace_period 后 SIGKILL 兜底
+	// （Docker Swarm 当前: 305s）。
+	if err := app.Server.Shutdown(context.Background()); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
