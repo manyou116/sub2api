@@ -705,13 +705,16 @@ func (h *OpenAIImagesV2Handler) ServeCachedFile(c *gin.Context) {
 	if dot := strings.IndexByte(raw, '.'); dot > 0 {
 		id = raw[:dot]
 	}
-	data, mime, ok := h.cache.Get(id)
+	file, mime, modTime, ok := h.cache.OpenForServe(id)
 	if !ok {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
+	defer func() { _ = file.Close() }()
 	c.Header("Cache-Control", "public, max-age=86400, immutable")
-	c.Data(http.StatusOK, mime, data)
+	c.Header("Content-Type", mime)
+	// http.ServeContent 自动处理 ETag/Range/Content-Length，并用 io.Copy 流式响应。
+	http.ServeContent(c.Writer, c.Request, raw, modTime, file)
 }
 
 // applyDefaultResponseFormat 在客户端未显式指定 response_format 时，

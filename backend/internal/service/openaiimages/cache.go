@@ -86,6 +86,9 @@ func (c *ImageCache) Put(data []byte, mime string) (string, error) {
 }
 
 // Get 读取字节与 mime；过期或不存在返回 ok=false。
+//
+// 注意：会一次性把整个文件读进内存。HTTP 直接响应路径请用 OpenForServe，
+// 它走 io.Copy 流式响应，单文件几乎不增长堆。
 func (c *ImageCache) Get(id string) ([]byte, string, bool) {
 	c.mu.RLock()
 	e, ok := c.entries[id]
@@ -102,6 +105,32 @@ func (c *ImageCache) Get(id string) ([]byte, string, bool) {
 		return nil, "", false
 	}
 	return data, e.mime, true
+}
+
+// OpenForServe 打开 cache 文件用于流式响应（http.ServeContent）。
+// 调用方必须 Close() 返回的 *os.File。过期或不存在返回 ok=false。
+func (c *ImageCache) OpenForServe(id string) (f *os.File, mime string, modTime time.Time, ok bool) {
+	c.mu.RLock()
+	e, exists := c.entries[id]
+	c.mu.RUnlock()
+	if !exists {
+		return nil, "", time.Time{}, false
+	}
+	if time.Now().After(e.expires) {
+		c.deleteEntry(id, e.mime)
+		return nil, "", time.Time{}, false
+	}
+	path := c.fileFor(id, e.mime)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, "", time.Time{}, false
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, "", time.Time{}, false
+	}
+	return file, e.mime, stat.ModTime(), true
 }
 
 func (c *ImageCache) fileFor(id, mime string) string {
