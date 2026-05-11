@@ -639,6 +639,77 @@ export async function batchRefreshKiroUsage(
   return data
 }
 
+// ============== Kiro IdC Device Code OAuth ==============
+
+export interface KiroOAuthStartRequest {
+  startUrl?: string
+  region?: string
+  group_ids?: number[]
+  concurrency?: number
+  skip_mixed_channel_check?: boolean
+  label?: string
+}
+
+export interface KiroOAuthStartResponse {
+  sessionId: string
+  verificationUri: string
+  verificationUriComplete: string
+  userCode: string
+  expiresIn: number
+  interval: number
+}
+
+export interface KiroOAuthPollResponse {
+  status: 'pending' | 'done' | 'error'
+  accountId?: number
+  email?: string
+  error?: string
+  userCode?: string
+  startedAt?: number
+  finishedAt?: number
+}
+
+export async function startKiroOAuth(payload: KiroOAuthStartRequest): Promise<KiroOAuthStartResponse> {
+  const { data } = await apiClient.post<KiroOAuthStartResponse>('/admin/accounts/kiro/oauth/start', payload)
+  return data
+}
+
+export async function pollKiroOAuth(sessionId: string): Promise<KiroOAuthPollResponse> {
+  const { data } = await apiClient.get<KiroOAuthPollResponse>('/admin/accounts/kiro/oauth/poll', {
+    params: { sessionId },
+  })
+  return data
+}
+
+// ============== Kiro Social RefreshToken Bulk Import ==============
+
+export interface KiroSocialImportItemResult {
+  index: number
+  token_preview: string
+  accountId?: number
+  email?: string
+  error?: string
+}
+
+export interface KiroSocialImportResponse {
+  results: KiroSocialImportItemResult[]
+  summary: { total: number; imported: number; failed: number }
+}
+
+export async function importKiroSocialTokens(payload: {
+  provider: 'Google' | 'Github'
+  tokens: string[]
+  group_ids?: number[]
+  concurrency?: number
+  skip_mixed_channel_check?: boolean
+}): Promise<KiroSocialImportResponse> {
+  const { data } = await apiClient.post<KiroSocialImportResponse>(
+    '/admin/accounts/kiro/oauth/social-import',
+    payload
+  )
+  return data
+}
+
 /**
  * Get Antigravity default model mapping from backend
  * @returns Default model mapping (from -> to)
@@ -760,6 +831,9 @@ export const accountsAPI = {
   importKiro,
   refreshKiroUsage,
   batchRefreshKiroUsage,
+  startKiroOAuth,
+  pollKiroOAuth,
+  importKiroSocialTokens,
   getAntigravityDefaultModelMapping,
   batchClearError,
   batchRefresh,

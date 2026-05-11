@@ -300,6 +300,13 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		accounts.POST("/:id/kiro-usage", h.Admin.Account.RefreshKiroUsage)
 		accounts.POST("/kiro/batch-refresh-usage", h.Admin.Account.BatchRefreshKiroUsage)
 
+		// Kiro IdC Device Code OAuth 登录
+		accounts.POST("/kiro/oauth/start", h.Admin.Account.StartKiroOAuth)
+		accounts.GET("/kiro/oauth/poll", h.Admin.Account.PollKiroOAuth)
+
+		// Kiro Google/GitHub Social RefreshToken 批量导入
+		accounts.POST("/kiro/oauth/social-import", h.Admin.Account.ImportKiroSocialTokens)
+
 		// Antigravity 默认模型映射
 		accounts.GET("/antigravity/default-model-mapping", h.Admin.Account.GetAntigravityDefaultModelMapping)
 

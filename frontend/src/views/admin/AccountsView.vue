@@ -1305,7 +1305,10 @@ const handleBulkUpdated = () => {
   reload()
 }
 const handleDataImported = () => { showImportData.value = false; reload() }
-const handleKiroImported = () => { showImportKiro.value = false; reload() }
+const handleKiroImported = () => {
+  showImportKiro.value = false
+  reload()
+}
 
 // ============== Kiro 配额刷新 ==============
 const batchKiroRefreshing = ref(false)

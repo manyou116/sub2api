@@ -147,6 +147,58 @@
             <Icon name="cloud" size="sm" />
             Antigravity
           </button>
+          <button
+            type="button"
+            @click="form.platform = 'kiro'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'kiro'
+                ? 'bg-white text-amber-600 shadow-sm dark:bg-dark-600 dark:text-amber-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <Icon name="key" size="sm" />
+            Kiro
+          </button>
+        </div>
+      </div>
+
+      <!-- Kiro: 选择登录方式（3 卡片直接打开对应弹窗） -->
+      <div v-if="form.platform === 'kiro'" class="space-y-4">
+        <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+          Kiro 账号有 3 种导入方式，请选其中之一。导入完成后会自动出现在账号列表，可在那里再编辑分组等设置。
+        </div>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <button
+            type="button"
+            class="group rounded-xl border border-gray-200 bg-white p-4 text-left transition hover:border-amber-400 hover:shadow-md dark:border-dark-700 dark:bg-dark-800 dark:hover:border-amber-500"
+            @click="kiroChild = 'json'"
+          >
+            <div class="text-sm font-semibold text-gray-900 dark:text-white">JSON 手动导入</div>
+            <div class="mt-1 text-xs text-gray-500 dark:text-dark-300">
+              粘贴 kiro-account-manager 导出的 JSON（Social / IdC 4 种均支持）
+            </div>
+          </button>
+          <button
+            type="button"
+            class="group rounded-xl border border-gray-200 bg-white p-4 text-left transition hover:border-amber-400 hover:shadow-md dark:border-dark-700 dark:bg-dark-800 dark:hover:border-amber-500"
+            @click="kiroChild = 'oauth'"
+          >
+            <div class="text-sm font-semibold text-gray-900 dark:text-white">IdC OAuth 登录</div>
+            <div class="mt-1 text-xs text-gray-500 dark:text-dark-300">
+              Builder ID / 企业 IdC 在浏览器内授权（自动获取 token，无需手填）
+            </div>
+          </button>
+          <button
+            type="button"
+            class="group rounded-xl border border-gray-200 bg-white p-4 text-left transition hover:border-amber-400 hover:shadow-md dark:border-dark-700 dark:bg-dark-800 dark:hover:border-amber-500"
+            @click="kiroChild = 'social'"
+          >
+            <div class="text-sm font-semibold text-gray-900 dark:text-white">Social RT 批量</div>
+            <div class="mt-1 text-xs text-gray-500 dark:text-dark-300">
+              一行一个 Google / GitHub refresh_token，后端逐条验证后落库
+            </div>
+          </button>
         </div>
       </div>
 
@@ -2793,6 +2845,7 @@
           {{ t('common.cancel') }}
         </button>
         <button
+          v-if="form.platform !== 'kiro'"
           type="submit"
           form="create-account-form"
           :disabled="submitting"
@@ -3097,6 +3150,23 @@
     @confirm="handleMixedChannelConfirm"
     @cancel="handleMixedChannelCancel"
   />
+
+  <!-- Kiro 子流程弹窗 -->
+  <ImportKiroModal
+    :show="kiroChild === 'json'"
+    @close="kiroChild = null"
+    @imported="handleKiroChildImported"
+  />
+  <KiroDeviceCodeOAuthModal
+    :show="kiroChild === 'oauth'"
+    @close="kiroChild = null"
+    @imported="handleKiroChildImported"
+  />
+  <ImportKiroSocialBulkModal
+    :show="kiroChild === 'social'"
+    @close="kiroChild = null"
+    @imported="handleKiroChildImported"
+  />
 </template>
 
 <script setup lang="ts">
@@ -3153,6 +3223,9 @@ import {
   type OpenAIWSMode
 } from '@/utils/openaiWsMode'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
+import ImportKiroModal from '@/components/admin/account/ImportKiroModal.vue'
+import KiroDeviceCodeOAuthModal from '@/components/admin/account/KiroDeviceCodeOAuthModal.vue'
+import ImportKiroSocialBulkModal from '@/components/admin/account/ImportKiroSocialBulkModal.vue'
 
 // Type for exposed OAuthAuthorizationFlow component
 // Note: defineExpose automatically unwraps refs, so we use the unwrapped types
@@ -3258,6 +3331,11 @@ interface TempUnschedRuleForm {
 // State
 const step = ref(1)
 const submitting = ref(false)
+const kiroChild = ref<'json' | 'oauth' | 'social' | null>(null)
+const handleKiroChildImported = () => {
+  kiroChild.value = null
+  emit('created')
+}
 const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_account'>('oauth-based') // UI selection for account category
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
