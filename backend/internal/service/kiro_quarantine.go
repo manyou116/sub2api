@@ -131,7 +131,10 @@ func IsKiroModelQuarantined(accountID int64, model string) bool {
 func HitModelCapacity(accountID int64, model string) (time.Duration, bool) {
 	key := kiroModelKey{accountID, model}
 	v, _ := kiroModelQuarantineMap.LoadOrStore(key, &kiroModelState{})
-	st := v.(*kiroModelState)
+	st, ok := v.(*kiroModelState)
+	if !ok || st == nil {
+		return 0, false
+	}
 
 	st.mu.Lock()
 	defer st.mu.Unlock()

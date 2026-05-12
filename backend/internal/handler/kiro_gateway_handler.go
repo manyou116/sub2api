@@ -168,7 +168,7 @@ func (h *OpenAIGatewayHandler) KiroChatCompletions(c *gin.Context) {
 				reqLog.Warn("kiro_chat_completions.upstream_error",
 					zap.Int64("account_id", account.ID),
 					zap.Int("upstream_status", failoverErr.StatusCode),
-					zap.String("class", string(decision.Class)),
+					zap.String("class", decision.Class.String()),
 					zap.Duration("account_cooldown", decision.AccountCooldown),
 					zap.Duration("model_cooldown", decision.ModelCooldown),
 					zap.Bool("client_flood", decision.ClientFlood),
