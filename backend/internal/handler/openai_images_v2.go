@@ -89,9 +89,11 @@ func NewOpenAIImagesV2Handler(
 			MaxAttempts:              8,
 			AuthCooldown:             time.Hour,
 			DefaultRateLimitCooldown: 5 * time.Minute,
-			AttemptBudget:            75 * time.Second,
-			RefusalRetryLimit:        3,
-			Sleep:                    time.Sleep,
+			// 单次 driver 调用预算：4K 通过 codex /responses 路径正常 60-180s，
+			// 留 200s 容忍偶发慢响应（Plus 账号繁忙时段）。
+			AttemptBudget:     200 * time.Second,
+			RefusalRetryLimit: 3,
+			Sleep:             time.Sleep,
 		},
 	}
 
@@ -270,7 +272,9 @@ func (h *OpenAIImagesV2Handler) run(c *gin.Context, req *openaiimages.ImagesRequ
 		zap.String("driver", cap.DriverName),
 	)
 
-	dispatchCtx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
+	// 整个分发流程的硬上限：覆盖 1 次重试（200s）+ 重选号 + 网络抖动余量。
+	// 4K 在 codex /responses 路径下偶发 150s+，旧值 90s 远不够，调到 240s。
+	dispatchCtx, cancel := context.WithTimeout(c.Request.Context(), 240*time.Second)
 	defer cancel()
 	upstreamStart := time.Now()
 	res, err := openaiimages.Dispatch(dispatchCtx, h.source, h.registry, in, h.dispatchO)

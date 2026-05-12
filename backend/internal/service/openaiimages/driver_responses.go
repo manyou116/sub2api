@@ -11,8 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/imroc/req/v3"
 	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
 )
 
 // ResponsesToolDriver 走 OpenAI /responses + image_generation tool 生图。
@@ -230,10 +232,28 @@ func (d *ResponsesToolDriver) forwardOAuth(ctx context.Context, account AccountV
 		r = r.SetHeader("user-agent", defaultCodexUA)
 	}
 
-	resp, err := r.Post(d.oauthBaseURL() + codexResponsesPath)
+	url := d.oauthBaseURL() + codexResponsesPath
+	postStart := d.now()
+	logger.L().Info("openaiimages.responses.post_start",
+		zap.String("url", url),
+		zap.Int64("account_id", account.ID()),
+		zap.String("size", request.Size),
+		zap.Int("body_bytes", len(bodyBytes)),
+	)
+	resp, err := r.Post(url)
 	if err != nil {
+		logger.L().Warn("openaiimages.responses.post_failed",
+			zap.Int64("account_id", account.ID()),
+			zap.Duration("elapsed", d.now().Sub(postStart)),
+			zap.Error(err),
+		)
 		return nil, &TransportError{Reason: err.Error()}
 	}
+	logger.L().Info("openaiimages.responses.http_status",
+		zap.Int64("account_id", account.ID()),
+		zap.Int("status", resp.StatusCode),
+		zap.Duration("elapsed", d.now().Sub(postStart)),
+	)
 	return d.parseResponseSSE(resp, request)
 }
 
@@ -532,7 +552,12 @@ func streamSSEPayloads(resp *req.Response, fn func([]byte)) error {
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 
-	var lines [][]byte
+	streamStart := time.Now()
+	var (
+		lines      [][]byte
+		eventCount int
+		firstSeen  bool
+	)
 	flush := func() {
 		if len(lines) == 0 {
 			return
@@ -561,13 +586,31 @@ func streamSSEPayloads(resp *req.Response, fn func([]byte)) error {
 			if string(data) == "[DONE]" {
 				continue
 			}
+			if !firstSeen {
+				firstSeen = true
+				etype := gjson.GetBytes(data, "type").String()
+				logger.L().Info("openaiimages.responses.first_sse_event",
+					zap.Duration("ttfb", time.Since(streamStart)),
+					zap.String("event_type", etype),
+				)
+			}
+			eventCount++
 			lines = append(lines, append([]byte(nil), data...))
 		}
 	}
 	flush()
 	if err := scanner.Err(); err != nil {
+		logger.L().Warn("openaiimages.responses.sse_scan_failed",
+			zap.Duration("elapsed", time.Since(streamStart)),
+			zap.Int("events", eventCount),
+			zap.Error(err),
+		)
 		return &TransportError{Reason: "sse scan: " + err.Error()}
 	}
+	logger.L().Info("openaiimages.responses.sse_done",
+		zap.Duration("elapsed", time.Since(streamStart)),
+		zap.Int("events", eventCount),
+	)
 	return nil
 }
 
