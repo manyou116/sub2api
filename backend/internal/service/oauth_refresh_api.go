@@ -165,9 +165,25 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}, nil
 }
 
-// isInvalidGrantError 检查错误是否为 invalid_grant
+// isInvalidGrantError 检查错误是否为 invalid_grant，
+// 或等价的上游"凭证失效"信号（如 Kiro Social 端点返回的 "Bad credentials"），
+// 用于触发 race recovery（DB 重读判断 RT 是否已被并发 worker 更新）。
 func isInvalidGrantError(err error) bool {
-	return err != nil && strings.Contains(strings.ToLower(err.Error()), "invalid_grant")
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	needles := []string{
+		"invalid_grant",     // OAuth 标准
+		"bad credentials",   // Kiro Social（GitHub OAuth 包装层）
+		"kiro: auth failed", // 我们的 ErrKiroAuthFailed sentinel
+	}
+	for _, n := range needles {
+		if strings.Contains(msg, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // tryRecoverFromRefreshRace 在 invalid_grant 错误后尝试竞争恢复

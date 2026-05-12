@@ -1,5 +1,5 @@
 <template>
-  <Modal :show="show" :title="t('admin.kiro.quarantine.title')" size="lg" @close="$emit('close')">
+  <BaseDialog :show="show" :title="t('admin.kiro.quarantine.title')" width="wide" @close="$emit('close')">
     <div class="space-y-3">
       <div class="flex items-center justify-between">
         <p class="text-sm text-gray-600 dark:text-gray-400">
@@ -45,13 +45,13 @@
         </tbody>
       </table>
     </div>
-  </Modal>
+  </BaseDialog>
 </template>
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import Modal from '@/components/common/Modal.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import { listKiroQuarantine, clearKiroQuarantine, type KiroQuarantineEntry } from '@/api/admin/accounts'
 
 const props = defineProps<{ show: boolean }>()

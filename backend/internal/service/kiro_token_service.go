@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -134,12 +135,39 @@ type kiroSocialRefreshReq struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
+// kiroSocialRefreshResp 兼容上游可能返回的两种字段命名风格：
+//   - camelCase（Kiro IDE 桌面端常见）：accessToken / refreshToken / expiresIn / idToken / profileArn
+//   - snake_case（GitHub OAuth/OIDC 标准）：access_token / refresh_token / expires_in / id_token / profile_arn
+// json.Unmarshal 对每个目标字段尝试匹配 tag，多 tag 同 struct 不支持，因此用并列字段后合并。
 type kiroSocialRefreshResp struct {
-	AccessToken  string `json:"accessToken"`
-	RefreshToken string `json:"refreshToken"`
-	ExpiresIn    int64  `json:"expiresIn"`
-	IDToken      string `json:"idToken,omitempty"`
-	ProfileArn   string `json:"profileArn,omitempty"`
+	AccessToken       string `json:"accessToken"`
+	AccessTokenSnake  string `json:"access_token"`
+	RefreshToken      string `json:"refreshToken"`
+	RefreshTokenSnake string `json:"refresh_token"`
+	ExpiresIn         int64  `json:"expiresIn"`
+	ExpiresInSnake    int64  `json:"expires_in"`
+	IDToken           string `json:"idToken,omitempty"`
+	IDTokenSnake      string `json:"id_token,omitempty"`
+	ProfileArn        string `json:"profileArn,omitempty"`
+	ProfileArnSnake   string `json:"profile_arn,omitempty"`
+}
+
+func (r *kiroSocialRefreshResp) normalize() {
+	if r.AccessToken == "" {
+		r.AccessToken = r.AccessTokenSnake
+	}
+	if r.RefreshToken == "" {
+		r.RefreshToken = r.RefreshTokenSnake
+	}
+	if r.ExpiresIn == 0 {
+		r.ExpiresIn = r.ExpiresInSnake
+	}
+	if r.IDToken == "" {
+		r.IDToken = r.IDTokenSnake
+	}
+	if r.ProfileArn == "" {
+		r.ProfileArn = r.ProfileArnSnake
+	}
 }
 
 func (s *KiroTokenService) refreshSocial(ctx context.Context, p refreshSocialParams) (*KiroTokenInfo, error) {
@@ -166,15 +194,27 @@ func (s *KiroTokenService) refreshSocial(ctx context.Context, p refreshSocialPar
 	if err := json.Unmarshal(respBody, &data); err != nil {
 		return nil, fmt.Errorf("kiro social: parse response: %w (body=%s)", err, truncateBody(respBody))
 	}
+	data.normalize()
 	if data.AccessToken == "" {
-		return nil, fmt.Errorf("kiro social: empty access_token in response")
+		return nil, fmt.Errorf("kiro social: empty access_token in response (body=%s)", truncateBody(respBody))
 	}
 
 	// Social 刷新有些场景上游不返回新的 refreshToken，沿用旧值
 	rt := data.RefreshToken
+	rotated := rt != "" && rt != p.RefreshToken
 	if rt == "" {
 		rt = p.RefreshToken
 	}
+
+	// 诊断日志：定位 "Bad credentials" 反复需要重新导入 RT 的根因。
+	// 只打印响应字段名集合 + 是否 rotation，**不打印 token 明文**。
+	slog.Info("kiro_social_refresh_ok",
+		"upstream_keys", upstreamJSONKeys(respBody),
+		"rt_rotated", rotated,
+		"rt_returned_empty", data.RefreshToken == "",
+		"expires_in", data.ExpiresIn,
+		"machine_id_set", p.MachineID != "",
+	)
 
 	return &KiroTokenInfo{
 		AccessToken:  data.AccessToken,
@@ -327,6 +367,20 @@ func truncateBody(b []byte) string {
 		return string(b)
 	}
 	return string(b[:maxLen]) + "...[truncated]"
+}
+
+// upstreamJSONKeys 把响应体顶层 JSON object 的字段名提取为有序列表，
+// 便于诊断字段名命名风格（camelCase vs snake_case）问题，不泄漏 token 明文。
+func upstreamJSONKeys(body []byte) []string {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(raw))
+	for k := range raw {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // ApplyKiroTokenInfo 把刷新成功的 token 写回 account.Credentials，
