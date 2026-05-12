@@ -548,7 +548,7 @@ func classifyHTTPErrorStream(resp *req.Response) error {
 // streamSSEPayloads 按行读取 resp.Body，把 `data:` 行累积到一个空行触发的批次，
 // 把每个批次拼接后送给 fn。
 func streamSSEPayloads(resp *req.Response, fn func([]byte)) error {
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 
