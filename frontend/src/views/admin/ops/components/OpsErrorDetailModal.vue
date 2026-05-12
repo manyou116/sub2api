@@ -114,6 +114,21 @@
         <pre class="mt-4 max-h-[520px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"><code>{{ prettyJSON(primaryResponseBody || '') }}</code></pre>
       </div>
 
+      <!-- Client request body (sanitized + truncated) -->
+      <div v-if="detail.request_body" class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">Request Body (Client → Us)</h3>
+          <span v-if="detail.request_body_truncated" class="rounded bg-yellow-100 px-2 py-0.5 text-xs text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200">truncated</span>
+        </div>
+        <pre class="mt-4 max-h-[400px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"><code>{{ prettyJSON(detail.request_body) }}</code></pre>
+      </div>
+
+      <!-- Upstream request body (what we sent to upstream, e.g. CodeWhisperer/Claude) -->
+      <div v-if="detail.upstream_request_body" class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
+        <h3 class="text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">Upstream Request Body (Us → Upstream)</h3>
+        <pre class="mt-4 max-h-[400px] overflow-auto rounded-xl border border-gray-200 bg-white p-4 text-xs text-gray-800 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-100"><code>{{ prettyJSON(detail.upstream_request_body) }}</code></pre>
+      </div>
+
       <!-- Upstream errors list (only for request errors) -->
       <div v-if="showUpstreamList" class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
         <div class="flex flex-wrap items-center justify-between gap-2">

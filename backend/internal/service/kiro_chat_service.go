@@ -378,13 +378,19 @@ func buildKiroPayload(req *kiroOpenAIRequest, modelID, profileArn string) (*kiro
 			_, _ = systemPrompt.WriteString(text)
 		case "user":
 			if text == "" {
-				continue
+				// content 可能全是 image / 其他非文本 part；不能 drop（会破坏对话顺序），
+				// 给一个占位字符让 CodeWhisperer 校验通过
+				text = " "
 			}
 			msgs = append(msgs, normMsg{role: "user", content: text})
 		case "assistant":
 			// assistant 可能有 tool_calls 而没有 content
 			if text == "" && len(m.ToolCalls) == 0 {
 				continue
+			}
+			if text == "" {
+				// 仅有 tool_calls 时给占位字符，避免上游空 content 拒绝
+				text = " "
 			}
 			msgs = append(msgs, normMsg{role: "assistant", content: text, toolCalls: m.ToolCalls})
 		case "tool":
@@ -397,9 +403,9 @@ func buildKiroPayload(req *kiroOpenAIRequest, modelID, profileArn string) (*kiro
 	}
 
 	// 工具结果只能挂在 user 消息上：若最后一条是 tool（没有后续 user），
-	// 合成一个空 user 容纳 toolResults。
+	// 合成一个 user 容纳 toolResults（CodeWhisperer 拒绝空 content，给一个占位字符）
 	if msgs[len(msgs)-1].role == "tool" {
-		msgs = append(msgs, normMsg{role: "user", content: ""})
+		msgs = append(msgs, normMsg{role: "user", content: " "})
 	}
 
 	// 把 system prompt 拼到首个 user 消息前
@@ -450,6 +456,18 @@ func buildKiroPayload(req *kiroOpenAIRequest, modelID, profileArn string) (*kiro
 	}
 	current := items[len(items)-1]
 	historyMsgs := items[:len(items)-1]
+
+	// === 防御：CodeWhisperer 严格校验，空 content 直接 400 "Improperly formed request" ===
+	// 凡是要发上游的字符串字段，最少给 1 个空格占位
+	const blankPlaceholder = " "
+	if current.content == "" {
+		current.content = blankPlaceholder
+	}
+	for i := range historyMsgs {
+		if historyMsgs[i].content == "" {
+			historyMsgs[i].content = blankPlaceholder
+		}
+	}
 
 	currentCtx := buildKiroUserCtx(toolWrappers, current.toolResults)
 
@@ -589,6 +607,10 @@ func (s *KiroChatService) ChatCompletions(
 	if err != nil {
 		return nil, fmt.Errorf("kiro: marshal payload: %w", err)
 	}
+
+	// 把发给上游的真实 payload 写入 ops context，便于 admin 后台 debug
+	// "Improperly formed request" 等上游错误（kiro_chat_service.go:606+）
+	setOpsUpstreamRequestBody(c, body2)
 
 	region := account.KiroRegion()
 	if region == "" {
