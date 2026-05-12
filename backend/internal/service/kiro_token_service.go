@@ -138,6 +138,7 @@ type kiroSocialRefreshReq struct {
 // kiroSocialRefreshResp 兼容上游可能返回的两种字段命名风格：
 //   - camelCase（Kiro IDE 桌面端常见）：accessToken / refreshToken / expiresIn / idToken / profileArn
 //   - snake_case（GitHub OAuth/OIDC 标准）：access_token / refresh_token / expires_in / id_token / profile_arn
+//
 // json.Unmarshal 对每个目标字段尝试匹配 tag，多 tag 同 struct 不支持，因此用并列字段后合并。
 type kiroSocialRefreshResp struct {
 	AccessToken       string `json:"accessToken"`
