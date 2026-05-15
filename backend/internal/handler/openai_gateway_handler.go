@@ -152,6 +152,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	// 兜底修复已知不规范客户端（如 OpenClaw issue #52827）：
+	// 把 input[].function_call.id 从 call_xxx 改写为 fc_xxx，避免上游 422。
+	// 合规客户端零影响。
+	body = sanitizeOpenAIResponsesInput(body)
+
 	// 使用 gjson 只读提取字段做校验，避免完整 Unmarshal
 	modelResult := gjson.GetBytes(body, "model")
 	if !modelResult.Exists() || modelResult.Type != gjson.String || modelResult.String() == "" {
