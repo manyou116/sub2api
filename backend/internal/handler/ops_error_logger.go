@@ -45,6 +45,11 @@ const (
 	opsCodeSubscriptionNotFound = "SUBSCRIPTION_NOT_FOUND"
 	opsCodeSubscriptionInvalid  = "SUBSCRIPTION_INVALID"
 	opsCodeUserInactive         = "USER_INACTIVE"
+
+	// 图像驱动业务限制码 — 上游/模型对用户输入做出的拒绝，属用户输入侧问题，
+	// 不应计入服务可用性 (SLA)。driver 在 classifyDispatchError 中以小写字面量写入。
+	opsCodeContentPolicyViolation = "content_policy_violation"
+	opsCodeModelNoImage           = "model_no_image"
 )
 
 const (
@@ -1180,7 +1185,8 @@ func classifyOpsIsRetryable(errType string, statusCode int) bool {
 
 func classifyOpsIsBusinessLimited(errType, phase, code string, status int, message string) bool {
 	switch strings.TrimSpace(code) {
-	case opsCodeInsufficientBalance, opsCodeUsageLimitExceeded, opsCodeSubscriptionNotFound, opsCodeSubscriptionInvalid, opsCodeUserInactive:
+	case opsCodeInsufficientBalance, opsCodeUsageLimitExceeded, opsCodeSubscriptionNotFound, opsCodeSubscriptionInvalid, opsCodeUserInactive,
+		opsCodeContentPolicyViolation, opsCodeModelNoImage:
 		return true
 	}
 	if phase == "billing" || phase == "concurrency" {

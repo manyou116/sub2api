@@ -275,6 +275,38 @@ func TestNormalizeOpsErrorType(t *testing.T) {
 	}
 }
 
+func TestClassifyOpsIsBusinessLimited(t *testing.T) {
+	tests := []struct {
+		name    string
+		errType string
+		phase   string
+		code    string
+		status  int
+		message string
+		want    bool
+	}{
+		{"billing balance code", "billing_error", "billing", "INSUFFICIENT_BALANCE", 402, "", true},
+		{"subscription code", "subscription_error", "billing", "SUBSCRIPTION_NOT_FOUND", 402, "", true},
+		{"user inactive code", "api_error", "auth", "USER_INACTIVE", 403, "", true},
+
+		// 图像驱动业务限制：用户输入侧问题，不计 SLA。
+		{"image content policy violation", "invalid_request_error", "request", "content_policy_violation", 400, "rejected by content policy", true},
+		{"image model no image", "invalid_request_error", "request", "model_no_image", 400, "model produced no image", true},
+		{"content policy code with surrounding spaces", "invalid_request_error", "request", "  content_policy_violation  ", 400, "", true},
+
+		// 仍计 SLA 的情形
+		{"plain upstream 500", "upstream_error", "upstream", "", 500, "boom", false},
+		{"plain client 400", "invalid_request_error", "request", "", 400, "missing field", false},
+		{"upstream rate limit not business", "rate_limit_error", "upstream", "", 429, "upstream rate limited", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyOpsIsBusinessLimited(tt.errType, tt.phase, tt.code, tt.status, tt.message)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestSetOpsEndpointContext_SetsContextKeys(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
