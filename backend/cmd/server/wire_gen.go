@@ -20,7 +20,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 )
 
@@ -485,31 +484,19 @@ func provideCleanup(
 		}
 
 		runParallel := func(steps []cleanupStep) {
-			var wg sync.WaitGroup
-			for i := range steps {
-				step := steps[i]
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					if err := step.fn(); err != nil {
-						log.Printf("[Cleanup] %s failed: %v", step.name, err)
-						return
-					}
-					log.Printf("[Cleanup] %s succeeded", step.name)
-				}()
+			cs := make([]CleanupStep, len(steps))
+			for i, s := range steps {
+				cs[i] = CleanupStep{Name: s.name, Fn: s.fn}
 			}
-			wg.Wait()
+			RunCleanupParallel(ctx, cs)
 		}
 
 		runSequential := func(steps []cleanupStep) {
-			for i := range steps {
-				step := steps[i]
-				if err := step.fn(); err != nil {
-					log.Printf("[Cleanup] %s failed: %v", step.name, err)
-					continue
-				}
-				log.Printf("[Cleanup] %s succeeded", step.name)
+			cs := make([]CleanupStep, len(steps))
+			for i, s := range steps {
+				cs[i] = CleanupStep{Name: s.name, Fn: s.fn}
 			}
+			RunCleanupSequential(ctx, cs)
 		}
 
 		runParallel(parallelSteps)
