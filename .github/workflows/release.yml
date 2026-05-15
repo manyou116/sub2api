@@ -20,6 +20,9 @@ on:
 # tag push 触发时读取 vars.SIMPLE_RELEASE，workflow_dispatch 时使用输入参数
 env:
   SIMPLE_RELEASE: ${{ github.event.inputs.simple_release == 'true' || vars.SIMPLE_RELEASE == 'true' }}
+  # Hoisted so step-level `if:` expressions can branch on whether DockerHub
+  # publishing is configured (step-scoped env is not visible inside `if`).
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
 
 permissions:
   contents: write
@@ -117,23 +120,32 @@ jobs:
         run: |
           go version | grep -q 'go1.26.2'
 
-      # Docker setup for GoReleaser
+      # Persist the Go build cache (~/.cache/go-build) across runs. setup-go
+      # already caches the module download cache (~/go/pkg/mod), but the
+      # compiler output cache must be cached separately. This typically saves
+      # 2-3 minutes per release on the GoReleaser binary build stage.
+      - name: Cache Go build artifacts
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: ${{ runner.os }}-gobuild-release-${{ hashFiles('backend/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-gobuild-release-${{ hashFiles('backend/go.sum') }}-
+            ${{ runner.os }}-gobuild-release-
+
+      # Docker setup is only needed for the SIMPLE_RELEASE path (which still
+      # uses GoReleaser's bundled docker stage). The full release path runs
+      # docker build/push in dedicated matrix jobs below.
       - name: Set up QEMU
+        if: ${{ env.SIMPLE_RELEASE == 'true' }}
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
+        if: ${{ env.SIMPLE_RELEASE == 'true' }}
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to DockerHub
-        if: ${{ env.DOCKERHUB_USERNAME != '' }}
-        uses: docker/login-action@v3
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Login to GitHub Container Registry
+      - name: Login to GitHub Container Registry (SIMPLE_RELEASE)
+        if: ${{ env.SIMPLE_RELEASE == 'true' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -176,7 +188,7 @@ jobs:
         uses: goreleaser/goreleaser-action@v7
         with:
           version: '~> v2'
-          args: release --clean --skip=validate ${{ env.SIMPLE_RELEASE == 'true' && '--config=.goreleaser.simple.yaml' || '' }}
+          args: release --clean --skip=validate --parallelism=8 ${{ env.SIMPLE_RELEASE == 'true' && '--config=.goreleaser.simple.yaml' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_MESSAGE: ${{ steps.tag_message.outputs.message }}
@@ -185,9 +197,31 @@ jobs:
           GITHUB_REPO_NAME: ${{ github.event.repository.name }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME || 'skip' }}
 
-      # Update DockerHub description
+      # Upload pre-built linux binaries for the docker-build matrix job to
+      # consume. Only runs in the full-release path (SIMPLE_RELEASE handles
+      # docker inside GoReleaser already).
+      - name: Upload linux/amd64 binary
+        if: ${{ env.SIMPLE_RELEASE != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: sub2api-linux-amd64
+          path: dist/sub2api_linux_amd64_v1/sub2api
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload linux/arm64 binary
+        if: ${{ env.SIMPLE_RELEASE != 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: sub2api-linux-arm64
+          path: dist/sub2api_linux_arm64_v8.0/sub2api
+          retention-days: 1
+          if-no-files-found: error
+
+      # Update DockerHub description (SIMPLE_RELEASE path only — full release
+      # delegates this to the docker-manifest job below).
       - name: Update DockerHub description
-        if: ${{ env.SIMPLE_RELEASE != 'true' && env.DOCKERHUB_USERNAME != '' }}
+        if: ${{ env.SIMPLE_RELEASE == 'true' && env.DOCKERHUB_USERNAME != '' }}
         uses: peter-evans/dockerhub-description@v5
         env:
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -198,16 +232,223 @@ jobs:
           short-description: "Sub2API - AI API Gateway Platform"
           readme-filepath: ./deploy/DOCKER.md
 
-      # Send Telegram notification
+  # ---------------------------------------------------------------------------
+  # Build and push docker images per-arch on native runners (amd64 = ubuntu-
+  # latest, arm64 = ubuntu-24.04-arm). Each runner pushes its own arch in
+  # parallel, eliminating the previous ~2min serial push from a single runner.
+  # Only runs on the full release path; SIMPLE_RELEASE keeps using GoReleaser's
+  # bundled docker stage.
+  # ---------------------------------------------------------------------------
+  docker-build:
+    needs: [release]
+    if: ${{ needs.release.result == 'success' && github.event.inputs.simple_release != 'true' && vars.SIMPLE_RELEASE != 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 1
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Set lowercase owner for GHCR
+        id: lowercase
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Download ${{ matrix.arch }} binary
+        uses: actions/download-artifact@v8
+        with:
+          name: sub2api-linux-${{ matrix.arch }}
+          path: build-context
+
+      - name: Stage docker build context
+        run: |
+          chmod +x build-context/sub2api
+          cp Dockerfile.goreleaser build-context/Dockerfile
+          mkdir -p build-context/deploy
+          cp deploy/docker-entrypoint.sh build-context/deploy/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          GHCR_OWNER: ${{ steps.lowercase.outputs.owner }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          TAGS="ghcr.io/${GHCR_OWNER}/sub2api:${VERSION}-${ARCH}"
+          if [ -n "${DOCKERHUB_USERNAME}" ]; then
+            TAGS="${TAGS},${DOCKERHUB_USERNAME}/sub2api:${VERSION}-${ARCH}"
+          fi
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push ${{ matrix.arch }} image
+        uses: docker/build-push-action@v6
+        with:
+          context: build-context
+          file: build-context/Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          provenance: false
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+
+  # ---------------------------------------------------------------------------
+  # Stitch the per-arch images into multi-arch manifests for every public tag,
+  # then run the post-publish notifications (DockerHub readme + Telegram).
+  # ---------------------------------------------------------------------------
+  docker-manifest:
+    needs: [docker-build]
+    if: ${{ needs.docker-build.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 1
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${VERSION#v}"
+          MAJOR="${VERSION%%.*}"
+          REST="${VERSION#*.}"
+          MINOR="${REST%%.*}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "major=${MAJOR}" >> "$GITHUB_OUTPUT"
+          echo "major_minor=${MAJOR}.${MINOR}" >> "$GITHUB_OUTPUT"
+
+      - name: Set lowercase owner for GHCR
+        id: lowercase
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push multi-arch manifests
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          GHCR_OWNER: ${{ steps.lowercase.outputs.owner }}
+          VERSION: ${{ steps.version.outputs.version }}
+          MAJOR: ${{ steps.version.outputs.major }}
+          MAJOR_MINOR: ${{ steps.version.outputs.major_minor }}
+        run: |
+          set -euo pipefail
+          REPOS=("ghcr.io/${GHCR_OWNER}/sub2api")
+          if [ -n "${DOCKERHUB_USERNAME}" ]; then
+            REPOS+=("${DOCKERHUB_USERNAME}/sub2api")
+          fi
+          TAG_SUFFIXES=("${VERSION}" "latest" "${MAJOR_MINOR}" "${MAJOR}")
+          for REPO in "${REPOS[@]}"; do
+            for TAG in "${TAG_SUFFIXES[@]}"; do
+              echo "::group::Manifest ${REPO}:${TAG}"
+              docker buildx imagetools create \
+                -t "${REPO}:${TAG}" \
+                "${REPO}:${VERSION}-amd64" \
+                "${REPO}:${VERSION}-arm64"
+              echo "::endgroup::"
+            done
+          done
+
+      - name: Update DockerHub description
+        if: ${{ env.DOCKERHUB_USERNAME != '' }}
+        uses: peter-evans/dockerhub-description@v5
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/sub2api
+          short-description: "Sub2API - AI API Gateway Platform"
+          readme-filepath: ./deploy/DOCKER.md
+
+      - name: Get tag message
+        id: tag_message
+        run: |
+          git fetch --tags --force
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG_NAME=${{ github.event.inputs.tag }}
+          else
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+          fi
+          TAG_MESSAGE=$(git tag -l --format='%(contents:body)' "$TAG_NAME")
+          echo "message<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$TAG_MESSAGE" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
       - name: Send Telegram Notification
-        if: ${{ env.SIMPLE_RELEASE != 'true' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
         continue-on-error: true
         run: |
-          # 检查必要的环境变量
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
             echo "Telegram credentials not configured, skipping notification"
             exit 0
@@ -220,29 +461,24 @@ jobs:
           fi
           VERSION=${TAG_NAME#v}
           REPO="${{ github.repository }}"
-          GHCR_IMAGE="ghcr.io/${REPO,,}"  # ${,,} converts to lowercase
+          GHCR_IMAGE="ghcr.io/${REPO,,}"
 
-          # 获取 tag message 内容并转义 Markdown 特殊字符
           TAG_MESSAGE='${{ steps.tag_message.outputs.message }}'
           TAG_MESSAGE=$(echo "$TAG_MESSAGE" | sed 's/\([_*`\[]\)/\\\1/g')
 
-          # 限制消息长度（Telegram 消息限制 4096 字符，预留空间给头尾固定内容）
           if [ ${#TAG_MESSAGE} -gt 3500 ]; then
             TAG_MESSAGE="${TAG_MESSAGE:0:3500}..."
           fi
 
-          # 构建消息内容
           MESSAGE="🚀 *Sub2API 新版本发布！*"$'\n'$'\n'
           MESSAGE+="📦 版本号: \`${VERSION}\`"$'\n'$'\n'
 
-          # 添加更新内容
           if [ -n "$TAG_MESSAGE" ]; then
             MESSAGE+="${TAG_MESSAGE}"$'\n'$'\n'
           fi
 
           MESSAGE+="🐳 *Docker 部署:*"$'\n'
           MESSAGE+="\`\`\`bash"$'\n'
-          # 根据是否配置 DockerHub 动态生成
           if [ -n "$DOCKERHUB_USERNAME" ]; then
             DOCKER_IMAGE="${DOCKERHUB_USERNAME}/sub2api"
             MESSAGE+="# Docker Hub"$'\n'
@@ -259,7 +495,6 @@ jobs:
           MESSAGE+="• [GitHub Packages](https://github.com/${REPO}/pkgs/container/sub2api)"$'\n'$'\n'
           MESSAGE+="#Sub2API #Release #${TAG_NAME//./_}"
 
-          # 发送消息
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
@@ -273,8 +508,10 @@ jobs:
               }')"
 
   sync-version-file:
-    needs: [release]
-    if: ${{ needs.release.result == 'success' }}
+    needs: [release, docker-manifest]
+    # Run when release succeeded AND (docker-manifest succeeded OR was skipped
+    # because of SIMPLE_RELEASE).
+    if: ${{ always() && needs.release.result == 'success' && (needs.docker-manifest.result == 'success' || needs.docker-manifest.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout default branch
