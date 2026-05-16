@@ -9,8 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -38,10 +36,6 @@ type ResponsesToolDriver struct {
 	UserAgent    string // 可选，OAuth 路径默认 codex-cli UA
 	Client       *req.Client
 	Now          func() time.Time
-
-	// proxyClients 缓存每个 proxy URL 对应的 *req.Client，避免每请求 Clone()
-	// 丢失连接池 / TLS session 缓存。key = proxy URL（空串走 baseClient）。
-	proxyClients sync.Map // map[string]*req.Client
 }
 
 const (
@@ -100,25 +94,6 @@ func (d *ResponsesToolDriver) httpClient() *req.Client {
 	return d.Client
 }
 
-// clientForProxy 返回绑定到给定 proxy URL 的 *req.Client。
-// 空 proxy 直接返回 baseClient；非空时按 proxy URL 缓存一份 Clone()，
-// 避免每请求重建 transport / 丢失 HTTP keepalive 与 TLS session 缓存。
-//
-// 缓存数量上限由 active 账号配置的不同 proxy 数量决定（实测 ≤ 账号数），
-// 不需要显式淘汰。
-func (d *ResponsesToolDriver) clientForProxy(proxy string) *req.Client {
-	base := d.httpClient()
-	if proxy == "" {
-		return base
-	}
-	if v, ok := d.proxyClients.Load(proxy); ok {
-		return v.(*req.Client)
-	}
-	c := base.Clone().SetProxyURL(proxy)
-	actual, _ := d.proxyClients.LoadOrStore(proxy, c)
-	return actual.(*req.Client)
-}
-
 func (d *ResponsesToolDriver) now() time.Time {
 	if d.Now != nil {
 		return d.Now()
@@ -145,7 +120,10 @@ func (d *ResponsesToolDriver) forwardAPIKey(ctx context.Context, account Account
 		return nil, &AuthError{Reason: "missing api key"}
 	}
 
-	client := d.clientForProxy(account.ProxyURL())
+	client := d.httpClient()
+	if proxy := account.ProxyURL(); proxy != "" {
+		client = client.Clone().SetProxyURL(proxy)
+	}
 
 	body := d.buildBodyAPIKey(request)
 	resp, err := client.R().SetContext(ctx).
@@ -223,7 +201,10 @@ func (d *ResponsesToolDriver) forwardOAuth(ctx context.Context, account AccountV
 		return nil, &AuthError{Reason: "missing access token"}
 	}
 
-	client := d.clientForProxy(account.ProxyURL())
+	client := d.httpClient()
+	if proxy := account.ProxyURL(); proxy != "" {
+		client = client.Clone().SetProxyURL(proxy)
+	}
 
 	body := d.buildBodyOAuth(request)
 	bodyBytes, err := json.Marshal(body)
@@ -566,32 +547,10 @@ func classifyHTTPErrorStream(resp *req.Response) error {
 
 // streamSSEPayloads 按行读取 resp.Body，把 `data:` 行累积到一个空行触发的批次，
 // 把每个批次拼接后送给 fn。
-//
-// 软超时（区分上游卡死 vs 正常慢响应，避免吃满整个 AttemptBudget 才换号）：
-//   - sseTTFBTimeout: POST 200 OK 后这么久还没出第一个 event，视为上游卡住。
-//   - sseIdleTimeout: 任意两个 data event 之间的最大静默；Codex 生图期间会持续
-//     发出 response.in_progress / 推理增量等事件，超过该阈值即认为连接 stuck。
-//
-// 触发后通过关闭 body 让 scanner 主动返回，本函数返回 TransportError →
-// dispatch 走 transient 分支换号重试。
-const (
-	sseTTFBTimeout = 60 * time.Second
-	sseIdleTimeout = 90 * time.Second
-)
-
 func streamSSEPayloads(resp *req.Response, fn func([]byte)) error {
 	defer func() { _ = resp.Body.Close() }()
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-
-	var timedOut atomic.Bool
-	// sseTimer 兼任两种角色：连接刚建立时充当 TTFB 看门狗，收到首个 data event
-	// 之后通过 Reset(sseIdleTimeout) 切换为 event 间静默看门狗。
-	sseTimer := time.AfterFunc(sseTTFBTimeout, func() {
-		timedOut.Store(true)
-		_ = resp.Body.Close()
-	})
-	defer sseTimer.Stop()
 
 	streamStart := time.Now()
 	var (
@@ -635,24 +594,11 @@ func streamSSEPayloads(resp *req.Response, fn func([]byte)) error {
 					zap.String("event_type", etype),
 				)
 			}
-			sseTimer.Reset(sseIdleTimeout)
 			eventCount++
 			lines = append(lines, append([]byte(nil), data...))
 		}
 	}
 	flush()
-	if timedOut.Load() {
-		elapsed := time.Since(streamStart)
-		logger.L().Warn("openaiimages.responses.sse_idle_timeout",
-			zap.Duration("elapsed", elapsed),
-			zap.Int("events", eventCount),
-			zap.Bool("any_event", eventCount > 0),
-		)
-		if eventCount == 0 {
-			return &TransportError{Reason: fmt.Sprintf("sse ttfb timeout after %s", sseTTFBTimeout)}
-		}
-		return &TransportError{Reason: fmt.Sprintf("sse idle timeout after %s (events=%d, elapsed=%s)", sseIdleTimeout, eventCount, elapsed)}
-	}
 	if err := scanner.Err(); err != nil {
 		logger.L().Warn("openaiimages.responses.sse_scan_failed",
 			zap.Duration("elapsed", time.Since(streamStart)),
