@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +38,10 @@ type ResponsesToolDriver struct {
 	UserAgent    string // 可选，OAuth 路径默认 codex-cli UA
 	Client       *req.Client
 	Now          func() time.Time
+
+	// proxyClients 缓存每个 proxy URL 对应的 *req.Client，避免每请求 Clone()
+	// 丢失连接池 / TLS session 缓存。key = proxy URL（空串走 baseClient）。
+	proxyClients sync.Map // map[string]*req.Client
 }
 
 const (
@@ -95,6 +100,25 @@ func (d *ResponsesToolDriver) httpClient() *req.Client {
 	return d.Client
 }
 
+// clientForProxy 返回绑定到给定 proxy URL 的 *req.Client。
+// 空 proxy 直接返回 baseClient；非空时按 proxy URL 缓存一份 Clone()，
+// 避免每请求重建 transport / 丢失 HTTP keepalive 与 TLS session 缓存。
+//
+// 缓存数量上限由 active 账号配置的不同 proxy 数量决定（实测 ≤ 账号数），
+// 不需要显式淘汰。
+func (d *ResponsesToolDriver) clientForProxy(proxy string) *req.Client {
+	base := d.httpClient()
+	if proxy == "" {
+		return base
+	}
+	if v, ok := d.proxyClients.Load(proxy); ok {
+		return v.(*req.Client)
+	}
+	c := base.Clone().SetProxyURL(proxy)
+	actual, _ := d.proxyClients.LoadOrStore(proxy, c)
+	return actual.(*req.Client)
+}
+
 func (d *ResponsesToolDriver) now() time.Time {
 	if d.Now != nil {
 		return d.Now()
@@ -121,10 +145,7 @@ func (d *ResponsesToolDriver) forwardAPIKey(ctx context.Context, account Account
 		return nil, &AuthError{Reason: "missing api key"}
 	}
 
-	client := d.httpClient()
-	if proxy := account.ProxyURL(); proxy != "" {
-		client = client.Clone().SetProxyURL(proxy)
-	}
+	client := d.clientForProxy(account.ProxyURL())
 
 	body := d.buildBodyAPIKey(request)
 	resp, err := client.R().SetContext(ctx).
@@ -202,10 +223,7 @@ func (d *ResponsesToolDriver) forwardOAuth(ctx context.Context, account AccountV
 		return nil, &AuthError{Reason: "missing access token"}
 	}
 
-	client := d.httpClient()
-	if proxy := account.ProxyURL(); proxy != "" {
-		client = client.Clone().SetProxyURL(proxy)
-	}
+	client := d.clientForProxy(account.ProxyURL())
 
 	body := d.buildBodyOAuth(request)
 	bodyBytes, err := json.Marshal(body)
@@ -624,15 +642,16 @@ func streamSSEPayloads(resp *req.Response, fn func([]byte)) error {
 	}
 	flush()
 	if timedOut.Load() {
+		elapsed := time.Since(streamStart)
 		logger.L().Warn("openaiimages.responses.sse_idle_timeout",
-			zap.Duration("elapsed", time.Since(streamStart)),
+			zap.Duration("elapsed", elapsed),
 			zap.Int("events", eventCount),
 			zap.Bool("any_event", eventCount > 0),
 		)
 		if eventCount == 0 {
 			return &TransportError{Reason: fmt.Sprintf("sse ttfb timeout after %s", sseTTFBTimeout)}
 		}
-		return &TransportError{Reason: fmt.Sprintf("sse idle timeout after %s (events=%d, elapsed=%s)", sseIdleTimeout, eventCount, time.Since(streamStart))}
+		return &TransportError{Reason: fmt.Sprintf("sse idle timeout after %s (events=%d, elapsed=%s)", sseIdleTimeout, eventCount, elapsed)}
 	}
 	if err := scanner.Err(); err != nil {
 		logger.L().Warn("openaiimages.responses.sse_scan_failed",
