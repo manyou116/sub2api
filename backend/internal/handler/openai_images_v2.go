@@ -320,9 +320,11 @@ func (h *OpenAIImagesV2Handler) run(c *gin.Context, req *openaiimages.ImagesRequ
 		zap.String("driver", cap.DriverName),
 	)
 
-	// 整个分发流程的硬上限：覆盖 1 次重试（200s）+ 重选号 + 网络抖动余量。
-	// 4K 在 codex /responses 路径下偶发 150s+，旧值 90s 远不够，调到 240s。
-	dispatchCtx, cancel := context.WithTimeout(c.Request.Context(), 240*time.Second)
+	// 整个分发流程的硬上限：必须严格大于 N × AttemptBudget，否则 MaxAttempts 与
+	// RefusalRetryLimit 形同虚设（200s 单次 + 240s 总 = 最多 1 次有效尝试）。
+	// 460s = 2 × 200s（attempt budget）+ 60s 选号/网络/SSE 关闭余量，
+	// 配合 sseTTFBTimeout(60s) / sseIdleTimeout(90s) 软超时早退，实际可放下 3-4 次尝试。
+	dispatchCtx, cancel := context.WithTimeout(c.Request.Context(), 460*time.Second)
 	defer cancel()
 	upstreamStart := time.Now()
 	res, err := openaiimages.Dispatch(dispatchCtx, h.source, h.registry, in, h.dispatchO)
