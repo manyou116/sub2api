@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -547,10 +548,32 @@ func classifyHTTPErrorStream(resp *req.Response) error {
 
 // streamSSEPayloads 按行读取 resp.Body，把 `data:` 行累积到一个空行触发的批次，
 // 把每个批次拼接后送给 fn。
+//
+// 软超时（区分上游卡死 vs 正常慢响应，避免吃满整个 AttemptBudget 才换号）：
+//   - sseTTFBTimeout: POST 200 OK 后这么久还没出第一个 event，视为上游卡住。
+//   - sseIdleTimeout: 任意两个 data event 之间的最大静默；Codex 生图期间会持续
+//     发出 response.in_progress / 推理增量等事件，超过该阈值即认为连接 stuck。
+//
+// 触发后通过关闭 body 让 scanner 主动返回，本函数返回 TransportError →
+// dispatch 走 transient 分支换号重试。
+const (
+	sseTTFBTimeout = 60 * time.Second
+	sseIdleTimeout = 90 * time.Second
+)
+
 func streamSSEPayloads(resp *req.Response, fn func([]byte)) error {
 	defer func() { _ = resp.Body.Close() }()
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+
+	var timedOut atomic.Bool
+	// sseTimer 兼任两种角色：连接刚建立时充当 TTFB 看门狗，收到首个 data event
+	// 之后通过 Reset(sseIdleTimeout) 切换为 event 间静默看门狗。
+	sseTimer := time.AfterFunc(sseTTFBTimeout, func() {
+		timedOut.Store(true)
+		_ = resp.Body.Close()
+	})
+	defer sseTimer.Stop()
 
 	streamStart := time.Now()
 	var (
@@ -594,11 +617,23 @@ func streamSSEPayloads(resp *req.Response, fn func([]byte)) error {
 					zap.String("event_type", etype),
 				)
 			}
+			sseTimer.Reset(sseIdleTimeout)
 			eventCount++
 			lines = append(lines, append([]byte(nil), data...))
 		}
 	}
 	flush()
+	if timedOut.Load() {
+		logger.L().Warn("openaiimages.responses.sse_idle_timeout",
+			zap.Duration("elapsed", time.Since(streamStart)),
+			zap.Int("events", eventCount),
+			zap.Bool("any_event", eventCount > 0),
+		)
+		if eventCount == 0 {
+			return &TransportError{Reason: fmt.Sprintf("sse ttfb timeout after %s", sseTTFBTimeout)}
+		}
+		return &TransportError{Reason: fmt.Sprintf("sse idle timeout after %s (events=%d, elapsed=%s)", sseIdleTimeout, eventCount, time.Since(streamStart))}
+	}
 	if err := scanner.Err(); err != nil {
 		logger.L().Warn("openaiimages.responses.sse_scan_failed",
 			zap.Duration("elapsed", time.Since(streamStart)),
