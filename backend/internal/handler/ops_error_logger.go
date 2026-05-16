@@ -1037,14 +1037,26 @@ func parseOpsErrorResponse(body []byte) parsedOpsError {
 			t = "api_error"
 		}
 		// For gemini error, capture numeric code as string for business-limited mapping if needed.
+		// OpenAI/Anthropic-style errors put a string code here (e.g. "model_no_image",
+		// "content_policy_violation", "insufficient_quota"); we must preserve it so
+		// classifyOpsIsBusinessLimited can match those constants.
 		var code string
 		if v, ok := errObj["code"]; ok {
 			switch n := v.(type) {
+			case string:
+				code = n
 			case float64:
 				code = strconvItoa(int(n))
 			case int:
 				code = strconvItoa(n)
 			}
+		}
+		// Fallback: some upstreams omit `code` and only set `type` to the semantic
+		// code (e.g. {"error":{"type":"model_no_image","message":"..."}}). When the
+		// type isn't one of the canonical OpenAI categories, treat it as the code so
+		// downstream classification (business-limited / phase) can fire.
+		if code == "" && t != "" && !isKnownOpsErrorType(t) {
+			code = t
 		}
 		return parsedOpsError{ErrorType: t, Message: msg, Code: code}
 	}

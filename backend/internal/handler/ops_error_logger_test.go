@@ -275,6 +275,60 @@ func TestNormalizeOpsErrorType(t *testing.T) {
 	}
 }
 
+func TestParseOpsErrorResponse_PreservesStringCode(t *testing.T) {
+	cases := []struct {
+		name     string
+		body     string
+		wantType string
+		wantCode string
+		wantMsg  string
+	}{
+		{
+			name:     "openai image model_no_image (string code)",
+			body:     `{"error":{"code":"model_no_image","message":"refine your prompt","type":"model_no_image"}}`,
+			wantType: "model_no_image",
+			wantCode: "model_no_image",
+			wantMsg:  "refine your prompt",
+		},
+		{
+			name:     "openai image content_policy_violation",
+			body:     `{"error":{"code":"content_policy_violation","message":"blocked","type":"content_policy_violation"}}`,
+			wantType: "content_policy_violation",
+			wantCode: "content_policy_violation",
+			wantMsg:  "blocked",
+		},
+		{
+			name:     "code missing but type carries semantic code",
+			body:     `{"error":{"type":"model_no_image","message":"hi"}}`,
+			wantType: "model_no_image",
+			wantCode: "model_no_image",
+			wantMsg:  "hi",
+		},
+		{
+			name:     "gemini numeric code stays numeric string",
+			body:     `{"error":{"code":429,"message":"rate"}}`,
+			wantType: "api_error",
+			wantCode: "429",
+			wantMsg:  "rate",
+		},
+		{
+			name:     "known canonical type does not get overridden by missing code",
+			body:     `{"error":{"type":"invalid_request_error","message":"bad"}}`,
+			wantType: "invalid_request_error",
+			wantCode: "",
+			wantMsg:  "bad",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseOpsErrorResponse([]byte(tc.body))
+			require.Equal(t, tc.wantType, got.ErrorType)
+			require.Equal(t, tc.wantCode, got.Code)
+			require.Equal(t, tc.wantMsg, got.Message)
+		})
+	}
+}
+
 func TestClassifyOpsIsBusinessLimited(t *testing.T) {
 	tests := []struct {
 		name    string
