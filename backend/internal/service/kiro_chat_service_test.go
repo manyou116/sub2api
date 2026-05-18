@@ -3,6 +3,8 @@ package service
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestConvertKiroTools_Basic(t *testing.T) {
@@ -233,6 +235,81 @@ func TestBuildKiroPayload_ProfileArnPropagates(t *testing.T) {
 	if p.ProfileArn != "arn:aws:codewhisperer:::profile/X" {
 		t.Fatalf("profileArn: %q", p.ProfileArn)
 	}
+}
+
+func TestResolveKiroInternalModel_AppliesAccountMappingFirst(t *testing.T) {
+	account := &Account{
+		Platform: PlatformKiro,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gpt-5.4": "claude-sonnet-4.5",
+			},
+		},
+	}
+
+	if !account.IsModelSupported("gpt-5.4") {
+		t.Fatal("expected mapped request model to be supported")
+	}
+	if account.IsModelSupported("gpt-5.5") {
+		t.Fatal("expected unrelated request model to be rejected by mapping")
+	}
+
+	got := resolveKiroInternalModel(account, "gpt-5.4")
+	if got != "claude-sonnet-4.5" {
+		t.Fatalf("expected account mapping before Kiro mapping, got %q", got)
+	}
+}
+
+func TestExtractKiroDelta_ParsesUsageCacheFields(t *testing.T) {
+	payload := []byte(`{
+		"usage": {
+			"input_tokens": 120,
+			"output_tokens": 34,
+			"cache_creation_input_tokens": 12,
+			"input_tokens_details": {"cached_tokens": 56}
+		}
+	}`)
+
+	ev := extractKiroDelta(payload)
+
+	require.Equal(t, int64(120), ev.InputTokens)
+	require.Equal(t, int64(34), ev.OutputTokens)
+	require.Equal(t, int64(12), ev.CacheCreationInputTokens)
+	require.Equal(t, int64(56), ev.CacheReadInputTokens)
+}
+
+func TestApplyKiroFrameUsage_PropagatesCacheFields(t *testing.T) {
+	result := &KiroChatResult{InputTokens: 5}
+	applyKiroFrameUsage(result, kiroFrameEvent{
+		InputTokens:              10,
+		OutputTokens:             4,
+		CacheCreationInputTokens: 2,
+		CacheReadInputTokens:     3,
+	})
+
+	require.Equal(t, int64(10), result.InputTokens)
+	require.Equal(t, int64(4), result.OutputTokens)
+	require.Equal(t, int64(2), result.CacheCreationInputTokens)
+	require.Equal(t, int64(3), result.CacheReadInputTokens)
+}
+
+func TestKiroOpenAIUsagePayload_IncludesCacheDetails(t *testing.T) {
+	usage := kiroOpenAIUsagePayload(&KiroChatResult{
+		InputTokens:              100,
+		OutputTokens:             20,
+		CacheCreationInputTokens: 7,
+		CacheReadInputTokens:     11,
+	})
+
+	require.Equal(t, int64(100), usage["prompt_tokens"])
+	require.Equal(t, int64(20), usage["completion_tokens"])
+	require.Equal(t, int64(120), usage["total_tokens"])
+	require.Equal(t, int64(7), usage["cache_creation_input_tokens"])
+	require.Equal(t, int64(11), usage["cache_read_input_tokens"])
+	details, ok := usage["prompt_tokens_details"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, int64(11), details["cached_tokens"])
 }
 
 // ============ extractKiroDelta ============

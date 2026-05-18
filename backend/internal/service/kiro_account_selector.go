@@ -56,6 +56,9 @@ func (s *OpenAIGatewayService) SelectKiroAccount(
 		if model != "" && IsKiroModelQuarantined(acct.ID, model) {
 			continue
 		}
+		if model != "" && !acct.IsModelSupported(model) {
+			continue
+		}
 		if excludedIDs != nil {
 			if _, skip := excludedIDs[acct.ID]; skip {
 				continue

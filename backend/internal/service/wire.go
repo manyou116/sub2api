@@ -471,6 +471,8 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenAITokenProvider,
 	ProvideClaudeTokenProvider,
 	ProvideKiroTokenProvider,
+	NewKiroModelDiscoveryService,
+	wire.Bind(new(KiroModelDiscovery), new(*KiroModelDiscoveryService)),
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,
 	NewAccountUsageService,

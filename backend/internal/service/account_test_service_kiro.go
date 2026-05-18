@@ -115,7 +115,7 @@ func (s *AccountTestService) kiroChatProbeStream(ctx context.Context, c *gin.Con
 }
 
 func (s *AccountTestService) kiroChatProbeCore(ctx context.Context, c *gin.Context, account *Account, modelID, prompt string) (string, error) {
-	internalModel := MapKiroModel(modelID)
+	internalModel := resolveKiroInternalModel(account, modelID)
 	contentRaw, _ := json.Marshal(prompt)
 	req := &kiroOpenAIRequest{
 		Model:  modelID,

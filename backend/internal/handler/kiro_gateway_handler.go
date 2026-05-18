@@ -7,7 +7,7 @@
 //   - 复用 SelectAccountWithScheduler 选 active Kiro 账号
 //   - 复用 billing eligibility 检查
 //   - 失败 → UpstreamFailoverError → 切换账号
-//   - usage record 暂未接入（Phase 4 一并补）
+//   - Kiro 估算 usage record 接入
 //   - /v1/chat/completions 与 /v1/responses 共用本入口（Responses 为 chat 包装）
 package handler
 
@@ -245,18 +245,7 @@ func (h *OpenAIGatewayHandler) KiroChatCompletions(c *gin.Context) {
 			c.Writer.Header().Set("X-Upstream-Request-Id", traceID)
 		}
 
-		forwardResult := &service.OpenAIForwardResult{
-			RequestID:       traceID,
-			Model:           reqModel,
-			UpstreamModel:   result.InternalModel,
-			Stream:          result.Stream,
-			ResponseHeaders: result.UpstreamHeaders,
-			FirstTokenMs:    result.FirstTokenMs,
-			Usage: service.OpenAIUsage{
-				InputTokens:  int(result.InputTokens),
-				OutputTokens: int(result.OutputTokens),
-			},
-		}
+		forwardResult := newKiroOpenAIForwardResult(traceID, reqModel, result)
 		recordResult := forwardResult
 		recordAPIKey := apiKey
 		recordAccount := account
@@ -286,8 +275,31 @@ func (h *OpenAIGatewayHandler) KiroChatCompletions(c *gin.Context) {
 			zap.Int("switch_count", switchCount),
 			zap.Int64("input_tokens", result.InputTokens),
 			zap.Int64("output_tokens", result.OutputTokens),
+			zap.Int64("cache_creation_input_tokens", result.CacheCreationInputTokens),
+			zap.Int64("cache_read_input_tokens", result.CacheReadInputTokens),
 		)
 		return
+	}
+}
+
+func newKiroOpenAIForwardResult(traceID string, requestedModel string, result *service.KiroChatResult) *service.OpenAIForwardResult {
+	if result == nil {
+		return nil
+	}
+	return &service.OpenAIForwardResult{
+		RequestID:       traceID,
+		Model:           requestedModel,
+		UpstreamModel:   result.InternalModel,
+		Stream:          result.Stream,
+		ResponseHeaders: result.UpstreamHeaders,
+		Duration:        result.Duration,
+		FirstTokenMs:    result.FirstTokenMs,
+		Usage: service.OpenAIUsage{
+			InputTokens:              int(result.InputTokens),
+			OutputTokens:             int(result.OutputTokens),
+			CacheCreationInputTokens: int(result.CacheCreationInputTokens),
+			CacheReadInputTokens:     int(result.CacheReadInputTokens),
+		},
 	}
 }
 

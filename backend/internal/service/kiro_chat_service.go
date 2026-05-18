@@ -9,13 +9,13 @@
 //   - 模型名映射（gpt-* / claude-* / 其他 → Kiro internal id）
 //   - 流式 SSE chunk 输出（OpenAI delta 格式）
 //   - 非流式聚合输出
-//   - usage 事件提取（input/output tokens）
+//   - usage 事件提取（input/output tokens；上游若提供则透传 cache tokens）
 //   - 失败 → UpstreamFailoverError，触发上层切换账号
 //
 // 暂未实现（后续迭代）：
 //   - tool_calls / function_calls
 //   - 图片 / 多模态 input
-//   - prompt caching、reasoning content、citations
+//   - reasoning content、citations
 package service
 
 import (
@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,15 +47,18 @@ const (
 
 // KiroChatResult 是单次转发的产物，handler 用来记账。
 type KiroChatResult struct {
-	UpstreamModel    string
-	InternalModel    string
-	Stream           bool
-	InputTokens      int64
-	OutputTokens     int64
-	FirstTokenMs     *int
-	UpstreamStatus   int
-	UpstreamHeaders  http.Header
-	AssembledContent string
+	UpstreamModel            string
+	InternalModel            string
+	Stream                   bool
+	InputTokens              int64
+	OutputTokens             int64
+	CacheCreationInputTokens int64
+	CacheReadInputTokens     int64
+	Duration                 time.Duration
+	FirstTokenMs             *int
+	UpstreamStatus           int
+	UpstreamHeaders          http.Header
+	AssembledContent         string
 }
 
 // KiroChatService 转发 OpenAI Chat Completions 到 Kiro CodeWhisperer。
@@ -189,6 +193,13 @@ func MapKiroModel(name string) string {
 	return n
 }
 
+func resolveKiroInternalModel(account *Account, requestedModel string) string {
+	if account != nil {
+		requestedModel = account.GetMappedModel(requestedModel)
+	}
+	return MapKiroModel(requestedModel)
+}
+
 // KiroAvailableModel 描述一个 UI 可见的 Kiro 测试模型。
 type KiroAvailableModel struct {
 	ID          string `json:"id"`
@@ -199,6 +210,7 @@ type KiroAvailableModel struct {
 // KiroDefaultModels 提供 admin 测试 / /v1/models 列表使用的 Kiro 模型集合。
 // 仅暴露 Kiro 内部 ID（claude-sonnet-4 系列等），避免 UI 选了 Anthropic 公开 ID 触发 INVALID_MODEL_ID。
 var KiroDefaultModels = []KiroAvailableModel{
+	{ID: "auto", Type: "model", DisplayName: "Auto (Kiro)"},
 	{ID: "claude-sonnet-4", Type: "model", DisplayName: "Claude Sonnet 4 (Kiro)"},
 	{ID: "claude-sonnet-4.5", Type: "model", DisplayName: "Claude Sonnet 4.5 (Kiro)"},
 	{ID: "claude-sonnet-4.6", Type: "model", DisplayName: "Claude Sonnet 4.6 (Kiro)"},
@@ -206,6 +218,11 @@ var KiroDefaultModels = []KiroAvailableModel{
 	{ID: "claude-opus-4.5", Type: "model", DisplayName: "Claude Opus 4.5 (Kiro)"},
 	{ID: "claude-opus-4.6", Type: "model", DisplayName: "Claude Opus 4.6 (Kiro)"},
 	{ID: "claude-opus-4.7", Type: "model", DisplayName: "Claude Opus 4.7 (Kiro)"},
+	{ID: "deepseek-3.2", Type: "model", DisplayName: "DeepSeek 3.2 (Kiro)"},
+	{ID: "glm-5", Type: "model", DisplayName: "GLM 5 (Kiro)"},
+	{ID: "minimax-m2.1", Type: "model", DisplayName: "MiniMax M2.1 (Kiro)"},
+	{ID: "minimax-m2.5", Type: "model", DisplayName: "MiniMax M2.5 (Kiro)"},
+	{ID: "qwen3-coder-next", Type: "model", DisplayName: "Qwen3 Coder Next (Kiro)"},
 }
 
 // ============== Payload 构造 ==============
@@ -596,7 +613,7 @@ func (s *KiroChatService) ChatCompletions(
 		writeKiroOpenAIError(c, http.StatusBadRequest, "invalid_request_error", "request body is not valid JSON")
 		return nil, fmt.Errorf("kiro: parse body: %w", err)
 	}
-	internalModel := MapKiroModel(req.Model)
+	internalModel := resolveKiroInternalModel(account, req.Model)
 	payload, err := buildKiroPayload(&req, internalModel, account.KiroProfileArn())
 	if err != nil {
 		writeKiroOpenAIError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -731,13 +748,16 @@ func (s *KiroChatService) ChatCompletions(
 		// 入参 token 估算（Kiro 上游不提供 token usage，只给 credit）
 		InputTokens: estimateKiroTokens(req),
 	}
+	defer func() {
+		result.Duration = time.Since(startedAt)
+	}()
 
 	if req.Stream {
 		if err := s.streamToOpenAISSE(c, resp.Body, req.Model, startedAt, result); err != nil {
 			return result, err
 		}
 	} else {
-		if err := s.aggregateToOpenAIJSON(c, resp.Body, req.Model, result); err != nil {
+		if err := s.aggregateToOpenAIJSON(c, resp.Body, req.Model, startedAt, result); err != nil {
 			return result, err
 		}
 	}
@@ -820,9 +840,11 @@ func readKiroFrames(r io.Reader, onJSON func(jsonBytes []byte) error) error {
 
 // kiroFrameEvent 描述一帧解出的结构化事件。
 type kiroFrameEvent struct {
-	Text         string
-	InputTokens  int64
-	OutputTokens int64
+	Text                     string
+	InputTokens              int64
+	OutputTokens             int64
+	CacheCreationInputTokens int64
+	CacheReadInputTokens     int64
 
 	// Tool use 帧（KAM 的协议有三种形态：start (有 name) / input delta / stop）
 	ToolUseID      string
@@ -875,20 +897,90 @@ func extractKiroDelta(payload []byte) kiroFrameEvent {
 	}
 
 	if u, ok := v["usage"].(map[string]any); ok {
-		if iv, ok := u["inputTokens"].(float64); ok {
-			ev.InputTokens = int64(iv)
-		}
-		if ov, ok := u["outputTokens"].(float64); ok {
-			ev.OutputTokens = int64(ov)
-		}
-		if iv, ok := u["input_tokens"].(float64); ok && ev.InputTokens == 0 {
-			ev.InputTokens = int64(iv)
-		}
-		if ov, ok := u["output_tokens"].(float64); ok && ev.OutputTokens == 0 {
-			ev.OutputTokens = int64(ov)
+		ev.InputTokens = firstKiroInt64(u, "inputTokens", "input_tokens", "promptTokens", "prompt_tokens")
+		ev.OutputTokens = firstKiroInt64(u, "outputTokens", "output_tokens", "completionTokens", "completion_tokens")
+		ev.CacheCreationInputTokens = firstKiroInt64(u, "cacheCreationInputTokens", "cache_creation_input_tokens", "cacheCreationTokens", "cache_creation_tokens")
+		ev.CacheReadInputTokens = firstKiroInt64(u, "cacheReadInputTokens", "cache_read_input_tokens", "cachedTokens", "cached_tokens")
+		if ev.CacheReadInputTokens == 0 {
+			ev.CacheReadInputTokens = cachedTokensFromKiroUsageDetails(u, "inputTokensDetails", "input_tokens_details", "promptTokensDetails", "prompt_tokens_details")
 		}
 	}
+	if ev.InputTokens == 0 {
+		ev.InputTokens = firstKiroInt64(v, "inputTokens", "input_tokens", "promptTokens", "prompt_tokens")
+	}
+	if ev.OutputTokens == 0 {
+		ev.OutputTokens = firstKiroInt64(v, "outputTokens", "output_tokens", "completionTokens", "completion_tokens")
+	}
+	if ev.CacheCreationInputTokens == 0 {
+		ev.CacheCreationInputTokens = firstKiroInt64(v, "cacheCreationInputTokens", "cache_creation_input_tokens", "cacheCreationTokens", "cache_creation_tokens")
+	}
+	if ev.CacheReadInputTokens == 0 {
+		ev.CacheReadInputTokens = firstKiroInt64(v, "cacheReadInputTokens", "cache_read_input_tokens", "cachedTokens", "cached_tokens")
+	}
 	return ev
+}
+
+func firstKiroInt64(values map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		if number := kiroInt64Value(values[key]); number > 0 {
+			return number
+		}
+	}
+	return 0
+}
+
+func cachedTokensFromKiroUsageDetails(values map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		details, ok := values[key].(map[string]any)
+		if !ok || details == nil {
+			continue
+		}
+		if number := firstKiroInt64(details, "cachedTokens", "cached_tokens"); number > 0 {
+			return number
+		}
+	}
+	return 0
+}
+
+func kiroInt64Value(value any) int64 {
+	switch typedValue := value.(type) {
+	case json.Number:
+		if number, err := typedValue.Int64(); err == nil {
+			return number
+		}
+		if floatNumber, err := typedValue.Float64(); err == nil {
+			return int64(floatNumber)
+		}
+	case float64:
+		return int64(typedValue)
+	case int64:
+		return typedValue
+	case int:
+		return int64(typedValue)
+	case string:
+		if number, err := strconv.ParseInt(strings.TrimSpace(typedValue), 10, 64); err == nil {
+			return number
+		}
+	}
+	return 0
+}
+
+func applyKiroFrameUsage(result *KiroChatResult, event kiroFrameEvent) {
+	if result == nil {
+		return
+	}
+	if event.InputTokens > 0 {
+		result.InputTokens = event.InputTokens
+	}
+	if event.OutputTokens > 0 {
+		result.OutputTokens = event.OutputTokens
+	}
+	if event.CacheCreationInputTokens > 0 {
+		result.CacheCreationInputTokens = event.CacheCreationInputTokens
+	}
+	if event.CacheReadInputTokens > 0 {
+		result.CacheReadInputTokens = event.CacheReadInputTokens
+	}
 }
 
 // streamToOpenAISSE 实时把 Kiro 事件转成 OpenAI ChatCompletion chunk SSE。
@@ -909,6 +1001,14 @@ func (s *KiroChatService) streamToOpenAISSE(
 	created := time.Now().Unix()
 	var firstTokenLatency *int
 	var assembled strings.Builder
+	markFirstToken := func() {
+		if firstTokenLatency != nil {
+			return
+		}
+		ms := int(time.Since(startedAt).Milliseconds())
+		firstTokenLatency = &ms
+		result.FirstTokenMs = &ms
+	}
 
 	// tool_call 聚合（KAM 协议：start 拿 name → 多帧 input delta → stop）。
 	type toolAcc struct {
@@ -929,12 +1029,7 @@ func (s *KiroChatService) streamToOpenAISSE(
 
 	err := readKiroFrames(body, func(payload []byte) error {
 		ev := extractKiroDelta(payload)
-		if ev.InputTokens > 0 {
-			result.InputTokens = ev.InputTokens
-		}
-		if ev.OutputTokens > 0 {
-			result.OutputTokens = ev.OutputTokens
-		}
+		applyKiroFrameUsage(result, ev)
 
 		// 工具事件
 		if ev.ToolUseID != "" {
@@ -948,6 +1043,7 @@ func (s *KiroChatService) streamToOpenAISSE(
 			// start 帧（带 name）→ 发起 tool_call delta
 			if ev.ToolName != "" && acc.name == "" {
 				acc.name = ev.ToolName
+				markFirstToken()
 				delta := map[string]any{
 					"tool_calls": []map[string]any{{
 						"index":    acc.index,
@@ -962,6 +1058,7 @@ func (s *KiroChatService) streamToOpenAISSE(
 				}
 			}
 			if ev.ToolInputDelta != "" {
+				markFirstToken()
 				_, _ = acc.args.WriteString(ev.ToolInputDelta)
 				delta := map[string]any{
 					"tool_calls": []map[string]any{{
@@ -980,11 +1077,7 @@ func (s *KiroChatService) streamToOpenAISSE(
 		if ev.Text == "" {
 			return nil
 		}
-		if firstTokenLatency == nil {
-			ms := int(time.Since(startedAt).Milliseconds())
-			firstTokenLatency = &ms
-			result.FirstTokenMs = &ms
-		}
+		markFirstToken()
 		_, _ = assembled.WriteString(ev.Text)
 		chunk := openaiChunk(chunkID, model, created, map[string]any{"content": ev.Text}, nil)
 		writeKiroSSEData(c.Writer, chunk)
@@ -1021,11 +1114,7 @@ func (s *KiroChatService) streamToOpenAISSE(
 		"created": created,
 		"model":   model,
 		"choices": []any{},
-		"usage": map[string]any{
-			"prompt_tokens":     result.InputTokens,
-			"completion_tokens": result.OutputTokens,
-			"total_tokens":      result.InputTokens + result.OutputTokens,
-		},
+		"usage":   kiroOpenAIUsagePayload(result),
 	}
 	if usageBytes, err := json.Marshal(usageChunk); err == nil {
 		writeKiroSSEData(c.Writer, usageBytes)
@@ -1044,6 +1133,7 @@ func (s *KiroChatService) aggregateToOpenAIJSON(
 	c *gin.Context,
 	body io.Reader,
 	model string,
+	startedAt time.Time,
 	result *KiroChatResult,
 ) error {
 	var assembled strings.Builder
@@ -1056,11 +1146,10 @@ func (s *KiroChatService) aggregateToOpenAIJSON(
 
 	err := readKiroFrames(body, func(payload []byte) error {
 		ev := extractKiroDelta(payload)
-		if ev.InputTokens > 0 {
-			result.InputTokens = ev.InputTokens
-		}
-		if ev.OutputTokens > 0 {
-			result.OutputTokens = ev.OutputTokens
+		applyKiroFrameUsage(result, ev)
+		if result.FirstTokenMs == nil && (ev.Text != "" || ev.ToolUseID != "") {
+			ms := int(time.Since(startedAt).Milliseconds())
+			result.FirstTokenMs = &ms
 		}
 		if ev.ToolUseID != "" {
 			acc, ok := toolByID[ev.ToolUseID]
@@ -1131,14 +1220,28 @@ func (s *KiroChatService) aggregateToOpenAIJSON(
 			"message":       message,
 			"finish_reason": finishReason,
 		}},
-		"usage": map[string]any{
-			"prompt_tokens":     result.InputTokens,
-			"completion_tokens": result.OutputTokens,
-			"total_tokens":      result.InputTokens + result.OutputTokens,
-		},
+		"usage": kiroOpenAIUsagePayload(result),
 	}
 	c.JSON(http.StatusOK, resp)
 	return nil
+}
+
+func kiroOpenAIUsagePayload(result *KiroChatResult) map[string]any {
+	usage := map[string]any{
+		"prompt_tokens":     result.InputTokens,
+		"completion_tokens": result.OutputTokens,
+		"total_tokens":      result.InputTokens + result.OutputTokens,
+	}
+	if result.CacheCreationInputTokens > 0 {
+		usage["cache_creation_input_tokens"] = result.CacheCreationInputTokens
+	}
+	if result.CacheReadInputTokens > 0 {
+		usage["cache_read_input_tokens"] = result.CacheReadInputTokens
+		usage["prompt_tokens_details"] = map[string]any{
+			"cached_tokens": result.CacheReadInputTokens,
+		}
+	}
+	return usage
 }
 
 // ============== Helpers ==============
