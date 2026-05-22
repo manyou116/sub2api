@@ -13,10 +13,9 @@ import (
 // 调度策略（按优先级递减）：
 //  1. schedulable + IsKiro
 //  2. 排除 quarantine 与 excludedIDs
-//  3. 排除 KiroIsCapped（已耗尽配额且无 overage）
-//  4. 按 (Account.Priority desc, KiroRemainingQuota desc) 排序
-//  5. 同等关键字内随机打散，避免雪崩集中第一个账号
-//  6. 占用 concurrency slot；满则返回 wait plan
+//  3. 按 (Account.Priority desc, KiroRemainingQuota desc) 排序
+//  4. 同等关键字内随机打散，避免雪崩集中第一个账号
+//  5. 占用 concurrency slot；满则返回 wait plan
 func (s *OpenAIGatewayService) SelectKiroAccount(
 	ctx context.Context,
 	groupID *int64,
@@ -63,9 +62,6 @@ func (s *OpenAIGatewayService) SelectKiroAccount(
 			if _, skip := excludedIDs[acct.ID]; skip {
 				continue
 			}
-		}
-		if acct.KiroIsCapped() {
-			continue
 		}
 		candidates = append(candidates, acct)
 	}
