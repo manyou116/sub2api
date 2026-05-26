@@ -37,6 +37,8 @@ const (
 	FieldProxyID = "proxy_id"
 	// FieldConcurrency holds the string denoting the concurrency field in the database.
 	FieldConcurrency = "concurrency"
+	// FieldImageConcurrency holds the string denoting the image_concurrency field in the database.
+	FieldImageConcurrency = "image_concurrency"
 	// FieldLoadFactor holds the string denoting the load_factor field in the database.
 	FieldLoadFactor = "load_factor"
 	// FieldPriority holds the string denoting the priority field in the database.
@@ -123,6 +125,7 @@ var Columns = []string{
 	FieldExtra,
 	FieldProxyID,
 	FieldConcurrency,
+	FieldImageConcurrency,
 	FieldLoadFactor,
 	FieldPriority,
 	FieldRateMultiplier,
@@ -184,6 +187,8 @@ var (
 	DefaultExtra func() map[string]interface{}
 	// DefaultConcurrency holds the default value on creation for the "concurrency" field.
 	DefaultConcurrency int
+	// DefaultImageConcurrency holds the default value on creation for the "image_concurrency" field.
+	DefaultImageConcurrency int
 	// DefaultPriority holds the default value on creation for the "priority" field.
 	DefaultPriority int
 	// DefaultRateMultiplier holds the default value on creation for the "rate_multiplier" field.
@@ -251,6 +256,11 @@ func ByProxyID(opts ...sql.OrderTermOption) OrderOption {
 // ByConcurrency orders the results by the concurrency field.
 func ByConcurrency(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldConcurrency, opts...).ToFunc()
+}
+
+// ByImageConcurrency orders the results by the image_concurrency field.
+func ByImageConcurrency(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldImageConcurrency, opts...).ToFunc()
 }
 
 // ByLoadFactor orders the results by the load_factor field.

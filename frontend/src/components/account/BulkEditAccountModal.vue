@@ -514,7 +514,7 @@
       </div>
 
       <!-- Concurrency & Priority -->
-      <div class="grid grid-cols-2 gap-4 border-t border-gray-200 pt-4 dark:border-dark-600 lg:grid-cols-4">
+      <div class="grid grid-cols-2 gap-4 border-t border-gray-200 pt-4 dark:border-dark-600 lg:grid-cols-5">
         <div>
           <div class="mb-3 flex items-center justify-between">
             <label
@@ -543,6 +543,36 @@
             aria-labelledby="bulk-edit-concurrency-label"
             @input="concurrency = Math.max(1, concurrency || 1)"
           />
+        </div>
+        <div>
+          <div class="mb-3 flex items-center justify-between">
+            <label
+              id="bulk-edit-image-concurrency-label"
+              class="input-label mb-0"
+              for="bulk-edit-image-concurrency-enabled"
+            >
+              {{ t('admin.accounts.imageConcurrency') }}
+            </label>
+            <input
+              v-model="enableImageConcurrency"
+              id="bulk-edit-image-concurrency-enabled"
+              type="checkbox"
+              aria-controls="bulk-edit-image-concurrency"
+              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+          </div>
+          <input
+            v-model.number="imageConcurrency"
+            id="bulk-edit-image-concurrency"
+            type="number"
+            min="1"
+            :disabled="!enableImageConcurrency"
+            class="input"
+            :class="!enableImageConcurrency && 'cursor-not-allowed opacity-50'"
+            aria-labelledby="bulk-edit-image-concurrency-label"
+            @input="imageConcurrency = Math.max(1, imageConcurrency || 1)"
+          />
+          <p class="input-hint">{{ t('admin.accounts.imageConcurrencyHint') }}</p>
         </div>
         <div>
           <div class="mb-3 flex items-center justify-between">
@@ -1210,6 +1240,7 @@ const enableCustomErrorCodes = ref(false)
 const enableInterceptWarmup = ref(false)
 const enableProxy = ref(false)
 const enableConcurrency = ref(false)
+const enableImageConcurrency = ref(false)
 const enableLoadFactor = ref(false)
 const enablePriority = ref(false)
 const enableRateMultiplier = ref(false)
@@ -1237,6 +1268,7 @@ const customErrorCodeInput = ref<number | null>(null)
 const interceptWarmupRequests = ref(false)
 const proxyId = ref<number | null>(null)
 const concurrency = ref(1)
+const imageConcurrency = ref(1)
 const loadFactor = ref<number | null>(null)
 const priority = ref(1)
 const rateMultiplier = ref(1)
@@ -1405,6 +1437,10 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
 
   if (enableConcurrency.value) {
     updates.concurrency = concurrency.value
+  }
+
+  if (enableImageConcurrency.value) {
+    updates.image_concurrency = imageConcurrency.value
   }
 
   if (enableLoadFactor.value) {
@@ -1594,6 +1630,7 @@ const handleSubmit = async () => {
     enableInterceptWarmup.value ||
     enableProxy.value ||
     enableConcurrency.value ||
+    enableImageConcurrency.value ||
     enableLoadFactor.value ||
     enablePriority.value ||
     enableRateMultiplier.value ||
@@ -1695,6 +1732,7 @@ watch(
       enableInterceptWarmup.value = false
       enableProxy.value = false
       enableConcurrency.value = false
+      enableImageConcurrency.value = false
       enableLoadFactor.value = false
       enablePriority.value = false
       enableRateMultiplier.value = false
@@ -1719,6 +1757,7 @@ watch(
       interceptWarmupRequests.value = false
       proxyId.value = null
       concurrency.value = 1
+      imageConcurrency.value = 1
       loadFactor.value = null
       priority.value = 1
       rateMultiplier.value = 1

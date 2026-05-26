@@ -3243,6 +3243,8 @@ export default {
       proxy: '代理',
       noProxy: '无代理',
       concurrency: '并发数',
+      imageConcurrency: '图片并发数',
+      imageConcurrencyHint: '仅控制生图模型的账号并发',
       loadFactor: '负载因子',
       loadFactorHint: '提高负载因子可以提高对账号的调度频率',
       priority: '优先级',

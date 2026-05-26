@@ -89,6 +89,7 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 		SetCredentials(normalizeJSONMap(account.Credentials)).
 		SetExtra(normalizeJSONMap(account.Extra)).
 		SetConcurrency(account.Concurrency).
+		SetImageConcurrency(account.EffectiveImageConcurrency()).
 		SetPriority(account.Priority).
 		SetStatus(account.Status).
 		SetErrorMessage(account.ErrorMessage).
@@ -326,6 +327,7 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 		SetCredentials(normalizeJSONMap(account.Credentials)).
 		SetExtra(normalizeJSONMap(account.Extra)).
 		SetConcurrency(account.Concurrency).
+		SetImageConcurrency(account.EffectiveImageConcurrency()).
 		SetPriority(account.Priority).
 		SetStatus(account.Status).
 		SetErrorMessage(account.ErrorMessage).
@@ -1392,6 +1394,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, *updates.Concurrency)
 		idx++
 	}
+	if updates.ImageConcurrency != nil {
+		setClauses = append(setClauses, "image_concurrency = $"+itoa(idx))
+		args = append(args, normalizeImageConcurrency(*updates.ImageConcurrency))
+		idx++
+	}
 	if updates.Priority != nil {
 		setClauses = append(setClauses, "priority = $"+itoa(idx))
 		args = append(args, *updates.Priority)
@@ -1756,6 +1763,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		Extra:                   copyJSONMap(m.Extra),
 		ProxyID:                 m.ProxyID,
 		Concurrency:             m.Concurrency,
+		ImageConcurrency:        normalizeImageConcurrency(m.ImageConcurrency),
 		Priority:                m.Priority,
 		RateMultiplier:          &rateMultiplier,
 		LoadFactor:              m.LoadFactor,
@@ -1783,6 +1791,13 @@ func normalizeJSONMap(in map[string]any) map[string]any {
 		return map[string]any{}
 	}
 	return in
+}
+
+func normalizeImageConcurrency(v int) int {
+	if v <= 0 {
+		return 1
+	}
+	return v
 }
 
 func copyJSONMap(in map[string]any) map[string]any {

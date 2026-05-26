@@ -2286,6 +2286,8 @@ type AccountMutation struct {
 	extra                     *map[string]interface{}
 	concurrency               *int
 	addconcurrency            *int
+	image_concurrency         *int
+	addimage_concurrency      *int
 	load_factor               *int
 	addload_factor            *int
 	priority                  *int
@@ -2871,6 +2873,62 @@ func (m *AccountMutation) AddedConcurrency() (r int, exists bool) {
 func (m *AccountMutation) ResetConcurrency() {
 	m.concurrency = nil
 	m.addconcurrency = nil
+}
+
+// SetImageConcurrency sets the "image_concurrency" field.
+func (m *AccountMutation) SetImageConcurrency(i int) {
+	m.image_concurrency = &i
+	m.addimage_concurrency = nil
+}
+
+// ImageConcurrency returns the value of the "image_concurrency" field in the mutation.
+func (m *AccountMutation) ImageConcurrency() (r int, exists bool) {
+	v := m.image_concurrency
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldImageConcurrency returns the old "image_concurrency" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldImageConcurrency(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldImageConcurrency is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldImageConcurrency requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldImageConcurrency: %w", err)
+	}
+	return oldValue.ImageConcurrency, nil
+}
+
+// AddImageConcurrency adds i to the "image_concurrency" field.
+func (m *AccountMutation) AddImageConcurrency(i int) {
+	if m.addimage_concurrency != nil {
+		*m.addimage_concurrency += i
+	} else {
+		m.addimage_concurrency = &i
+	}
+}
+
+// AddedImageConcurrency returns the value that was added to the "image_concurrency" field in this mutation.
+func (m *AccountMutation) AddedImageConcurrency() (r int, exists bool) {
+	v := m.addimage_concurrency
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetImageConcurrency resets all changes to the "image_concurrency" field.
+func (m *AccountMutation) ResetImageConcurrency() {
+	m.image_concurrency = nil
+	m.addimage_concurrency = nil
 }
 
 // SetLoadFactor sets the "load_factor" field.
@@ -3871,7 +3929,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 28)
+	fields := make([]string, 0, 29)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -3904,6 +3962,9 @@ func (m *AccountMutation) Fields() []string {
 	}
 	if m.concurrency != nil {
 		fields = append(fields, account.FieldConcurrency)
+	}
+	if m.image_concurrency != nil {
+		fields = append(fields, account.FieldImageConcurrency)
 	}
 	if m.load_factor != nil {
 		fields = append(fields, account.FieldLoadFactor)
@@ -3986,6 +4047,8 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.ProxyID()
 	case account.FieldConcurrency:
 		return m.Concurrency()
+	case account.FieldImageConcurrency:
+		return m.ImageConcurrency()
 	case account.FieldLoadFactor:
 		return m.LoadFactor()
 	case account.FieldPriority:
@@ -4051,6 +4114,8 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldProxyID(ctx)
 	case account.FieldConcurrency:
 		return m.OldConcurrency(ctx)
+	case account.FieldImageConcurrency:
+		return m.OldImageConcurrency(ctx)
 	case account.FieldLoadFactor:
 		return m.OldLoadFactor(ctx)
 	case account.FieldPriority:
@@ -4170,6 +4235,13 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetConcurrency(v)
+		return nil
+	case account.FieldImageConcurrency:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetImageConcurrency(v)
 		return nil
 	case account.FieldLoadFactor:
 		v, ok := value.(int)
@@ -4301,6 +4373,9 @@ func (m *AccountMutation) AddedFields() []string {
 	if m.addconcurrency != nil {
 		fields = append(fields, account.FieldConcurrency)
 	}
+	if m.addimage_concurrency != nil {
+		fields = append(fields, account.FieldImageConcurrency)
+	}
 	if m.addload_factor != nil {
 		fields = append(fields, account.FieldLoadFactor)
 	}
@@ -4320,6 +4395,8 @@ func (m *AccountMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case account.FieldConcurrency:
 		return m.AddedConcurrency()
+	case account.FieldImageConcurrency:
+		return m.AddedImageConcurrency()
 	case account.FieldLoadFactor:
 		return m.AddedLoadFactor()
 	case account.FieldPriority:
@@ -4341,6 +4418,13 @@ func (m *AccountMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddConcurrency(v)
+		return nil
+	case account.FieldImageConcurrency:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddImageConcurrency(v)
 		return nil
 	case account.FieldLoadFactor:
 		v, ok := value.(int)
@@ -4515,6 +4599,9 @@ func (m *AccountMutation) ResetField(name string) error {
 		return nil
 	case account.FieldConcurrency:
 		m.ResetConcurrency()
+		return nil
+	case account.FieldImageConcurrency:
+		m.ResetImageConcurrency()
 		return nil
 	case account.FieldLoadFactor:
 		m.ResetLoadFactor()

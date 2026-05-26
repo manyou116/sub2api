@@ -100,6 +100,11 @@ func Concurrency(v int) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldConcurrency, v))
 }
 
+// ImageConcurrency applies equality check predicate on the "image_concurrency" field. It's identical to ImageConcurrencyEQ.
+func ImageConcurrency(v int) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldImageConcurrency, v))
+}
+
 // LoadFactor applies equality check predicate on the "load_factor" field. It's identical to LoadFactorEQ.
 func LoadFactor(v int) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldLoadFactor, v))
@@ -653,6 +658,46 @@ func ConcurrencyLT(v int) predicate.Account {
 // ConcurrencyLTE applies the LTE predicate on the "concurrency" field.
 func ConcurrencyLTE(v int) predicate.Account {
 	return predicate.Account(sql.FieldLTE(FieldConcurrency, v))
+}
+
+// ImageConcurrencyEQ applies the EQ predicate on the "image_concurrency" field.
+func ImageConcurrencyEQ(v int) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldImageConcurrency, v))
+}
+
+// ImageConcurrencyNEQ applies the NEQ predicate on the "image_concurrency" field.
+func ImageConcurrencyNEQ(v int) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldImageConcurrency, v))
+}
+
+// ImageConcurrencyIn applies the In predicate on the "image_concurrency" field.
+func ImageConcurrencyIn(vs ...int) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldImageConcurrency, vs...))
+}
+
+// ImageConcurrencyNotIn applies the NotIn predicate on the "image_concurrency" field.
+func ImageConcurrencyNotIn(vs ...int) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldImageConcurrency, vs...))
+}
+
+// ImageConcurrencyGT applies the GT predicate on the "image_concurrency" field.
+func ImageConcurrencyGT(v int) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldImageConcurrency, v))
+}
+
+// ImageConcurrencyGTE applies the GTE predicate on the "image_concurrency" field.
+func ImageConcurrencyGTE(v int) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldImageConcurrency, v))
+}
+
+// ImageConcurrencyLT applies the LT predicate on the "image_concurrency" field.
+func ImageConcurrencyLT(v int) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldImageConcurrency, v))
+}
+
+// ImageConcurrencyLTE applies the LTE predicate on the "image_concurrency" field.
+func ImageConcurrencyLTE(v int) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldImageConcurrency, v))
 }
 
 // LoadFactorEQ applies the EQ predicate on the "load_factor" field.

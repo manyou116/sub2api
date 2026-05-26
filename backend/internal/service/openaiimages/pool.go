@@ -30,6 +30,9 @@ type PoolAccount struct {
 	GroupIDs    []int64
 	Extra       map[string]any
 	LastUsedAt  *time.Time
+	// ImageConcurrency is the per-account image-generation concurrency limit.
+	// Values <= 0 are treated as 1 for backward compatibility.
+	ImageConcurrency int
 
 	// AccessToken / ProxyURL：probe 触发或 driver 回调时使用。
 	AccessToken string
@@ -57,8 +60,14 @@ type ImagePool struct {
 	Probe *AccountProbe
 	Now   func() time.Time
 
-	mu     sync.Mutex
-	leased map[int64]time.Time // accountID → lease 到期时刻
+	mu       sync.Mutex
+	leased   map[int64][]imageLease // accountID → active leases
+	leaseSeq uint64
+}
+
+type imageLease struct {
+	token  uint64
+	expire time.Time
 }
 
 // NewImagePool 构造 pool。
@@ -67,7 +76,7 @@ func NewImagePool(list PoolListAccounts, probe *AccountProbe) *ImagePool {
 		List:   list,
 		Probe:  probe,
 		Now:    time.Now,
-		leased: map[int64]time.Time{},
+		leased: map[int64][]imageLease{},
 	}
 }
 
@@ -86,19 +95,23 @@ var ErrNoImageAccount = errors.New("no image account available")
 
 // SelectAccount 选号：
 //  1. List(ctx, filter) 拿候选
-//  2. 过滤 status != active / 不可调度 / 已 lease / 仍在 cooldown
-//  3. 按 (image_quota_remaining DESC, last_used_at ASC) 排序
-//  4. 取第一个并加 30 秒 lease（防 SSE 阶段并发重选）
+//  2. 过滤 status != active / 不可调度 / 已达图片并发 / 仍在 cooldown
+//  3. 按 (image_load_rate ASC, image_quota_remaining DESC, last_used_at ASC) 排序
+//  4. 取第一个并加 2 分钟 lease（防 SSE 阶段并发重选）
 //
 // 若全部账号仍在 cooldown，对最近一个到期的账号触发一次 probe（带节流），再重试一轮。
 func (p *ImagePool) SelectAccount(ctx context.Context, filter PoolFilter) (PoolAccount, ReleaseFn, error) {
+	return p.selectAccount(ctx, filter, nil)
+}
+
+func (p *ImagePool) selectAccount(ctx context.Context, filter PoolFilter, excluded map[int64]struct{}) (PoolAccount, ReleaseFn, error) {
 	candidates, err := p.List(ctx, filter)
 	if err != nil {
 		return PoolAccount{}, noopRelease, err
 	}
 	now := p.now()
 
-	picked, ok := p.pickLocked(candidates, now)
+	picked, ok := p.pickLocked(candidates, now, excluded)
 	if ok {
 		p.maybeStaleProbe(picked, now)
 		return picked, p.lease(picked.ID, now), nil
@@ -110,7 +123,7 @@ func (p *ImagePool) SelectAccount(ctx context.Context, filter PoolFilter) (PoolA
 		candidates, err = p.List(ctx, filter)
 		if err == nil {
 			now = p.now()
-			if picked, ok = p.pickLocked(candidates, now); ok {
+			if picked, ok = p.pickLocked(candidates, now, excluded); ok {
 				p.maybeStaleProbe(picked, now)
 				return picked, p.lease(picked.ID, now), nil
 			}
@@ -119,25 +132,31 @@ func (p *ImagePool) SelectAccount(ctx context.Context, filter PoolFilter) (PoolA
 	return PoolAccount{}, noopRelease, ErrNoImageAccount
 }
 
-func (p *ImagePool) pickLocked(candidates []PoolAccount, now time.Time) (PoolAccount, bool) {
+func (p *ImagePool) pickLocked(candidates []PoolAccount, now time.Time, excluded map[int64]struct{}) (PoolAccount, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.gcLeaseLocked(now)
 
 	type scored struct {
 		PoolAccount
-		quota int
-		used  time.Time
+		quota    int
+		used     time.Time
+		loadRate int
 	}
 	var ready []scored
 	for _, a := range candidates {
+		if _, skip := excluded[a.ID]; skip {
+			continue
+		}
 		if a.Status != "" && a.Status != "active" {
 			continue
 		}
 		if !a.Schedulable {
 			continue
 		}
-		if _, busy := p.leased[a.ID]; busy {
+		limit := imageConcurrencyLimit(a)
+		active := p.activeLeaseCountLocked(a.ID)
+		if active >= limit {
 			continue
 		}
 		if cool := readCooldown(a.Extra); !cool.IsZero() && cool.After(now) {
@@ -148,12 +167,15 @@ func (p *ImagePool) pickLocked(candidates []PoolAccount, now time.Time) (PoolAcc
 		if a.LastUsedAt != nil {
 			used = *a.LastUsedAt
 		}
-		ready = append(ready, scored{a, quota, used})
+		ready = append(ready, scored{PoolAccount: a, quota: quota, used: used, loadRate: imageLoadRate(active, limit)})
 	}
 	if len(ready) == 0 {
 		return PoolAccount{}, false
 	}
 	sort.SliceStable(ready, func(i, j int) bool {
+		if ready[i].loadRate != ready[j].loadRate {
+			return ready[i].loadRate < ready[j].loadRate
+		}
 		if ready[i].quota != ready[j].quota {
 			return ready[i].quota > ready[j].quota
 		}
@@ -165,9 +187,14 @@ func (p *ImagePool) pickLocked(candidates []PoolAccount, now time.Time) (PoolAcc
 func (p *ImagePool) lease(accountID int64, now time.Time) ReleaseFn {
 	p.mu.Lock()
 	if p.leased == nil {
-		p.leased = map[int64]time.Time{}
+		p.leased = map[int64][]imageLease{}
 	}
-	p.leased[accountID] = now.Add(2 * time.Minute)
+	token := p.leaseSeq + 1
+	p.leaseSeq = token
+	p.leased[accountID] = append(p.leased[accountID], imageLease{
+		token:  token,
+		expire: now.Add(2 * time.Minute),
+	})
 	p.mu.Unlock()
 	var released atomic.Bool
 	return func() {
@@ -175,21 +202,65 @@ func (p *ImagePool) lease(accountID int64, now time.Time) ReleaseFn {
 			return
 		}
 		p.mu.Lock()
-		delete(p.leased, accountID)
+		p.releaseLeaseLocked(accountID, token)
 		p.mu.Unlock()
 	}
 }
 
 func (p *ImagePool) gcLeaseLocked(now time.Time) {
 	if p.leased == nil {
-		p.leased = map[int64]time.Time{}
+		p.leased = map[int64][]imageLease{}
 		return
 	}
-	for id, expire := range p.leased {
-		if !expire.After(now) {
+	for id, leases := range p.leased {
+		kept := leases[:0]
+		for _, lease := range leases {
+			if lease.expire.After(now) {
+				kept = append(kept, lease)
+			}
+		}
+		if len(kept) == 0 {
 			delete(p.leased, id)
+		} else {
+			p.leased[id] = kept
 		}
 	}
+}
+
+func (p *ImagePool) activeLeaseCountLocked(accountID int64) int {
+	if p.leased == nil {
+		return 0
+	}
+	return len(p.leased[accountID])
+}
+
+func (p *ImagePool) releaseLeaseLocked(accountID int64, token uint64) {
+	leases := p.leased[accountID]
+	for i, lease := range leases {
+		if lease.token == token {
+			leases = append(leases[:i], leases[i+1:]...)
+			break
+		}
+	}
+	if len(leases) == 0 {
+		delete(p.leased, accountID)
+		return
+	}
+	p.leased[accountID] = leases
+}
+
+func imageConcurrencyLimit(account PoolAccount) int {
+	if account.ImageConcurrency <= 0 {
+		return 1
+	}
+	return account.ImageConcurrency
+}
+
+func imageLoadRate(active, limit int) int {
+	if limit <= 0 {
+		return 100
+	}
+	return active * 100 / limit
 }
 
 func (p *ImagePool) probeEarliestExpired(ctx context.Context, candidates []PoolAccount, now time.Time) bool {

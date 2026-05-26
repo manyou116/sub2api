@@ -79,16 +79,17 @@ type AccountRepository interface {
 // AccountBulkUpdate describes the fields that can be updated in a bulk operation.
 // Nil pointers mean "do not change".
 type AccountBulkUpdate struct {
-	Name           *string
-	ProxyID        *int64
-	Concurrency    *int
-	Priority       *int
-	RateMultiplier *float64
-	LoadFactor     *int
-	Status         *string
-	Schedulable    *bool
-	Credentials    map[string]any
-	Extra          map[string]any
+	Name             *string
+	ProxyID          *int64
+	Concurrency      *int
+	ImageConcurrency *int
+	Priority         *int
+	RateMultiplier   *float64
+	LoadFactor       *int
+	Status           *string
+	Schedulable      *bool
+	Credentials      map[string]any
+	Extra            map[string]any
 }
 
 // CreateAccountRequest 创建账号请求
@@ -101,6 +102,7 @@ type CreateAccountRequest struct {
 	Extra              map[string]any `json:"extra"`
 	ProxyID            *int64         `json:"proxy_id"`
 	Concurrency        int            `json:"concurrency"`
+	ImageConcurrency   int            `json:"image_concurrency"`
 	Priority           int            `json:"priority"`
 	GroupIDs           []int64        `json:"group_ids"`
 	ExpiresAt          *time.Time     `json:"expires_at"`
@@ -115,6 +117,7 @@ type UpdateAccountRequest struct {
 	Extra              *map[string]any `json:"extra"`
 	ProxyID            *int64          `json:"proxy_id"`
 	Concurrency        *int            `json:"concurrency"`
+	ImageConcurrency   *int            `json:"image_concurrency"`
 	Priority           *int            `json:"priority"`
 	Status             *string         `json:"status"`
 	GroupIDs           *[]int64        `json:"group_ids"`
@@ -151,17 +154,18 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 
 	// 创建账号
 	account := &Account{
-		Name:        req.Name,
-		Notes:       normalizeAccountNotes(req.Notes),
-		Platform:    req.Platform,
-		Type:        req.Type,
-		Credentials: req.Credentials,
-		Extra:       req.Extra,
-		ProxyID:     req.ProxyID,
-		Concurrency: req.Concurrency,
-		Priority:    req.Priority,
-		Status:      StatusActive,
-		ExpiresAt:   req.ExpiresAt,
+		Name:             req.Name,
+		Notes:            normalizeAccountNotes(req.Notes),
+		Platform:         req.Platform,
+		Type:             req.Type,
+		Credentials:      req.Credentials,
+		Extra:            req.Extra,
+		ProxyID:          req.ProxyID,
+		Concurrency:      req.Concurrency,
+		ImageConcurrency: req.ImageConcurrency,
+		Priority:         req.Priority,
+		Status:           StatusActive,
+		ExpiresAt:        req.ExpiresAt,
 	}
 	if req.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *req.AutoPauseOnExpired
@@ -261,6 +265,10 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 
 	if req.Concurrency != nil {
 		account.Concurrency = *req.Concurrency
+	}
+
+	if req.ImageConcurrency != nil {
+		account.ImageConcurrency = *req.ImageConcurrency
 	}
 
 	if req.Priority != nil {

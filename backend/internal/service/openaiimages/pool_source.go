@@ -125,7 +125,7 @@ type PoolSourceDeps struct {
 	// AcquireSlot 可选：lookup 成功后立即占用账号级并发槽位（接入 ConcurrencyService），
 	// 这样图片请求会同步出现在 OpsConcurrencyCard 的账号/分组/平台聚合里。
 	// 返回的 release 会被串接到 Select() 返回的 release 函数末尾。
-	// 失败或槽位满时应返回 noop release（不阻塞图片调度）；返回 error 表示硬错误。
+	// 失败或槽位满时应返回 error，调用方会释放 pool lease 并把本次选号视为不可用。
 	AcquireSlot func(ctx context.Context, accountID int64, maxConcurrency int) (release func(), err error)
 }
 
@@ -142,34 +142,45 @@ func NewPoolBackedSource(deps PoolSourceDeps) *PoolBackedSource {
 }
 
 func (s *PoolBackedSource) Select(ctx context.Context, filter PoolFilter) (AccountView, func(), error) {
-	pa, release, err := s.deps.Pool.SelectAccount(ctx, filter)
-	if err != nil {
-		return nil, nil, err
-	}
-	view, err := s.deps.LookupAccount(ctx, pa)
-	if err != nil {
-		release()
-		return nil, nil, err
-	}
-	if view == nil {
-		release()
-		return nil, nil, errors.New("openaiimages: lookup returned nil view")
-	}
-
-	// 接入账号级并发槽位（用于 OpsConcurrencyCard 实时观测）。
-	// 失败或满时降级为 noop，不阻断图片调度。
-	slotRelease := func() {}
-	if s.deps.AcquireSlot != nil {
-		if rel, err := s.deps.AcquireSlot(ctx, view.ID(), view.MaxConcurrency()); err == nil && rel != nil {
-			slotRelease = rel
+	excluded := map[int64]struct{}{}
+	for {
+		pa, release, err := s.deps.Pool.selectAccount(ctx, filter, excluded)
+		if err != nil {
+			return nil, nil, err
 		}
-	}
+		view, err := s.deps.LookupAccount(ctx, pa)
+		if err != nil {
+			release()
+			return nil, nil, err
+		}
+		if view == nil {
+			release()
+			return nil, nil, errors.New("openaiimages: lookup returned nil view")
+		}
 
-	combined := func() {
-		slotRelease()
-		release()
+		// 接入账号级并发槽位（用于 OpsConcurrencyCard 实时观测和多实例并发约束）。
+		slotRelease := func() {}
+		if s.deps.AcquireSlot != nil {
+			rel, err := s.deps.AcquireSlot(ctx, view.ID(), view.MaxConcurrency())
+			if err != nil {
+				release()
+				if errors.Is(err, ErrNoImageAccount) {
+					excluded[pa.ID] = struct{}{}
+					continue
+				}
+				return nil, nil, err
+			}
+			if rel != nil {
+				slotRelease = rel
+			}
+		}
+
+		combined := func() {
+			slotRelease()
+			release()
+		}
+		return view, combined, nil
 	}
-	return view, combined, nil
 }
 
 func (s *PoolBackedSource) OnSuccess(ctx context.Context, account AccountView, result *ImageResult) error {

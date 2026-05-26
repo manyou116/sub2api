@@ -172,6 +172,27 @@ func (_u *AccountUpdate) AddConcurrency(v int) *AccountUpdate {
 	return _u
 }
 
+// SetImageConcurrency sets the "image_concurrency" field.
+func (_u *AccountUpdate) SetImageConcurrency(v int) *AccountUpdate {
+	_u.mutation.ResetImageConcurrency()
+	_u.mutation.SetImageConcurrency(v)
+	return _u
+}
+
+// SetNillableImageConcurrency sets the "image_concurrency" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableImageConcurrency(v *int) *AccountUpdate {
+	if v != nil {
+		_u.SetImageConcurrency(*v)
+	}
+	return _u
+}
+
+// AddImageConcurrency adds value to the "image_concurrency" field.
+func (_u *AccountUpdate) AddImageConcurrency(v int) *AccountUpdate {
+	_u.mutation.AddImageConcurrency(v)
+	return _u
+}
+
 // SetLoadFactor sets the "load_factor" field.
 func (_u *AccountUpdate) SetLoadFactor(v int) *AccountUpdate {
 	_u.mutation.ResetLoadFactor()
@@ -711,6 +732,12 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedConcurrency(); ok {
 		_spec.AddField(account.FieldConcurrency, field.TypeInt, value)
 	}
+	if value, ok := _u.mutation.ImageConcurrency(); ok {
+		_spec.SetField(account.FieldImageConcurrency, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedImageConcurrency(); ok {
+		_spec.AddField(account.FieldImageConcurrency, field.TypeInt, value)
+	}
 	if value, ok := _u.mutation.LoadFactor(); ok {
 		_spec.SetField(account.FieldLoadFactor, field.TypeInt, value)
 	}
@@ -1096,6 +1123,27 @@ func (_u *AccountUpdateOne) SetNillableConcurrency(v *int) *AccountUpdateOne {
 // AddConcurrency adds value to the "concurrency" field.
 func (_u *AccountUpdateOne) AddConcurrency(v int) *AccountUpdateOne {
 	_u.mutation.AddConcurrency(v)
+	return _u
+}
+
+// SetImageConcurrency sets the "image_concurrency" field.
+func (_u *AccountUpdateOne) SetImageConcurrency(v int) *AccountUpdateOne {
+	_u.mutation.ResetImageConcurrency()
+	_u.mutation.SetImageConcurrency(v)
+	return _u
+}
+
+// SetNillableImageConcurrency sets the "image_concurrency" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableImageConcurrency(v *int) *AccountUpdateOne {
+	if v != nil {
+		_u.SetImageConcurrency(*v)
+	}
+	return _u
+}
+
+// AddImageConcurrency adds value to the "image_concurrency" field.
+func (_u *AccountUpdateOne) AddImageConcurrency(v int) *AccountUpdateOne {
+	_u.mutation.AddImageConcurrency(v)
 	return _u
 }
 
@@ -1667,6 +1715,12 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if value, ok := _u.mutation.AddedConcurrency(); ok {
 		_spec.AddField(account.FieldConcurrency, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.ImageConcurrency(); ok {
+		_spec.SetField(account.FieldImageConcurrency, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedImageConcurrency(); ok {
+		_spec.AddField(account.FieldImageConcurrency, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.LoadFactor(); ok {
 		_spec.SetField(account.FieldLoadFactor, field.TypeInt, value)

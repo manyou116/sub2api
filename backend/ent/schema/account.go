@@ -97,6 +97,10 @@ func (Account) Fields() []ent.Field {
 		field.Int("concurrency").
 			Default(3),
 
+		// image_concurrency: 图片生成场景的账户最大并发请求数
+		field.Int("image_concurrency").
+			Default(1),
+
 		field.Int("load_factor").Optional().Nillable(),
 
 		// priority: 账户优先级，数值越小优先级越高

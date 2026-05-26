@@ -274,6 +274,7 @@ type CreateAccountInput struct {
 	Extra              map[string]any
 	ProxyID            *int64
 	Concurrency        int
+	ImageConcurrency   int
 	Priority           int
 	RateMultiplier     *float64 // 账号计费倍率（>=0，允许 0）
 	LoadFactor         *int
@@ -295,6 +296,7 @@ type UpdateAccountInput struct {
 	Extra                 map[string]any
 	ProxyID               *int64
 	Concurrency           *int     // 使用指针区分"未提供"和"设置为0"
+	ImageConcurrency      *int     // 使用指针区分"未提供"和"设置为0"
 	Priority              *int     // 使用指针区分"未提供"和"设置为0"
 	RateMultiplier        *float64 // 账号计费倍率（>=0，允许 0）
 	LoadFactor            *int
@@ -307,19 +309,20 @@ type UpdateAccountInput struct {
 
 // BulkUpdateAccountsInput describes the payload for bulk updating accounts.
 type BulkUpdateAccountsInput struct {
-	AccountIDs     []int64
-	Filters        *BulkUpdateAccountFilters
-	Name           string
-	ProxyID        *int64
-	Concurrency    *int
-	Priority       *int
-	RateMultiplier *float64 // 账号计费倍率（>=0，允许 0）
-	LoadFactor     *int
-	Status         string
-	Schedulable    *bool
-	GroupIDs       *[]int64
-	Credentials    map[string]any
-	Extra          map[string]any
+	AccountIDs       []int64
+	Filters          *BulkUpdateAccountFilters
+	Name             string
+	ProxyID          *int64
+	Concurrency      *int
+	ImageConcurrency *int
+	Priority         *int
+	RateMultiplier   *float64 // 账号计费倍率（>=0，允许 0）
+	LoadFactor       *int
+	Status           string
+	Schedulable      *bool
+	GroupIDs         *[]int64
+	Credentials      map[string]any
+	Extra            map[string]any
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
 	// This should only be set when the caller has explicitly confirmed the risk.
 	SkipMixedChannelCheck bool
@@ -2364,17 +2367,18 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	}
 
 	account := &Account{
-		Name:        input.Name,
-		Notes:       normalizeAccountNotes(input.Notes),
-		Platform:    input.Platform,
-		Type:        input.Type,
-		Credentials: input.Credentials,
-		Extra:       input.Extra,
-		ProxyID:     input.ProxyID,
-		Concurrency: input.Concurrency,
-		Priority:    input.Priority,
-		Status:      StatusActive,
-		Schedulable: true,
+		Name:             input.Name,
+		Notes:            normalizeAccountNotes(input.Notes),
+		Platform:         input.Platform,
+		Type:             input.Type,
+		Credentials:      input.Credentials,
+		Extra:            input.Extra,
+		ProxyID:          input.ProxyID,
+		Concurrency:      input.Concurrency,
+		ImageConcurrency: input.ImageConcurrency,
+		Priority:         input.Priority,
+		Status:           StatusActive,
+		Schedulable:      true,
 	}
 	// 预计算固定时间重置的下次重置时间
 	if account.Extra != nil {
@@ -2501,6 +2505,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	// 只在指针非 nil 时更新 Concurrency（支持设置为 0）
 	if input.Concurrency != nil {
 		account.Concurrency = *input.Concurrency
+	}
+	// 只在指针非 nil 时更新 ImageConcurrency（支持设置为 0，落库前归一化）
+	if input.ImageConcurrency != nil {
+		account.ImageConcurrency = *input.ImageConcurrency
 	}
 	// 只在指针非 nil 时更新 Priority（支持设置为 0）
 	if input.Priority != nil {
@@ -2643,6 +2651,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 	if input.Concurrency != nil {
 		repoUpdates.Concurrency = input.Concurrency
+	}
+	if input.ImageConcurrency != nil {
+		repoUpdates.ImageConcurrency = input.ImageConcurrency
 	}
 	if input.Priority != nil {
 		repoUpdates.Priority = input.Priority

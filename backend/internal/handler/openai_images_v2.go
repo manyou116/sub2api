@@ -137,11 +137,10 @@ func NewOpenAIImagesV2Handler(
 			}
 			res, err := h.concurrencyService.AcquireImageAccountSlot(ctx, accountID, maxConc)
 			if err != nil {
-				// 槽位申请出错时降级（不阻断图片调度）
-				return func() {}, nil
+				return nil, err
 			}
 			if !res.Acquired || res.ReleaseFunc == nil {
-				return func() {}, nil
+				return nil, openaiimages.ErrNoImageAccount
 			}
 			return res.ReleaseFunc, nil
 		},
@@ -598,19 +597,20 @@ func (h *OpenAIImagesV2Handler) lookupAccountView(ctx context.Context, pa openai
 
 	view := openaiimages.NewPoolAccountView(
 		openaiimages.PoolAccount{
-			ID:          acct.ID,
-			Status:      acct.Status,
-			Schedulable: acct.Schedulable,
-			GroupIDs:    acct.GroupIDs,
-			Extra:       acct.Extra,
-			LastUsedAt:  acct.LastUsedAt,
-			AccessToken: extractOAuthAccessToken(acct),
-			ProxyURL:    extractProxyURL(acct),
+			ID:               acct.ID,
+			Status:           acct.Status,
+			Schedulable:      acct.Schedulable,
+			GroupIDs:         acct.GroupIDs,
+			Extra:            acct.Extra,
+			LastUsedAt:       acct.LastUsedAt,
+			ImageConcurrency: acct.EffectiveImageConcurrency(),
+			AccessToken:      extractOAuthAccessToken(acct),
+			ProxyURL:         extractProxyURL(acct),
 		},
 		openaiimages.WithAPIKey(apiKey),
 		openaiimages.WithGroupLegacyDefault(groupLegacy),
 		openaiimages.WithDeviceSession(deviceID, sessionID, chatGPTAcctID, userAgent),
-		openaiimages.WithMaxConcurrency(acct.Concurrency),
+		openaiimages.WithMaxConcurrency(acct.EffectiveImageConcurrency()),
 	)
 	return view, nil
 }
@@ -704,14 +704,15 @@ func listOpenAIImageAccounts(
 			continue
 		}
 		out = append(out, openaiimages.PoolAccount{
-			ID:          a.ID,
-			Status:      a.Status,
-			Schedulable: a.Schedulable,
-			GroupIDs:    a.GroupIDs,
-			Extra:       cloneExtra(a.Extra),
-			LastUsedAt:  a.LastUsedAt,
-			AccessToken: extractOAuthAccessToken(a),
-			ProxyURL:    extractProxyURL(a),
+			ID:               a.ID,
+			Status:           a.Status,
+			Schedulable:      a.Schedulable,
+			GroupIDs:         a.GroupIDs,
+			Extra:            cloneExtra(a.Extra),
+			LastUsedAt:       a.LastUsedAt,
+			ImageConcurrency: a.EffectiveImageConcurrency(),
+			AccessToken:      extractOAuthAccessToken(a),
+			ProxyURL:         extractProxyURL(a),
 		})
 	}
 	return out, nil

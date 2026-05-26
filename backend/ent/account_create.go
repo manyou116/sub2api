@@ -139,6 +139,20 @@ func (_c *AccountCreate) SetNillableConcurrency(v *int) *AccountCreate {
 	return _c
 }
 
+// SetImageConcurrency sets the "image_concurrency" field.
+func (_c *AccountCreate) SetImageConcurrency(v int) *AccountCreate {
+	_c.mutation.SetImageConcurrency(v)
+	return _c
+}
+
+// SetNillableImageConcurrency sets the "image_concurrency" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableImageConcurrency(v *int) *AccountCreate {
+	if v != nil {
+		_c.SetImageConcurrency(*v)
+	}
+	return _c
+}
+
 // SetLoadFactor sets the "load_factor" field.
 func (_c *AccountCreate) SetLoadFactor(v int) *AccountCreate {
 	_c.mutation.SetLoadFactor(v)
@@ -481,6 +495,10 @@ func (_c *AccountCreate) defaults() error {
 		v := account.DefaultConcurrency
 		_c.mutation.SetConcurrency(v)
 	}
+	if _, ok := _c.mutation.ImageConcurrency(); !ok {
+		v := account.DefaultImageConcurrency
+		_c.mutation.SetImageConcurrency(v)
+	}
 	if _, ok := _c.mutation.Priority(); !ok {
 		v := account.DefaultPriority
 		_c.mutation.SetPriority(v)
@@ -544,6 +562,9 @@ func (_c *AccountCreate) check() error {
 	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		return &ValidationError{Name: "concurrency", err: errors.New(`ent: missing required field "Account.concurrency"`)}
+	}
+	if _, ok := _c.mutation.ImageConcurrency(); !ok {
+		return &ValidationError{Name: "image_concurrency", err: errors.New(`ent: missing required field "Account.image_concurrency"`)}
 	}
 	if _, ok := _c.mutation.Priority(); !ok {
 		return &ValidationError{Name: "priority", err: errors.New(`ent: missing required field "Account.priority"`)}
@@ -636,6 +657,10 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Concurrency(); ok {
 		_spec.SetField(account.FieldConcurrency, field.TypeInt, value)
 		_node.Concurrency = value
+	}
+	if value, ok := _c.mutation.ImageConcurrency(); ok {
+		_spec.SetField(account.FieldImageConcurrency, field.TypeInt, value)
+		_node.ImageConcurrency = value
 	}
 	if value, ok := _c.mutation.LoadFactor(); ok {
 		_spec.SetField(account.FieldLoadFactor, field.TypeInt, value)
@@ -951,6 +976,24 @@ func (u *AccountUpsert) UpdateConcurrency() *AccountUpsert {
 // AddConcurrency adds v to the "concurrency" field.
 func (u *AccountUpsert) AddConcurrency(v int) *AccountUpsert {
 	u.Add(account.FieldConcurrency, v)
+	return u
+}
+
+// SetImageConcurrency sets the "image_concurrency" field.
+func (u *AccountUpsert) SetImageConcurrency(v int) *AccountUpsert {
+	u.Set(account.FieldImageConcurrency, v)
+	return u
+}
+
+// UpdateImageConcurrency sets the "image_concurrency" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateImageConcurrency() *AccountUpsert {
+	u.SetExcluded(account.FieldImageConcurrency)
+	return u
+}
+
+// AddImageConcurrency adds v to the "image_concurrency" field.
+func (u *AccountUpsert) AddImageConcurrency(v int) *AccountUpsert {
+	u.Add(account.FieldImageConcurrency, v)
 	return u
 }
 
@@ -1458,6 +1501,27 @@ func (u *AccountUpsertOne) AddConcurrency(v int) *AccountUpsertOne {
 func (u *AccountUpsertOne) UpdateConcurrency() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateConcurrency()
+	})
+}
+
+// SetImageConcurrency sets the "image_concurrency" field.
+func (u *AccountUpsertOne) SetImageConcurrency(v int) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetImageConcurrency(v)
+	})
+}
+
+// AddImageConcurrency adds v to the "image_concurrency" field.
+func (u *AccountUpsertOne) AddImageConcurrency(v int) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddImageConcurrency(v)
+	})
+}
+
+// UpdateImageConcurrency sets the "image_concurrency" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateImageConcurrency() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateImageConcurrency()
 	})
 }
 
@@ -2180,6 +2244,27 @@ func (u *AccountUpsertBulk) AddConcurrency(v int) *AccountUpsertBulk {
 func (u *AccountUpsertBulk) UpdateConcurrency() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateConcurrency()
+	})
+}
+
+// SetImageConcurrency sets the "image_concurrency" field.
+func (u *AccountUpsertBulk) SetImageConcurrency(v int) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetImageConcurrency(v)
+	})
+}
+
+// AddImageConcurrency adds v to the "image_concurrency" field.
+func (u *AccountUpsertBulk) AddImageConcurrency(v int) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddImageConcurrency(v)
+	})
+}
+
+// UpdateImageConcurrency sets the "image_concurrency" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateImageConcurrency() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateImageConcurrency()
 	})
 }
 
