@@ -2848,6 +2848,8 @@ export default {
         tempUnschedulable: '临时不可调度',
         quotaExceeded: '配额超限',
         unschedulable: '不可调度',
+        codexQuotaPaused: 'Codex 配额暂停',
+        codexQuotaPausedUntil: 'Codex 5h/7d 配额达到阈值，账号已暂停调度。预计 {time} 自动恢复。当前用量：{usage}',
         rateLimitedUntil: '限流中，当前不参与调度，预计 {time} 自动恢复',
         rateLimitedAutoResume: '{time} 自动恢复',
         modelRateLimitedUntil: '{model} 限流至 {time}',

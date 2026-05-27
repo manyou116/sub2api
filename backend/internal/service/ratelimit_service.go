@@ -824,7 +824,9 @@ func (s *RateLimitService) handleCustomErrorCode(ctx context.Context, account *A
 func (s *RateLimitService) handle429(ctx context.Context, account *Account, headers http.Header, responseBody []byte) {
 	// 1. OpenAI 平台：优先尝试解析 x-codex-* 响应头（用于 rate_limit_exceeded）
 	if account.Platform == PlatformOpenAI {
-		s.persistOpenAICodexSnapshot(ctx, account, headers)
+		if s.persistOpenAICodexSnapshot(ctx, account, headers) {
+			return
+		}
 		if resetAt := s.calculateOpenAI429ResetTime(headers); resetAt != nil {
 			if err := s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt); err != nil {
 				slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
@@ -1127,23 +1129,23 @@ func pickSooner(a, b *time.Time) *time.Time {
 	}
 }
 
-func (s *RateLimitService) persistOpenAICodexSnapshot(ctx context.Context, account *Account, headers http.Header) {
+func (s *RateLimitService) persistOpenAICodexSnapshot(ctx context.Context, account *Account, headers http.Header) bool {
 	if s == nil || s.accountRepo == nil || account == nil || headers == nil {
-		return
+		return false
 	}
 	snapshot := ParseCodexRateLimitHeaders(headers)
 	if snapshot == nil {
-		return
+		return false
 	}
 	updates := buildCodexUsageExtraUpdates(snapshot, time.Now())
 	if len(updates) == 0 {
-		return
+		return false
 	}
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
 		slog.Warn("openai_codex_snapshot_persist_failed", "account_id", account.ID, "error", err)
 	}
 	settings := getOpenAICodexQuotaGuardSettings(ctx, s.settingService, account.ID)
-	applyOpenAICodexQuotaGuard(ctx, s.accountRepo, account.ID, snapshot, settings, time.Now())
+	return applyOpenAICodexQuotaGuard(ctx, s.accountRepo, account.ID, snapshot, settings, time.Now())
 }
 
 // parseOpenAIRateLimitResetTime 解析 OpenAI 格式的 429 响应，返回重置时间的 Unix 时间戳

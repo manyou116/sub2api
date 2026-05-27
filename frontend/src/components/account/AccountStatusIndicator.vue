@@ -2,7 +2,9 @@
   <div class="flex items-center gap-2">
     <!-- Rate Limit Display (429) - Two-line layout -->
     <div v-if="isRateLimited" class="flex flex-col items-center gap-1">
-      <span class="badge text-xs badge-warning">{{ t('admin.accounts.status.rateLimited') }}</span>
+      <span class="badge text-xs badge-warning">
+        {{ isOpenAICodexQuotaPaused ? t('admin.accounts.status.codexQuotaPaused') : t('admin.accounts.status.rateLimited') }}
+      </span>
       <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ rateLimitResumeText }}</span>
     </div>
 
@@ -57,19 +59,26 @@
       </div>
     </div>
 
-    <!-- Rate Limit Indicator (429) -->
+    <!-- Rate Limit Indicator (429 / Codex) -->
     <div v-if="isRateLimited" class="group relative">
       <span
         class="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
       >
         <Icon name="exclamationTriangle" size="xs" :stroke-width="2" />
-        429
+        {{ isOpenAICodexQuotaPaused ? 'Codex' : '429' }}
       </span>
       <!-- Tooltip -->
       <div
         class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 whitespace-normal rounded bg-gray-900 px-3 py-2 text-center text-xs leading-relaxed text-white opacity-0 transition-opacity group-hover:opacity-100 dark:bg-gray-700"
       >
-        {{ t('admin.accounts.status.rateLimitedUntil', { time: formatDateTime(account.rate_limit_reset_at) }) }}
+        {{
+          isOpenAICodexQuotaPaused
+            ? t('admin.accounts.status.codexQuotaPausedUntil', {
+                time: formatDateTime(account.rate_limit_reset_at),
+                usage: codexQuotaUsageText
+              })
+            : t('admin.accounts.status.rateLimitedUntil', { time: formatDateTime(account.rate_limit_reset_at) })
+        }}
         <div
           class="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-gray-900 dark:border-t-gray-700"
         ></div>
@@ -177,6 +186,37 @@ const isRateLimited = computed(() => {
   return new Date(props.account.rate_limit_reset_at) > new Date()
 })
 
+const accountExtra = computed(() => props.account.extra as Record<string, unknown> | undefined)
+
+const isOpenAICodexQuotaPaused = computed(() => {
+  if (!isRateLimited.value) return false
+  if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return false
+  const extra = accountExtra.value
+  if (!extra) return false
+  return [
+    extra.codex_usage_updated_at,
+    extra.codex_5h_used_percent,
+    extra.codex_5h_reset_at,
+    extra.codex_7d_used_percent,
+    extra.codex_7d_reset_at
+  ].some((value) => value !== undefined && value !== null && value !== '')
+})
+
+const formatCodexPercent = (value: unknown): string => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  const rounded = Number.isInteger(value) ? value.toString() : value.toFixed(1)
+  return `${rounded}%`
+}
+
+const codexQuotaUsageText = computed(() => {
+  const extra = accountExtra.value
+  if (!extra) return '-'
+  return [
+    `5h ${formatCodexPercent(extra.codex_5h_used_percent)}`,
+    `7d ${formatCodexPercent(extra.codex_7d_used_percent)}`
+  ].join(' / ')
+})
+
 type AccountModelStatusItem = {
   kind: 'rate_limit' | 'credits_exhausted' | 'credits_active'
   model: string
@@ -185,7 +225,7 @@ type AccountModelStatusItem = {
 
 // Computed: active model statuses (普通模型限流 + 积分耗尽 + 走积分中)
 const activeModelStatuses = computed<AccountModelStatusItem[]>(() => {
-  const extra = props.account.extra as Record<string, unknown> | undefined
+  const extra = accountExtra.value
   const modelLimits = extra?.model_rate_limits as
     | Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>
     | undefined

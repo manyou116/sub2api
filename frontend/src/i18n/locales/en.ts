@@ -2660,6 +2660,8 @@ export default {
         tempUnschedulable: 'Temp Unschedulable',
         quotaExceeded: 'Quota Exceeded',
         unschedulable: 'Unschedulable',
+        codexQuotaPaused: 'Codex Quota Paused',
+        codexQuotaPausedUntil: 'Codex 5h/7d quota reached the guard threshold. This account is paused from scheduling until {time}. Current usage: {usage}',
         rateLimitedUntil: 'Rate limited and removed from scheduling. Auto resumes at {time}',
         rateLimitedAutoResume: 'Auto resumes in {time}',
         modelRateLimitedUntil: '{model} rate limited until {time}',

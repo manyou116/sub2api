@@ -101,6 +101,11 @@ type DefaultSubscriptionGroupReader interface {
 	GetByID(ctx context.Context, id int64) (*Group, error)
 }
 
+type OpenAICodexQuotaGuardAccountRepository interface {
+	ListByPlatform(ctx context.Context, platform string) ([]Account, error)
+	ClearRateLimit(ctx context.Context, id int64) error
+}
+
 // WebSearchManagerBuilder creates a websearch.Manager from config (injected by infra layer).
 // proxyURLs maps proxy ID to resolved URL for provider-level proxy support.
 type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[int64]string)
@@ -110,6 +115,7 @@ type SettingService struct {
 	settingRepo             SettingRepository
 	defaultSubGroupReader   DefaultSubscriptionGroupReader
 	proxyRepo               ProxyRepository // for resolving websearch provider proxy URLs
+	codexQuotaAccountRepo   OpenAICodexQuotaGuardAccountRepository
 	cfg                     *config.Config
 	onUpdate                func() // Callback when settings are updated (for cache invalidation)
 	version                 string // Application version
@@ -379,6 +385,11 @@ func (s *SettingService) SetDefaultSubscriptionGroupReader(reader DefaultSubscri
 // SetProxyRepository injects a proxy repo for resolving websearch provider proxy URLs.
 func (s *SettingService) SetProxyRepository(repo ProxyRepository) {
 	s.proxyRepo = repo
+}
+
+// SetOpenAICodexQuotaGuardAccountRepository injects account runtime state access for Codex guard recovery.
+func (s *SettingService) SetOpenAICodexQuotaGuardAccountRepository(repo OpenAICodexQuotaGuardAccountRepository) {
+	s.codexQuotaAccountRepo = repo
 }
 
 // GetAllSettings 获取所有系统设置
@@ -2886,7 +2897,282 @@ func (s *SettingService) SetOpenAICodexQuotaGuardSettings(ctx context.Context, s
 		return fmt.Errorf("marshal openai codex quota guard settings: %w", err)
 	}
 
-	return s.settingRepo.Set(ctx, SettingKeyOpenAICodexQuotaGuardSettings, string(data))
+	if err := s.settingRepo.Set(ctx, SettingKeyOpenAICodexQuotaGuardSettings, string(data)); err != nil {
+		return err
+	}
+
+	if err := s.reconcileOpenAICodexQuotaGuardPauses(ctx, settings); err != nil {
+		slog.Warn("openai_codex_quota_guard_pause_reconcile_failed", "error", err)
+	}
+
+	return nil
+}
+
+const openAICodexQuotaGuardResetMatchTolerance = 5 * time.Second
+
+func (s *SettingService) reconcileOpenAICodexQuotaGuardPauses(ctx context.Context, nextSettings *OpenAICodexQuotaGuardSettings) error {
+	if s == nil || s.codexQuotaAccountRepo == nil || nextSettings == nil {
+		return nil
+	}
+
+	accounts, err := s.codexQuotaAccountRepo.ListByPlatform(ctx, PlatformOpenAI)
+	if err != nil {
+		return fmt.Errorf("list openai accounts: %w", err)
+	}
+
+	now := time.Now()
+	var clearErrs []error
+	for _, account := range accounts {
+		if !isOpenAICodexQuotaGuardRecoveryCandidate(account, now) {
+			continue
+		}
+
+		snapshot := openAICodexUsageSnapshotFromExtra(account.Extra, now)
+		if !isOpenAICodexQuotaGuardPause(account, snapshot, now) {
+			continue
+		}
+
+		if calculateOpenAICodexQuotaGuardReset(snapshot, nextSettings, now) != nil {
+			continue
+		}
+
+		if err := s.codexQuotaAccountRepo.ClearRateLimit(ctx, account.ID); err != nil {
+			clearErrs = append(clearErrs, fmt.Errorf("account %d: %w", account.ID, err))
+			continue
+		}
+
+		slog.Info("openai_codex_quota_guard_pause_recovered", "account_id", account.ID)
+	}
+
+	return errors.Join(clearErrs...)
+}
+
+func isOpenAICodexQuotaGuardRecoveryCandidate(account Account, now time.Time) bool {
+	if account.ID <= 0 || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
+		return false
+	}
+	return account.RateLimitResetAt != nil && account.RateLimitResetAt.After(now)
+}
+
+func isOpenAICodexQuotaGuardPause(account Account, snapshot *OpenAICodexUsageSnapshot, now time.Time) bool {
+	if account.RateLimitResetAt == nil || snapshot == nil {
+		return false
+	}
+	for _, resetAt := range openAICodexQuotaGuardResetCandidates(snapshot, now) {
+		if timesWithin(account.RateLimitResetAt.UTC(), resetAt.UTC(), openAICodexQuotaGuardResetMatchTolerance) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAICodexQuotaGuardResetCandidates(snapshot *OpenAICodexUsageSnapshot, now time.Time) []time.Time {
+	if snapshot == nil {
+		return nil
+	}
+	normalized := snapshot.Normalize()
+	if normalized == nil {
+		return nil
+	}
+
+	baseTime := codexSnapshotBaseTime(snapshot, now)
+	resets := make([]time.Time, 0, 2)
+	appendReset := func(resetAfterSeconds *int) {
+		if resetAfterSeconds == nil {
+			return
+		}
+		resetAt := baseTime.Add(time.Duration(*resetAfterSeconds) * time.Second)
+		if resetAt.After(now) {
+			resets = append(resets, resetAt)
+		}
+	}
+	appendReset(normalized.Reset5hSeconds)
+	appendReset(normalized.Reset7dSeconds)
+	return resets
+}
+
+func openAICodexUsageSnapshotFromExtra(extra map[string]any, now time.Time) *OpenAICodexUsageSnapshot {
+	if len(extra) == 0 {
+		return nil
+	}
+
+	updatedAt := strings.TrimSpace(openAICodexExtraString(extra, "codex_usage_updated_at"))
+	snapshot := &OpenAICodexUsageSnapshot{UpdatedAt: updatedAt}
+	hasData := false
+
+	if v := openAICodexExtraFloat64(extra, "codex_7d_used_percent"); v != nil {
+		snapshot.PrimaryUsedPercent = v
+		hasData = true
+	}
+	if v := openAICodexExtraResetAfterSeconds(extra, "codex_7d_reset_after_seconds", "codex_7d_reset_at", updatedAt, now); v != nil {
+		snapshot.PrimaryResetAfterSeconds = v
+		hasData = true
+	}
+	if v := openAICodexExtraInt(extra, "codex_7d_window_minutes"); v != nil {
+		snapshot.PrimaryWindowMinutes = v
+		hasData = true
+	}
+	if v := openAICodexExtraFloat64(extra, "codex_5h_used_percent"); v != nil {
+		snapshot.SecondaryUsedPercent = v
+		hasData = true
+	}
+	if v := openAICodexExtraResetAfterSeconds(extra, "codex_5h_reset_after_seconds", "codex_5h_reset_at", updatedAt, now); v != nil {
+		snapshot.SecondaryResetAfterSeconds = v
+		hasData = true
+	}
+	if v := openAICodexExtraInt(extra, "codex_5h_window_minutes"); v != nil {
+		snapshot.SecondaryWindowMinutes = v
+		hasData = true
+	}
+
+	if hasData {
+		return snapshot
+	}
+
+	if v := openAICodexExtraFloat64(extra, "codex_primary_used_percent"); v != nil {
+		snapshot.PrimaryUsedPercent = v
+		hasData = true
+	}
+	if v := openAICodexExtraResetAfterSeconds(extra, "codex_primary_reset_after_seconds", "", updatedAt, now); v != nil {
+		snapshot.PrimaryResetAfterSeconds = v
+		hasData = true
+	}
+	if v := openAICodexExtraInt(extra, "codex_primary_window_minutes"); v != nil {
+		snapshot.PrimaryWindowMinutes = v
+		hasData = true
+	}
+	if v := openAICodexExtraFloat64(extra, "codex_secondary_used_percent"); v != nil {
+		snapshot.SecondaryUsedPercent = v
+		hasData = true
+	}
+	if v := openAICodexExtraResetAfterSeconds(extra, "codex_secondary_reset_after_seconds", "", updatedAt, now); v != nil {
+		snapshot.SecondaryResetAfterSeconds = v
+		hasData = true
+	}
+	if v := openAICodexExtraInt(extra, "codex_secondary_window_minutes"); v != nil {
+		snapshot.SecondaryWindowMinutes = v
+		hasData = true
+	}
+	if v := openAICodexExtraFloat64(extra, "codex_primary_over_secondary_percent"); v != nil {
+		snapshot.PrimaryOverSecondaryPercent = v
+		hasData = true
+	}
+
+	if !hasData {
+		return nil
+	}
+	return snapshot
+}
+
+func openAICodexExtraResetAfterSeconds(extra map[string]any, secondsKey, resetAtKey, updatedAt string, now time.Time) *int {
+	if resetAtKey != "" {
+		if resetAt, ok := openAICodexExtraTime(extra, resetAtKey); ok {
+			base := now
+			if updatedAtTime, err := parseTime(updatedAt); err == nil {
+				base = updatedAtTime
+			}
+			seconds := int(resetAt.Sub(base).Seconds())
+			return &seconds
+		}
+	}
+	return openAICodexExtraInt(extra, secondsKey)
+}
+
+func openAICodexExtraFloat64(extra map[string]any, key string) *float64 {
+	raw, ok := extra[key]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	switch v := raw.(type) {
+	case float64:
+		return &v
+	case float32:
+		parsed := float64(v)
+		return &parsed
+	case int:
+		parsed := float64(v)
+		return &parsed
+	case int64:
+		parsed := float64(v)
+		return &parsed
+	case json.Number:
+		if parsed, err := v.Float64(); err == nil {
+			return &parsed
+		}
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return nil
+		}
+		if parsed, err := strconv.ParseFloat(trimmed, 64); err == nil {
+			return &parsed
+		}
+	}
+	return nil
+}
+
+func openAICodexExtraInt(extra map[string]any, key string) *int {
+	raw, ok := extra[key]
+	if !ok || raw == nil {
+		return nil
+	}
+
+	switch v := raw.(type) {
+	case int:
+		return &v
+	case int64:
+		parsed := int(v)
+		return &parsed
+	case float64:
+		parsed := int(v)
+		return &parsed
+	case json.Number:
+		if parsed, err := v.Int64(); err == nil {
+			converted := int(parsed)
+			return &converted
+		}
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return nil
+		}
+		if parsed, err := strconv.Atoi(trimmed); err == nil {
+			return &parsed
+		}
+	}
+	return nil
+}
+
+func openAICodexExtraString(extra map[string]any, key string) string {
+	raw, ok := extra[key]
+	if !ok || raw == nil {
+		return ""
+	}
+	if s, ok := raw.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func openAICodexExtraTime(extra map[string]any, key string) (time.Time, bool) {
+	raw := strings.TrimSpace(openAICodexExtraString(extra, key))
+	if raw == "" {
+		return time.Time{}, false
+	}
+	parsed, err := parseTime(raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func timesWithin(a, b time.Time, tolerance time.Duration) bool {
+	delta := a.Sub(b)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= tolerance
 }
 
 // GetOIDCConnectOAuthConfig 返回用于登录的“最终生效” OIDC 配置。

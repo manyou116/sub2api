@@ -232,6 +232,9 @@ func ProvideRateLimitService(
 	svc.SetTimeoutCounterCache(timeoutCounterCache)
 	svc.SetOpenAI403CounterCache(openAI403CounterCache)
 	svc.SetSettingService(settingService)
+	if settingService != nil {
+		settingService.SetOpenAICodexQuotaGuardAccountRepository(accountRepo)
+	}
 	svc.SetTokenCacheInvalidator(tokenCacheInvalidator)
 	return svc
 }

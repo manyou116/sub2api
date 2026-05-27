@@ -13,6 +13,13 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
+vi.mock('@/utils/format', () => ({
+  formatCountdown: () => '1h',
+  formatCountdownWithSuffix: () => '1h later',
+  formatDateTime: (value: string | null | undefined) => value ?? '',
+  formatTime: (value: string | null | undefined) => value ?? ''
+}))
+
 function makeAccount(overrides: Partial<Account>): Account {
   return {
     id: 1,
@@ -123,6 +130,36 @@ describe('AccountStatusIndicator', () => {
     })
 
     expect(wrapper.text()).toContain('admin.accounts.status.creditsExhausted')
+  })
+
+  it('OpenAI Codex 配额暂停时显示专用提示', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          id: 66,
+          name: 'openai-codex',
+          platform: 'openai',
+          type: 'oauth',
+          rate_limited_at: '2026-05-27T04:00:00Z',
+          rate_limit_reset_at: '2099-05-27T04:00:00Z',
+          extra: {
+            codex_usage_updated_at: '2026-05-27T04:00:00Z',
+            codex_5h_used_percent: 0,
+            codex_7d_used_percent: 3,
+            codex_7d_reset_at: '2099-05-27T04:00:00Z'
+          }
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.codexQuotaPaused')
+    expect(wrapper.text()).toContain('Codex')
+    expect(wrapper.text()).not.toContain('429')
   })
 
   it('模型限流 + overages 启用 + AICredits key 生效 → 普通限流样式（积分耗尽，无 ⚡）', () => {
