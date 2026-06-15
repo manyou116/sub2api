@@ -34,19 +34,21 @@ const (
 	openAIImagesGenerationsURL = "https://api.openai.com/v1/images/generations"
 	openAIImagesEditsURL       = "https://api.openai.com/v1/images/edits"
 
-	openAIChatGPTStartURL          = "https://chatgpt.com/"
-	openAIChatGPTFilesURL          = "https://chatgpt.com/backend-api/files"
-	openAIImageBackendUserAgent    = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-	openAIImageMaxDownloadBytes    = 20 << 20 // 20MB per image download
-	openAIImageMaxUploadPartSize   = 20 << 20 // 20MB per multipart upload part
-	openAIImagesResponsesMainModel = "gpt-5.4-mini"
+	openAIChatGPTStartURL                 = "https://chatgpt.com/"
+	openAIChatGPTFilesURL                 = "https://chatgpt.com/backend-api/files"
+	openAIImageBackendUserAgent           = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+	openAIImageMaxDownloadBytes           = 20 << 20 // 20MB per image download
+	openAIImageLegacyWebMaxUploadPartSize = 10 << 20 // 10MB per legacy web upload part
+	openAIImageCodexAPIMaxUploadPartSize  = 20 << 20 // 20MB per Codex API upload part
+	openAIImagesResponsesMainModel        = "gpt-5.4-mini"
 )
 
 type OpenAIImagesCapability string
 
 const (
-	OpenAIImagesCapabilityBasic  OpenAIImagesCapability = "images-basic"
-	OpenAIImagesCapabilityNative OpenAIImagesCapability = "images-native"
+	OpenAIImagesCapabilityBasic    OpenAIImagesCapability = "images-basic"
+	OpenAIImagesCapabilityNative   OpenAIImagesCapability = "images-native"
+	OpenAIImagesCapabilityCodexAPI OpenAIImagesCapability = "images-codex-api"
 )
 
 type OpenAIImagesUpload struct {
@@ -220,6 +222,9 @@ func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []b
 	}
 	req.SizeTier = normalizeOpenAIImageSizeTier(req.Size)
 	req.RequiredCapability = classifyOpenAIImagesCapability(req)
+	if _, ok := firstOpenAIImagesUploadOverLimit(req, openAIImageLegacyWebMaxUploadPartSize); ok {
+		req.RequiredCapability = OpenAIImagesCapabilityCodexAPI
+	}
 	return req, nil
 }
 
@@ -331,10 +336,13 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 			continue
 		}
 
-		data, err := io.ReadAll(io.LimitReader(part, openAIImageMaxUploadPartSize))
+		data, err := io.ReadAll(io.LimitReader(part, openAIImageCodexAPIMaxUploadPartSize+1))
 		_ = part.Close()
 		if err != nil {
 			return fmt.Errorf("read multipart field %s: %w", name, err)
+		}
+		if len(data) > openAIImageCodexAPIMaxUploadPartSize {
+			return fmt.Errorf("multipart field %s exceeds maximum size of %d bytes", name, openAIImageCodexAPIMaxUploadPartSize)
 		}
 
 		fileName := strings.TrimSpace(part.FileName())
@@ -546,6 +554,9 @@ func (s *OpenAIGatewayService) ForwardImages(
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
+	if err := validateOpenAIImagesUploadPartSizeForAccount(c, account, parsed); err != nil {
+		return nil, err
+	}
 	switch account.Type {
 	case AccountTypeAPIKey:
 		return s.forwardOpenAIImagesAPIKey(ctx, c, account, body, parsed, channelMappedModel)
@@ -554,6 +565,41 @@ func (s *OpenAIGatewayService) ForwardImages(
 	default:
 		return nil, fmt.Errorf("unsupported account type: %s", account.Type)
 	}
+}
+
+func validateOpenAIImagesUploadPartSizeForAccount(c *gin.Context, account *Account, parsed *OpenAIImagesRequest) error {
+	limit := openAIImageLegacyWebMaxUploadPartSize
+	if account != nil && account.Type == AccountTypeOAuth {
+		limit = openAIImageCodexAPIMaxUploadPartSize
+	}
+	if upload, ok := firstOpenAIImagesUploadOverLimit(parsed, limit); ok {
+		message := fmt.Sprintf("multipart field %s exceeds maximum size of %d bytes", upload.FieldName, limit)
+		imageErr := &OpenAIImagesUpstreamError{
+			StatusCode: http.StatusBadRequest,
+			ErrorType:  "invalid_request_error",
+			Code:       "image_too_large",
+			Message:    message,
+			Param:      upload.FieldName,
+		}
+		writeOpenAIImagesUpstreamErrorResponse(c, imageErr)
+		return imageErr
+	}
+	return nil
+}
+
+func firstOpenAIImagesUploadOverLimit(parsed *OpenAIImagesRequest, limit int) (OpenAIImagesUpload, bool) {
+	if parsed == nil || limit <= 0 {
+		return OpenAIImagesUpload{}, false
+	}
+	for _, upload := range parsed.Uploads {
+		if len(upload.Data) > limit {
+			return upload, true
+		}
+	}
+	if parsed.MaskUpload != nil && len(parsed.MaskUpload.Data) > limit {
+		return *parsed.MaskUpload, true
+	}
+	return OpenAIImagesUpload{}, false
 }
 
 func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(

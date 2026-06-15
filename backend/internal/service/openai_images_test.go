@@ -34,6 +34,23 @@ func (w *failingOpenAIImageWriter) Write(p []byte) (int, error) {
 	return w.ResponseWriter.Write(p)
 }
 
+func buildOpenAIImagesMultipartBody(t *testing.T, imageSize int) ([]byte, string) {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("prompt", "draw a cat"))
+
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", `form-data; name="image"; filename="image.png"`)
+	header.Set("Content-Type", "image/png")
+	part, err := writer.CreatePart(header)
+	require.NoError(t, err)
+	_, err = part.Write(bytes.Repeat([]byte("x"), imageSize))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	return body.Bytes(), writer.FormDataContentType()
+}
+
 func TestOpenAIGatewayServiceParseOpenAIImagesRequest_JSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","size":"1024x1024","quality":"high","stream":true}`)
@@ -707,6 +724,115 @@ func TestOpenAIGatewayServiceForwardImages_OAuthNonStreamModerationBlockedReturn
 	require.Equal(t, "image_generation_user_error", gjson.Get(rec.Body.String(), "error.type").String())
 	require.Equal(t, "moderation_blocked", gjson.Get(rec.Body.String(), "error.code").String())
 	require.Contains(t, gjson.Get(rec.Body.String(), "error.message").String(), "safety system")
+}
+
+func TestOpenAIGatewayServiceForwardImages_APIKeyRejectsUploadOverLegacyWebLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body, contentType := buildOpenAIImagesMultipartBody(t, openAIImageLegacyWebMaxUploadPartSize+1)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(body))
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	svc := &OpenAIGatewayService{}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	require.Len(t, parsed.Uploads, 1)
+	require.Len(t, parsed.Uploads[0].Data, openAIImageLegacyWebMaxUploadPartSize+1)
+	require.Equal(t, OpenAIImagesCapabilityCodexAPI, parsed.RequiredCapability)
+
+	account := &Account{
+		ID:       6,
+		Name:     "openai-apikey",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+	require.Nil(t, result)
+	var upstreamErr *OpenAIImagesUpstreamError
+	require.ErrorAs(t, err, &upstreamErr)
+	require.Equal(t, http.StatusBadRequest, upstreamErr.StatusCode)
+	require.Equal(t, "image_too_large", upstreamErr.Code)
+	require.Equal(t, "image", upstreamErr.Param)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "image_too_large", gjson.Get(rec.Body.String(), "error.code").String())
+}
+
+func TestOpenAIGatewayServiceForwardImages_OAuthAllowsUploadOverLegacyWebLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body, contentType := buildOpenAIImagesMultipartBody(t, openAIImageLegacyWebMaxUploadPartSize+1)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(body))
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+	c.Set("api_key", &APIKey{ID: 42})
+
+	svc := &OpenAIGatewayService{
+		httpUpstream: &httpUpstreamRecorder{
+			resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/event-stream"},
+					"X-Request-Id": []string{"req_img_oauth_large_upload"},
+				},
+				Body: io.NopCloser(strings.NewReader(
+					"data: {\"type\":\"response.created\",\"response\":{\"created_at\":1710000021}}\n\n" +
+						"data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000021,\"output\":[{\"type\":\"image_generation_call\",\"result\":\"aW1hZ2U=\"}]}}\n\n",
+				)),
+			},
+		},
+	}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	require.Len(t, parsed.Uploads, 1)
+	require.Len(t, parsed.Uploads[0].Data, openAIImageLegacyWebMaxUploadPartSize+1)
+	require.Equal(t, OpenAIImagesCapabilityCodexAPI, parsed.RequiredCapability)
+
+	account := &Account{
+		ID:       1,
+		Name:     "openai-oauth",
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "token-123",
+		},
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, result.ImageCount)
+	require.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestOpenAIGatewayServiceParseOpenAIImagesRequest_RejectsUploadOverCodexAPILimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body, contentType := buildOpenAIImagesMultipartBody(t, openAIImageCodexAPIMaxUploadPartSize+1)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(body))
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = req
+
+	svc := &OpenAIGatewayService{}
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.Nil(t, parsed)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exceeds maximum size")
+}
+
+func TestAccountSupportsOpenAIImageCapability_CodexAPIRequiresOAuth(t *testing.T) {
+	oauthAccount := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	apiKeyAccount := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	require.True(t, oauthAccount.SupportsOpenAIImageCapability(OpenAIImagesCapabilityCodexAPI))
+	require.False(t, apiKeyAccount.SupportsOpenAIImageCapability(OpenAIImagesCapabilityCodexAPI))
 }
 
 func TestOpenAIGatewayServiceForwardImages_APIKeyGenerationUsesConfiguredV1BaseURL(t *testing.T) {
