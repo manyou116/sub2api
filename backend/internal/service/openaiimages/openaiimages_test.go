@@ -1,6 +1,10 @@
 package openaiimages
 
 import (
+	"bytes"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -37,6 +41,28 @@ func TestResolveDriverName(t *testing.T) {
 	}
 	if got := ResolveDriverName(apiCap, &fakeAccount{legacyEnabled: true}); got != DriverAPIKey {
 		t.Errorf("dall-e cap forces apikey, got %q", got)
+	}
+}
+
+func TestCapabilityForRequest_LargeImageForcesResponses(t *testing.T) {
+	webCap, _ := LookupCapability("gpt-image-2")
+	req := &ImagesRequest{Model: "gpt-image-2", Images: []SourceImage{{Data: bytes.Repeat([]byte("x"), MaxImageBytes+1)}}}
+
+	cap, err := CapabilityForRequest(webCap, req)
+	if err != nil {
+		t.Fatalf("CapabilityForRequest err: %v", err)
+	}
+	if cap.DriverName != DriverResponses {
+		t.Fatalf("DriverName=%q want %q", cap.DriverName, DriverResponses)
+	}
+}
+
+func TestCapabilityForRequest_LargeImageRejectsAPIKeyOnlyModel(t *testing.T) {
+	apiCap, _ := LookupCapability("gpt-image-1")
+	req := &ImagesRequest{Model: "gpt-image-1", Images: []SourceImage{{Data: bytes.Repeat([]byte("x"), MaxImageBytes+1)}}}
+
+	if _, err := CapabilityForRequest(apiCap, req); err == nil {
+		t.Fatal("expected error")
 	}
 }
 
@@ -83,6 +109,26 @@ func TestParseImagesGenerationsRejectsEmptyPrompt(t *testing.T) {
 	}
 }
 
+func TestParseImagesEdits_LargeImageRequiresCodexAPI(t *testing.T) {
+	req := newMultipartImageRequest(t, MaxImageBytes+1)
+
+	parsed, err := ParseImagesEdits(req)
+	if err != nil {
+		t.Fatalf("ParseImagesEdits err: %v", err)
+	}
+	if !parsed.RequiresCodexAPI() {
+		t.Fatal("expected large upload to require Codex API")
+	}
+}
+
+func TestParseImagesEdits_RejectsImageOverCodexAPILimit(t *testing.T) {
+	req := newMultipartImageRequest(t, MaxCodexAPIImageBytes+1)
+
+	if _, err := ParseImagesEdits(req); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestParseFromChatCompletionsTextOnly(t *testing.T) {
 	body := []byte(`{"model":"gpt-image-2","messages":[
 		{"role":"system","content":"you are an artist"},
@@ -123,6 +169,28 @@ func TestParseFromResponsesString(t *testing.T) {
 	if !strings.Contains(req.Prompt, "render in oil") || !strings.Contains(req.Prompt, "a knight") {
 		t.Errorf("instructions should prefix prompt: %q", req.Prompt)
 	}
+}
+
+func newMultipartImageRequest(t *testing.T, imageSize int) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("prompt", "draw a cat"); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	part, err := writer.CreateFormFile("image", "image.png")
+	if err != nil {
+		t.Fatalf("create image part: %v", err)
+	}
+	if _, err := part.Write(bytes.Repeat([]byte("x"), imageSize)); err != nil {
+		t.Fatalf("write image part: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(body.Bytes()))
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return req
 }
 
 // fakeAccount 实现 AccountView 用于单测。

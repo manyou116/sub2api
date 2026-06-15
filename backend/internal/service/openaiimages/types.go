@@ -73,6 +73,20 @@ type ImagesRequest struct {
 	StartedAt time.Time
 }
 
+// RequiresCodexAPI reports whether any input image exceeds the legacy web limit
+// and must therefore use the Codex API image bridge.
+func (r *ImagesRequest) RequiresCodexAPI() bool {
+	if r == nil {
+		return false
+	}
+	for _, img := range r.Images {
+		if len(img.Data) > MaxImageBytes {
+			return true
+		}
+	}
+	return false
+}
+
 // ImageItem 是单张生成结果。
 type ImageItem struct {
 	B64JSON       string // ResponseFormatB64JSON

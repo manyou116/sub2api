@@ -13,8 +13,11 @@ import (
 	"time"
 )
 
-// MaxImageBytes 限制单张输入图片尺寸（10 MiB），与 OpenAI 官方 /v1/images/edits 对齐。
+// MaxImageBytes 限制 legacy web 单张输入图片尺寸（10 MiB）。
 const MaxImageBytes = 10 << 20
+
+// MaxCodexAPIImageBytes 限制 Codex API 单张输入图片尺寸（20 MiB）。
+const MaxCodexAPIImageBytes = 20 << 20
 
 // MaxImagesPerRequest 单请求最多接受的输入图片数。
 const MaxImagesPerRequest = 16
@@ -310,20 +313,20 @@ func readMultipartImages(form *multipart.Form, key string) ([]SourceImage, error
 	files := form.File[key]
 	out := make([]SourceImage, 0, len(files))
 	for _, fh := range files {
-		if fh.Size > MaxImageBytes {
-			return nil, fmt.Errorf("image %q exceeds %d bytes", fh.Filename, MaxImageBytes)
+		if fh.Size > MaxCodexAPIImageBytes {
+			return nil, fmt.Errorf("image %q exceeds %d bytes", fh.Filename, MaxCodexAPIImageBytes)
 		}
 		f, err := fh.Open()
 		if err != nil {
 			return nil, fmt.Errorf("open %q: %w", fh.Filename, err)
 		}
-		buf, rerr := io.ReadAll(io.LimitReader(f, MaxImageBytes+1))
+		buf, rerr := io.ReadAll(io.LimitReader(f, MaxCodexAPIImageBytes+1))
 		_ = f.Close()
 		if rerr != nil {
 			return nil, fmt.Errorf("read %q: %w", fh.Filename, rerr)
 		}
-		if len(buf) > MaxImageBytes {
-			return nil, fmt.Errorf("image %q exceeds %d bytes", fh.Filename, MaxImageBytes)
+		if len(buf) > MaxCodexAPIImageBytes {
+			return nil, fmt.Errorf("image %q exceeds %d bytes", fh.Filename, MaxCodexAPIImageBytes)
 		}
 		ct := fh.Header.Get("Content-Type")
 		if ct == "" {
@@ -458,8 +461,8 @@ func decodeDataURLOrSkip(url string) (*SourceImage, error) {
 	default:
 		return nil, fmt.Errorf("unsupported data URL encoding: %s", enc)
 	}
-	if len(data) > MaxImageBytes {
-		return nil, fmt.Errorf("data URL image exceeds %d bytes", MaxImageBytes)
+	if len(data) > MaxCodexAPIImageBytes {
+		return nil, fmt.Errorf("data URL image exceeds %d bytes", MaxCodexAPIImageBytes)
 	}
 	return &SourceImage{Filename: "image", ContentType: mime, Data: data}, nil
 }

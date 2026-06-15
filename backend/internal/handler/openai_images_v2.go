@@ -283,6 +283,11 @@ func (h *OpenAIImagesV2Handler) run(c *gin.Context, req *openaiimages.ImagesRequ
 			"unsupported image model: "+req.Model)
 		return
 	}
+	cap, capErr := openaiimages.CapabilityForRequest(cap, req)
+	if capErr != nil {
+		writeOpenAIImageError(c, http.StatusBadRequest, "invalid_request_error", capErr.Error())
+		return
+	}
 
 	h.applyDefaultResponseFormat(c, req)
 

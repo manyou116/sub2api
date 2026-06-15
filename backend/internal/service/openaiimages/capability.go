@@ -1,6 +1,9 @@
 package openaiimages
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // modelTable 维护"客户端别名 → Capability"。任何不在表中的 model 在 chat/responses
 // 入口走文本分支，在 images/* 入口直接 400。
@@ -91,4 +94,15 @@ func ResolveDriverName(cap Capability, account AccountView) string {
 		return DriverResponses
 	}
 	return DriverWeb
+}
+
+func CapabilityForRequest(cap Capability, req *ImagesRequest) (Capability, error) {
+	if req == nil || !req.RequiresCodexAPI() {
+		return cap, nil
+	}
+	if cap.DriverName != DriverWeb && cap.DriverName != DriverResponses {
+		return cap, fmt.Errorf("input image exceeds legacy web limit of %d bytes and model %q cannot use Codex API", MaxImageBytes, req.Model)
+	}
+	cap.DriverName = DriverResponses
+	return cap, nil
 }
