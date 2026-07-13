@@ -24,6 +24,16 @@ server:
   # 用于生成邮件中的外部链接（例如：重置密码链接）的前端基础地址
   # Example: "https://example.com"
   frontend_url: ""
+  # Graceful shutdown timeout in seconds (wait for in-flight API requests during rolling updates)
+  # 优雅退出超时（秒）：滚动更新时等待进行中的 API 请求完成
+  # Orchestrator stop grace period should be >= this value (+ a few seconds)
+  # 编排器停止宽限期应 >= 该值（并预留几秒）
+  shutdown_timeout: 300
+  # After SIGTERM, mark /health as draining and wait this many seconds before closing the listener
+  # 收到 SIGTERM 后先将 /health 标记为 draining，等待该秒数再关闭监听（便于负载均衡摘流）
+  # Set to 5-15 when behind a load balancer with readiness probes
+  # 若前置负载均衡使用就绪探针，建议设为 5-15
+  shutdown_drain_delay: 0
   # Trusted proxies for X-Forwarded-For parsing (CIDR/IP). Empty disables trusted proxies.
   # 信任的代理地址（CIDR/IP 格式），用于解析 X-Forwarded-For 头。留空则禁用代理信任。
   trusted_proxies: []

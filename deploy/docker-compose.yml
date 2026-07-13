@@ -173,6 +173,8 @@ services:
         condition: service_healthy
     networks:
       - sub2api-network
+    # Wait for in-flight API requests on SIGTERM (should be >= server.shutdown_timeout)
+    stop_grace_period: 320s
     healthcheck:
       test:
         [

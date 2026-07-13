@@ -598,12 +598,18 @@ type PricingConfig struct {
 }
 
 type ServerConfig struct {
-	Host               string    `mapstructure:"host"`
-	Port               int       `mapstructure:"port"`
-	Mode               string    `mapstructure:"mode"`                  // debug/release
-	FrontendURL        string    `mapstructure:"frontend_url"`          // 前端基础 URL，用于生成邮件中的外部链接
-	ReadHeaderTimeout  int       `mapstructure:"read_header_timeout"`   // 读取请求头超时（秒）
-	IdleTimeout        int       `mapstructure:"idle_timeout"`          // 空闲连接超时（秒）
+	Host              string `mapstructure:"host"`
+	Port              int    `mapstructure:"port"`
+	Mode              string `mapstructure:"mode"`                // debug/release
+	FrontendURL       string `mapstructure:"frontend_url"`        // 前端基础 URL，用于生成邮件中的外部链接
+	ReadHeaderTimeout int    `mapstructure:"read_header_timeout"` // 读取请求头超时（秒）
+	IdleTimeout       int    `mapstructure:"idle_timeout"`        // 空闲连接超时（秒）
+	// ShutdownTimeout: graceful HTTP shutdown wait for in-flight requests (seconds).
+	// Rolling updates should keep orchestrator stop grace >= this value.
+	ShutdownTimeout int `mapstructure:"shutdown_timeout"`
+	// ShutdownDrainDelay: after SIGTERM, mark /health unhealthy and wait this many
+	// seconds before closing the listener so load balancers can stop routing.
+	ShutdownDrainDelay int       `mapstructure:"shutdown_drain_delay"`
 	TrustedProxies     []string  `mapstructure:"trusted_proxies"`       // 可信代理列表（CIDR/IP）
 	MaxRequestBodySize int64     `mapstructure:"max_request_body_size"` // 全局最大请求体限制
 	H2C                H2CConfig `mapstructure:"h2c"`                   // HTTP/2 Cleartext 配置
@@ -1617,6 +1623,9 @@ func setDefaults() {
 	viper.SetDefault("server.frontend_url", "")
 	viper.SetDefault("server.read_header_timeout", 30) // 30秒读取请求头
 	viper.SetDefault("server.idle_timeout", 120)       // 120秒空闲超时
+	// Allow long-running API/stream/image requests to finish during rolling updates.
+	viper.SetDefault("server.shutdown_timeout", 300)   // 300秒优雅退出
+	viper.SetDefault("server.shutdown_drain_delay", 0) // 默认不等待 LB 摘流（可按部署开启）
 	viper.SetDefault("server.trusted_proxies", []string{})
 	viper.SetDefault("server.max_request_body_size", int64(256*1024*1024))
 	// H2C 默认配置
