@@ -30,6 +30,8 @@ const (
 	userSlotKeyPrefix = "concurrency:user:"
 	// 格式: concurrency:api_key:{apiKeyID}
 	apiKeySlotKeyPrefix = "concurrency:api_key:"
+	// 格式: concurrency:api_key_image:{apiKeyID} — image-generation stats only
+	apiKeyImageSlotKeyPrefix = "concurrency:api_key_image:"
 	// API-key-scoped client WebSocket ingress leases use a shorter TTL than
 	// ordinary request slots, because idle ingress sessions do not hold a turn slot.
 	openAIWSIngressLeaseKeyPrefix  = "concurrency:openai_ws_ingress:api_key:"
@@ -324,6 +326,10 @@ func accountSlotKey(accountID int64) string {
 
 func userSlotKey(userID int64) string {
 	return fmt.Sprintf("%s%d", userSlotKeyPrefix, userID)
+}
+
+func apiKeyImageSlotKey(apiKeyID int64) string {
+	return apiKeyImageSlotKeyPrefix + strconv.FormatInt(apiKeyID, 10)
 }
 
 func apiKeySlotKey(apiKeyID int64) string {
@@ -674,6 +680,17 @@ func (c *concurrencyCache) ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64
 	return c.rdb.ZRem(ctx, key, requestID).Err()
 }
 
+func (c *concurrencyCache) TrackAPIKeyImageSlot(ctx context.Context, apiKeyID int64, requestID string) error {
+	key := apiKeyImageSlotKey(apiKeyID)
+	_, err := trackSlotScript.Run(ctx, c.rdb, []string{key}, c.slotTTLSeconds, requestID).Result()
+	return err
+}
+
+func (c *concurrencyCache) ReleaseAPIKeyImageSlot(ctx context.Context, apiKeyID int64, requestID string) error {
+	key := apiKeyImageSlotKey(apiKeyID)
+	return c.rdb.ZRem(ctx, key, requestID).Err()
+}
+
 func (c *concurrencyCache) AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int, leaseID string) (bool, error) {
 	if c == nil || c.rdb == nil || apiKeyID <= 0 || maxConnections <= 0 || leaseID == "" {
 		return false, nil
@@ -717,6 +734,14 @@ func (c *concurrencyCache) ReleaseOpenAIWSIngressLease(ctx context.Context, apiK
 }
 
 func (c *concurrencyCache) GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error) {
+	return c.getAPIKeySlotConcurrencyBatch(ctx, apiKeyIDs, apiKeySlotKeyPrefix)
+}
+
+func (c *concurrencyCache) GetAPIKeyImageConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error) {
+	return c.getAPIKeySlotConcurrencyBatch(ctx, apiKeyIDs, apiKeyImageSlotKeyPrefix)
+}
+
+func (c *concurrencyCache) getAPIKeySlotConcurrencyBatch(ctx context.Context, apiKeyIDs []int64, keyPrefix string) (map[int64]int, error) {
 	if len(apiKeyIDs) == 0 {
 		return map[int64]int{}, nil
 	}
@@ -734,7 +759,7 @@ func (c *concurrencyCache) GetAPIKeyConcurrencyBatch(ctx context.Context, apiKey
 	}
 	cmds := make([]apiKeyCmd, 0, len(apiKeyIDs))
 	for _, apiKeyID := range apiKeyIDs {
-		slotKey := apiKeySlotKeyPrefix + strconv.FormatInt(apiKeyID, 10)
+		slotKey := keyPrefix + strconv.FormatInt(apiKeyID, 10)
 		pipe.ZRemRangeByScore(ctx, slotKey, "-inf", strconv.FormatInt(cutoffTime, 10))
 		cmds = append(cmds, apiKeyCmd{
 			apiKeyID: apiKeyID,

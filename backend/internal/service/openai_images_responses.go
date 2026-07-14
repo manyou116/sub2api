@@ -1502,6 +1502,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	parsed *OpenAIImagesRequest,
 	channelMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	if s.shouldUseOpenAILegacyWebImages(account) {
+		return s.forwardOpenAIImagesLegacyWeb(ctx, c, account, parsed, channelMappedModel)
+	}
 	startTime := time.Now()
 	requestModel := strings.TrimSpace(parsed.Model)
 	if mapped := strings.TrimSpace(channelMappedModel); mapped != "" {

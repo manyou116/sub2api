@@ -538,8 +538,10 @@ func (s *APIKeyService) fillCurrentConcurrency(ctx context.Context, keys []APIKe
 	if err != nil {
 		return
 	}
+	imageCounts, _ := s.concurrencyService.GetAPIKeyImageConcurrencyBatch(ctx, ids)
 	for i := range keys {
 		keys[i].CurrentConcurrency = counts[keys[i].ID]
+		keys[i].CurrentImageConcurrency = imageCounts[keys[i].ID]
 	}
 }
 

@@ -306,6 +306,8 @@
               v-if="capacityMap.get(row.id)"
               :concurrency-used="capacityMap.get(row.id)!.concurrencyUsed"
               :concurrency-max="capacityMap.get(row.id)!.concurrencyMax"
+              :image-concurrency-used="capacityMap.get(row.id)!.imageConcurrencyUsed"
+              :image-concurrency-max="capacityMap.get(row.id)!.imageConcurrencyMax"
               :sessions-used="capacityMap.get(row.id)!.sessionsUsed"
               :sessions-max="capacityMap.get(row.id)!.sessionsMax"
               :rpm-used="capacityMap.get(row.id)!.rpmUsed"
@@ -3879,6 +3881,8 @@ const capacityMap = ref<
     {
       concurrencyUsed: number;
       concurrencyMax: number;
+      imageConcurrencyUsed: number;
+      imageConcurrencyMax: number;
       sessionsUsed: number;
       sessionsMax: number;
       rpmUsed: number;
@@ -4627,6 +4631,8 @@ const loadCapacitySummary = async () => {
       {
         concurrencyUsed: number;
         concurrencyMax: number;
+        imageConcurrencyUsed: number;
+        imageConcurrencyMax: number;
         sessionsUsed: number;
         sessionsMax: number;
         rpmUsed: number;
@@ -4637,6 +4643,8 @@ const loadCapacitySummary = async () => {
       map.set(item.group_id, {
         concurrencyUsed: item.concurrency_used,
         concurrencyMax: item.concurrency_max,
+        imageConcurrencyUsed: item.image_concurrency_used ?? 0,
+        imageConcurrencyMax: item.image_concurrency_max ?? 0,
         sessionsUsed: item.sessions_used,
         sessionsMax: item.sessions_max,
         rpmUsed: item.rpm_used,

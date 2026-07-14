@@ -370,7 +370,10 @@ describe('user KeysView column settings', () => {
   it('renders the current concurrency value', async () => {
     const wrapper = await mountView()
 
-    expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3')
+    const cell = wrapper.get('[data-test="current-concurrency"]')
+    // Total 3 with no image traffic => text=3; image row hidden when 0
+    expect(cell.get('[data-test="current-text-concurrency"]').text()).toMatch(/3/)
+    expect(cell.find('[data-test="current-image-concurrency"]').exists()).toBe(false)
   })
 
   it('marks current concurrency as sortable', async () => {

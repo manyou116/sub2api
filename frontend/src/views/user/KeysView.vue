@@ -170,17 +170,40 @@
             </div>
           </template>
 
-          <template #cell-current_concurrency="{ value }">
-            <span
-              :class="[
-                'inline-flex min-w-8 items-center justify-center rounded px-2 py-1 text-sm font-semibold tabular-nums',
-                (value ?? 0) > 0
-                  ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-900/25 dark:text-emerald-300 dark:ring-emerald-800'
-                  : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-dark-400'
-              ]"
-            >
-              {{ value ?? 0 }}
-            </span>
+          <template #cell-current_concurrency="{ row, value }">
+            <div class="flex flex-col items-start gap-1" data-test="current-concurrency">
+              <!-- 文本/总并发：四宫格图标 + 数字（不含生图在途） -->
+              <span
+                data-test="current-text-concurrency"
+                :class="[
+                  'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums',
+                  textConcurrencyOf(row, value) > 0
+                    ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-900/25 dark:text-emerald-300 dark:ring-emerald-800'
+                    : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-dark-400'
+                ]"
+                :title="t('keys.textConcurrency')"
+              >
+                <svg class="h-3 w-3 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+                </svg>
+                <span class="font-mono font-semibold">{{ textConcurrencyOf(row, value) }}</span>
+              </span>
+              <!-- 生图并发：仅在有在途时显示，图片图标 -->
+              <span
+                v-if="(row.current_image_concurrency ?? 0) > 0"
+                data-test="current-image-concurrency"
+                :class="[
+                  'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium tabular-nums',
+                  'bg-cyan-50 text-cyan-700 ring-1 ring-cyan-200 dark:bg-cyan-900/25 dark:text-cyan-300 dark:ring-cyan-800'
+                ]"
+                :title="t('keys.currentImageConcurrency')"
+              >
+                <svg class="h-3 w-3 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0022.5 18.75V5.25A2.25 2.25 0 0020.25 3H3.75A2.25 2.25 0 001.5 5.25v13.5A2.25 2.25 0 003.75 21zm10.5-11.25h.008v.008h-.008V9.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+                </svg>
+                <span class="font-mono font-semibold">{{ row.current_image_concurrency }}</span>
+              </span>
+            </div>
           </template>
 
           <template #cell-usage="{ row }">
@@ -1258,6 +1281,15 @@ const toggleColumn = (key: string) => {
 }
 
 const isColumnVisible = (key: string) => !hiddenColumns.has(key)
+
+
+/** Text concurrency excludes in-flight image requests tracked separately. */
+function textConcurrencyOf(row: { current_image_concurrency?: number }, total: number | null | undefined) {
+  const all = Number(total ?? 0)
+  const image = Number(row?.current_image_concurrency ?? 0)
+  const textOnly = all - image
+  return textOnly > 0 ? textOnly : 0
+}
 
 const columns = computed<Column[]>(() =>
   allColumns.value.filter((col) => ALWAYS_VISIBLE_COLUMNS.has(col.key) || !hiddenColumns.has(col.key))

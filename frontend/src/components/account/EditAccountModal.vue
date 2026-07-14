@@ -1538,6 +1538,101 @@
         </div>
       </div>
 
+      <!-- OpenAI Web Images (picture_v2) -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="edit-openai-web-images"
+      >
+        <div class="mb-3">
+          <label class="input-label mb-0">{{ t('admin.accounts.webImages.title') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.webImages.desc') }}
+          </p>
+        </div>
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.accounts.webImages.enableSwitch') }}</span>
+            <button
+              type="button"
+              data-testid="edit-openai-web-images-toggle"
+              :class="[
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+                openAIWebImagesEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              ]"
+              @click="openAIWebImagesEnabled = !openAIWebImagesEnabled"
+            >
+              <span
+                :class="[
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  openAIWebImagesEnabled ? 'translate-x-5' : 'translate-x-0'
+                ]"
+              />
+            </button>
+          </div>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="input-label" for="edit-openai-web-images-max-inflight">{{ t('admin.accounts.webImages.maxInflight') }}</label>
+              <input
+                id="edit-openai-web-images-max-inflight"
+                v-model.number="openAIWebImagesMaxInflight"
+                type="number"
+                min="1"
+                max="20"
+                class="input"
+                data-testid="edit-openai-web-images-max-inflight"
+              />
+            </div>
+            <div>
+              <label class="input-label" for="edit-openai-web-images-priority">{{ t('admin.accounts.webImages.priority') }}</label>
+              <input
+                id="edit-openai-web-images-priority"
+                v-model.number="openAIWebImagesPriority"
+                type="number"
+                class="input"
+                data-testid="edit-openai-web-images-priority"
+              />
+            </div>
+          </div>
+          <div>
+            <label class="input-label" for="edit-openai-web-images-model-mode">{{ t('admin.accounts.webImages.modelMode') }}</label>
+            <select
+              id="edit-openai-web-images-model-mode"
+              v-model="openAIWebImagesModelMode"
+              class="input"
+              data-testid="edit-openai-web-images-model-mode"
+            >
+              <option value="auto">{{ t('admin.accounts.webImages.modelModeAuto') }}</option>
+              <option value="fixed">{{ t('admin.accounts.webImages.modelModeFixed') }}</option>
+            </select>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.webImages.modelModeHint') }}</p>
+          </div>
+          <div v-if="openAIWebImagesModelMode === 'fixed'" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="input-label" for="edit-openai-web-images-model">{{ t('admin.accounts.webImages.upstreamModel') }}</label>
+              <select id="edit-openai-web-images-model" v-model="openAIWebImagesModel" class="input" data-testid="edit-openai-web-images-model">
+                <option v-for="m in openAIWebImagesModelOptions" :key="m.value" :value="m.value">{{ m.label }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="input-label" for="edit-openai-web-images-effort">{{ t('admin.accounts.webImages.thinkingEffort') }}</label>
+              <select id="edit-openai-web-images-effort" v-model="openAIWebImagesThinkingEffort" class="input" data-testid="edit-openai-web-images-effort">
+                <option v-for="e in openAIWebImagesEffortOptions" :key="e.value" :value="e.value">{{ e.label }}</option>
+              </select>
+            </div>
+          </div>
+          <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="openAIWebImagesProbeAfter"
+              type="checkbox"
+              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              data-testid="edit-openai-web-images-probe-after"
+            />
+            {{ t('admin.accounts.webImages.probeAfterApply') }}
+          </label>
+        </div>
+      </div>
+
       <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
@@ -2566,6 +2661,12 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from 'vue'
+import {
+  OPENAI_WEB_IMAGES_DEFAULT_EFFORT,
+  OPENAI_WEB_IMAGES_DEFAULT_MODEL,
+  OPENAI_WEB_IMAGES_EFFORT_OPTIONS,
+  OPENAI_WEB_IMAGES_MODEL_OPTIONS
+} from '@/constants/openaiWebImages'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -2827,6 +2928,15 @@ const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
+const openAIWebImagesEnabled = ref(false)
+const openAIWebImagesMaxInflight = ref(1)
+const openAIWebImagesPriority = ref(0)
+const openAIWebImagesModelMode = ref<'auto' | 'fixed'>('auto')
+const openAIWebImagesModel = ref(OPENAI_WEB_IMAGES_DEFAULT_MODEL)
+const openAIWebImagesThinkingEffort = ref(OPENAI_WEB_IMAGES_DEFAULT_EFFORT)
+const openAIWebImagesProbeAfter = ref(false)
+const openAIWebImagesModelOptions = OPENAI_WEB_IMAGES_MODEL_OPTIONS
+const openAIWebImagesEffortOptions = OPENAI_WEB_IMAGES_EFFORT_OPTIONS
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
@@ -3260,6 +3370,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
   codexImageToolMode.value = 'inherit'
+  openAIWebImagesEnabled.value = false
+  openAIWebImagesMaxInflight.value = 1
+  openAIWebImagesPriority.value = 0
+  openAIWebImagesModelMode.value = 'auto'
+  openAIWebImagesModel.value = OPENAI_WEB_IMAGES_DEFAULT_MODEL
+  openAIWebImagesThinkingEffort.value = OPENAI_WEB_IMAGES_DEFAULT_EFFORT
+  openAIWebImagesProbeAfter.value = false
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
@@ -3307,6 +3424,24 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
       codexCLIOnlyAppServerEnabled.value =
         extra?.codex_cli_only_allow_app_server === true
+    }
+    if (newAccount.type === 'oauth') {
+      const webCfg = (extra?.openai_web_images && typeof extra.openai_web_images === 'object')
+        ? (extra.openai_web_images as Record<string, unknown>)
+        : null
+      openAIWebImagesEnabled.value = webCfg?.enabled === true
+      openAIWebImagesMaxInflight.value = typeof webCfg?.max_inflight === 'number' && webCfg.max_inflight > 0
+        ? webCfg.max_inflight
+        : 1
+      openAIWebImagesPriority.value = typeof webCfg?.priority === 'number' ? webCfg.priority : 0
+      openAIWebImagesModelMode.value = webCfg?.model_mode === 'fixed' ? 'fixed' : 'auto'
+      openAIWebImagesModel.value = typeof webCfg?.model === 'string' && webCfg.model
+        ? webCfg.model
+        : OPENAI_WEB_IMAGES_DEFAULT_MODEL
+      openAIWebImagesThinkingEffort.value = typeof webCfg?.thinking_effort === 'string' && webCfg.thinking_effort
+        ? webCfg.thinking_effort
+        : OPENAI_WEB_IMAGES_DEFAULT_EFFORT
+      openAIWebImagesProbeAfter.value = false
     }
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
@@ -3960,6 +4095,20 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
   submitting.value = true
   try {
     const updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
+    // Web images uses dedicated control-plane API (account.extra.openai_web_images + runtime).
+    if (props.account?.platform === 'openai' && props.account?.type === 'oauth') {
+      await adminAPI.accounts.patchOpenAIWebImages(accountID, {
+        enabled: openAIWebImagesEnabled.value,
+        max_inflight: Number(openAIWebImagesMaxInflight.value) || 1,
+        priority: Number(openAIWebImagesPriority.value) || 0,
+        model_mode: openAIWebImagesModelMode.value,
+        model: openAIWebImagesModelMode.value === 'fixed' ? openAIWebImagesModel.value : '',
+        thinking_effort: openAIWebImagesModelMode.value === 'fixed' ? openAIWebImagesThinkingEffort.value : ''
+      })
+      if (openAIWebImagesProbeAfter.value) {
+        await adminAPI.accounts.probeOpenAIWebImages(accountID)
+      }
+    }
     appStore.showSuccess(t('admin.accounts.accountUpdated'))
     emit('updated', updatedAccount)
     handleClose()

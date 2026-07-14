@@ -207,9 +207,17 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		reqLog.Debug("openai.images.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, parsed.Stream, &streamStarted, reqLog)
-		if !acquired {
-			return
+		// ChatGPT Web image path has its own inflight slots (web max_inflight).
+		// Do not consume text account concurrency so capacity UI stays split correctly.
+		var accountReleaseFunc func()
+		if h.gatewayService != nil && h.gatewayService.UsesOpenAIWebImagesPath(account) {
+			// no account text slot
+		} else {
+			var acquired bool
+			accountReleaseFunc, acquired = h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, parsed.Stream, &streamStarted, reqLog)
+			if !acquired {
+				return
+			}
 		}
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())

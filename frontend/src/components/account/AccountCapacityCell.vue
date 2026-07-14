@@ -32,19 +32,103 @@
     <QuotaBadge v-if="showDailyQuota" :used="account.quota_daily_used ?? 0" :limit="account.quota_daily_limit!" label="D" />
     <QuotaBadge v-if="showWeeklyQuota" :used="account.quota_weekly_used ?? 0" :limit="account.quota_weekly_limit!" label="W" />
     <QuotaBadge v-if="showTotalQuota" :used="account.quota_used ?? 0" :limit="account.quota_limit!" />
+
+    <!-- ChatGPT Web 生图额度/在途（仅 OpenAI OAuth） -->
+    <div v-if="showWebImages" class="inline-flex items-center gap-0.5">
+      <CapacityBadge
+        :color-class="webImagesClass"
+        :tooltip="webImagesTooltip"
+        :current="webImagesCurrent"
+        :max="webImagesMax"
+        :suffix="webImagesSuffix"
+      >
+        <span class="text-[9px] font-semibold opacity-80">W</span>
+      </CapacityBadge>
+      <button
+        type="button"
+        class="inline-flex h-4 w-4 items-center justify-center rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-cyan-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-dark-700 dark:hover:text-cyan-300"
+        :disabled="probing"
+        :title="t('admin.accounts.webImages.probe')"
+        @click.stop="probeWebImages"
+      >
+        <svg
+          class="h-2.5 w-2.5"
+          :class="{ 'animate-spin': probing }"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </button>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Account } from '@/types'
+import type { OpenAIWebImagesStatus } from '@/api/admin/accounts'
 import CapacityBadge from '@/components/account/CapacityBadge.vue'
 import QuotaBadge from '@/components/account/QuotaBadge.vue'
 
 const props = defineProps<{
   account: Account
+  webImagesStatus?: OpenAIWebImagesStatus | null
 }>()
+
+const nowTick = ref(Date.now())
+let cooldownTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  cooldownTimer = setInterval(() => {
+    nowTick.value = Date.now()
+  }, 1000)
+})
+onUnmounted(() => {
+  if (cooldownTimer) clearInterval(cooldownTimer)
+})
+
+const formatCooldown = (ms: number): string => {
+  const totalSec = Math.max(0, Math.ceil(ms / 1000))
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return `${h}h${String(m).padStart(2, '0')}m`
+  if (m > 0) return `${m}m${String(s).padStart(2, '0')}s`
+  return `${s}s`
+}
+
+const webCooldownLeftMs = computed(() => {
+  void nowTick.value
+  const raw = props.webImagesStatus?.cooldown_until
+  if (!raw) return 0
+  const ts = new Date(raw).getTime()
+  if (Number.isNaN(ts)) return 0
+  return Math.max(0, ts - Date.now())
+})
+
+const webIsRateLimited = computed(() => {
+  if (props.webImagesStatus?.rate_limited) return webCooldownLeftMs.value > 0 || props.webImagesStatus.unschedulable_reason === 'cooldown'
+  if (props.webImagesStatus?.unschedulable_reason === 'cooldown') return true
+  return webCooldownLeftMs.value > 0
+})
+
+const emit = defineEmits<{
+  (e: 'web-images-probe', account: Account): void
+}>()
+
+const probing = ref(false)
+
+const probeWebImages = () => {
+  if (probing.value) return
+  probing.value = true
+  emit('web-images-probe', props.account)
+  // parent handles async; release spin shortly for UX
+  window.setTimeout(() => {
+    probing.value = false
+  }, 1200)
+}
 
 const { t } = useI18n()
 
@@ -187,4 +271,107 @@ const showWeeklyQuota = computed(() =>
 const showTotalQuota = computed(() =>
   isQuotaEligible.value && props.account.quota_limit != null && props.account.quota_limit > 0
 )
+
+// ====== ChatGPT Web 生图 ======
+const isOpenAIOAuthLike = computed(() =>
+  props.account.platform === 'openai' &&
+  (props.account.type === 'oauth' || props.account.type === 'setup-token')
+)
+
+const webExtra = computed(() => {
+  const extra = (props.account.extra || {}) as Record<string, any>
+  const cfg = extra.openai_web_images
+  return cfg && typeof cfg === 'object' ? cfg : null
+})
+
+const webEnabled = computed(() => {
+  if (props.webImagesStatus) return Boolean(props.webImagesStatus.enabled)
+  return Boolean(webExtra.value?.enabled)
+})
+
+const showWebImages = computed(() => isOpenAIOAuthLike.value)
+
+const webRemaining = computed<number | null>(() => {
+  if (props.webImagesStatus?.quota_known && props.webImagesStatus.remaining != null) {
+    return props.webImagesStatus.remaining
+  }
+  return null
+})
+
+const webInflight = computed(() => props.webImagesStatus?.current_inflight ?? 0)
+const webMaxInflight = computed(() => {
+  return props.webImagesStatus?.max_inflight
+    ?? webExtra.value?.max_inflight
+    ?? 1
+})
+
+// 展示：在途/最大并发（容量语义），suffix 显示剩余额度 rN
+const webImagesCurrent = computed(() => {
+  if (!webEnabled.value) return t('admin.accounts.webImages.offShort')
+  if (webIsRateLimited.value) {
+    if (webCooldownLeftMs.value > 0) return formatCooldown(webCooldownLeftMs.value)
+    return t('admin.accounts.webImages.rateLimitedShort')
+  }
+  return webInflight.value
+})
+
+const webImagesMax = computed(() => {
+  if (!webEnabled.value) return '-'
+  return webMaxInflight.value
+})
+
+const webImagesSuffix = computed(() => {
+  if (!webEnabled.value) return ''
+  if (webIsRateLimited.value) return t('admin.accounts.webImages.rateLimitedShort')
+  if (webRemaining.value == null) return 'r?'
+  return `r${webRemaining.value}`
+})
+
+const webImagesClass = computed(() => {
+  if (!webEnabled.value) {
+    return 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+  }
+  if (webIsRateLimited.value) {
+    return 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300'
+  }
+  if (props.webImagesStatus?.schedulable === false) {
+    return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+  }
+  if (webRemaining.value != null && webRemaining.value <= 0) {
+    return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+  }
+  if (webInflight.value >= Number(webMaxInflight.value || 1)) {
+    return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+  }
+  if (webRemaining.value != null && webRemaining.value <= 2) {
+    return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+  }
+  return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+})
+
+const webImagesTooltip = computed(() => {
+  if (!showWebImages.value) return ''
+  if (!webEnabled.value) return t('admin.accounts.capacity.webImages.disabled')
+  const rem = webRemaining.value == null ? t('admin.accounts.webImages.unknown') : String(webRemaining.value)
+  const reason = props.webImagesStatus?.unschedulable_reason
+  const base = t('admin.accounts.capacity.webImages.tooltip', {
+    remaining: rem,
+    inflight: webInflight.value,
+    max: webMaxInflight.value,
+    success: props.webImagesStatus?.stats?.success ?? webExtra.value?.stats?.success ?? 0,
+    fail: props.webImagesStatus?.stats?.fail ?? webExtra.value?.stats?.fail ?? 0
+  })
+  const resolved = props.webImagesStatus?.resolved_model
+    ? ` | ${props.webImagesStatus.resolved_model}/${props.webImagesStatus.resolved_thinking_effort || '-'} (${props.webImagesStatus.resolve_source || props.webImagesStatus.model_mode || 'auto'})`
+    : ''
+  let limitInfo = ''
+  if (webIsRateLimited.value) {
+    limitInfo = webCooldownLeftMs.value > 0
+      ? ` | ${t('admin.accounts.webImages.rateLimitedCountdown', { time: formatCooldown(webCooldownLeftMs.value) })}`
+      : ` | ${t('admin.accounts.webImages.rateLimited')}`
+  }
+  if (reason) return `${base}${resolved}${limitInfo} (${reason})`
+  return `${base}${resolved}${limitInfo}`
+})
+
 </script>
