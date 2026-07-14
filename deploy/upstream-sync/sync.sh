@@ -2,7 +2,7 @@
 # Local helper: merge latest (or pinned) upstream tag into a sync branch.
 set -euo pipefail
 
-FORK_SLUG="${FORK_SLUG:-webimg}"
+FORK_SLUG="${FORK_SLUG:-plus}"
 BASE_BRANCH="${SYNC_BASE_BRANCH:-main}"
 UPSTREAM_REMOTE="${UPSTREAM_REMOTE:-upstream}"
 ORIGIN_REMOTE="${ORIGIN_REMOTE:-origin}"

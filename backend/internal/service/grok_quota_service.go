@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	grokQuotaUpstreamTimeout = 20 * time.Second
+	grokQuotaUpstreamTimeout = 25 * time.Second
 	grokQuotaProbeInput      = "."
-	grokQuotaDefaultModel    = "grok-4.3"
+	grokQuotaDefaultModel    = "grok-4.5"
 )
 
 type GrokQuotaProbeResult struct {
@@ -86,14 +86,25 @@ func (s *GrokQuotaService) ProbeUsage(ctx context.Context, accountID int64) (*Gr
 
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, maxInt(account.Concurrency, 1))
 	if err != nil {
+		// Return a compact JSON error quickly so reverse proxies/CF do not see a hung origin.
 		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_PROBE_REQUEST_FAILED", "upstream probe failed: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+	now := time.Now()
 	snapshot := xai.ObserveQuotaHeaders(resp.Header, resp.StatusCode, "active_probe")
-	resetAt, limited := grokRateLimitResetAt(snapshot, time.Now())
+	if snapshot == nil {
+		snapshot = &xai.QuotaSnapshot{StatusCode: resp.StatusCode, UpdatedAt: now.UTC().Format(time.RFC3339)}
+	}
+	// Free-usage exhaustion is a successful probe outcome for operators: persist
+	// the 24h cooldown and return snapshot instead of 5xx (which CF surfaces as 502).
+	if resp.StatusCode == http.StatusTooManyRequests && xai.FreeUsageExhausted(bodyBytes) {
+		snapshot = applyGrokFreeUsageExhaustedCooldown(snapshot, now, bodyBytes)
+	}
+	resetAt, limited := grokRateLimitResetAt(snapshot, now)
 	if limited {
-		normalizeGrokExhaustedWindowResets(snapshot, resetAt, time.Now())
+		normalizeGrokExhaustedWindowResets(snapshot, resetAt, now)
 	}
 	_ = s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
 		grokQuotaSnapshotExtraKey: snapshot,
@@ -109,15 +120,15 @@ func (s *GrokQuotaService) ProbeUsage(ctx context.Context, accountID int64) (*Gr
 		StatusCode:      resp.StatusCode,
 		HeadersObserved: snapshot.HeadersObserved,
 		ResetSupported:  false,
-		FetchedAt:       time.Now().Unix(),
+		FetchedAt:       now.Unix(),
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return result, nil
 	}
 	if resp.StatusCode >= 400 {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 240))
 		bodyText := truncate(strings.TrimSpace(string(bodyBytes)), 240)
 		slog.Warn("grok_quota_probe_failed", "account_id", account.ID, "model", probeModel, "status", resp.StatusCode, "body", bodyText)
+		// Prefer 4xx mapping; avoid cascading 502 through Cloudflare admin UI.
 		return nil, infraerrors.Newf(mapUpstreamStatus(resp.StatusCode), "GROK_QUOTA_PROBE_UPSTREAM_ERROR", "upstream returned %d for probe model %q: %s", resp.StatusCode, probeModel, bodyText)
 	}
 	return result, nil

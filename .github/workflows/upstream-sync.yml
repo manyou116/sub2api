@@ -4,7 +4,7 @@ name: Upstream Sync
 # THIS fork (origin BASE_BRANCH). Clean merge → push here + fork tag.
 # Conflicts → PR for manual resolve (never force-push over conflicts).
 #
-# Tag scheme: v{upstream}-{FORK_SLUG}.{n}  e.g. v0.1.154-webimg.1
+# Tag scheme: v{upstream}-{FORK_SLUG}.{n}  e.g. v0.1.154-plus.1
 
 on:
   schedule:
@@ -35,8 +35,8 @@ concurrency:
 
 env:
   UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'Wei-Shaw/sub2api' }}
-  FORK_SLUG: ${{ vars.FORK_SLUG || 'webimg' }}
-  # Branch on THIS fork that receives upstream merges (must contain your webimg commits).
+  FORK_SLUG: ${{ vars.FORK_SLUG || 'plus' }}
+  # Branch on THIS fork that receives upstream merges (must contain your fork commits).
   BASE_BRANCH: ${{ vars.SYNC_BASE_BRANCH || 'main' }}
 
 jobs:
@@ -76,7 +76,7 @@ jobs:
           elif [ -n "${DISPATCH_TAG:-}" ]; then
             UTAG="$DISPATCH_TAG"
           else
-            # Latest pure semver tag from upstream remote (ignore -webimg / pre-release style).
+            # Latest pure semver tag from upstream remote (ignore -plus / pre-release style).
             UTAG="$(git ls-remote --tags --refs upstream \
               | awk '{print $2}' \
               | sed 's#refs/tags/##' \
@@ -101,7 +101,7 @@ jobs:
           echo "upstream_commit=${UP_COMMIT}" >> "$GITHUB_OUTPUT"
 
           if ! git rev-parse -q --verify "origin/${BASE_BRANCH}" >/dev/null; then
-            echo "origin/${BASE_BRANCH} missing — set vars.SYNC_BASE_BRANCH to a branch that exists on this fork (e.g. release/v0.1.153-webimg.1)"
+            echo "origin/${BASE_BRANCH} missing — set vars.SYNC_BASE_BRANCH to a branch that exists on this fork (e.g. main)"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -185,7 +185,7 @@ git tag -a ${FORK_TAG} -m \"fork on ${UTAG}\"
 git push origin ${FORK_TAG}
 \`\`\`
 
-### Hot paths (webimg fork)
+### Hot paths (plus fork)
 - \`openai_account_scheduler.go\` / \`openai_gateway_scheduling.go\`
 - \`openai_images_responses.go\` / images gateway
 - \`AccountsView.vue\` / account admin

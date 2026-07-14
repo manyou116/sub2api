@@ -6,7 +6,7 @@ When [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) has a **new pure ta
 | Result | Action **here** (your repo) |
 |--------|-----------------------------|
 | Merge clean | Merge into `SYNC_BASE_BRANCH` (default `main`) **and push** |
-| Merge clean | Create tag `vX.Y.Z-webimg.N` → triggers image Release |
+| Merge clean | Create tag `vX.Y.Z-plus.N` → triggers image Release |
 | Conflicts | Open PR only (you resolve, then merge) |
 
 It does **not** change Wei-Shaw/sub2api. All writes are to **your** `origin`.
@@ -22,7 +22,7 @@ GitHub cannot natively subscribe one private/public repo to another repo’s
 
 ## Required setup (your fork)
 
-### 1. Base branch must contain your webimg commits
+### 1. Base branch must contain your fork commits
 
 `vars.SYNC_BASE_BRANCH` (default `main`) must point to the branch you keep
 as “product main”.
@@ -37,7 +37,7 @@ git push --force-with-lease origin main
 or set:
 
 ```text
-SYNC_BASE_BRANCH=release/v0.1.153-webimg.1
+SYNC_BASE_BRANCH=main
 ```
 
 until you realign `main`.
@@ -51,7 +51,7 @@ Settings → Actions → General → Workflow permissions → **Read and write**
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `UPSTREAM_REPO` | `Wei-Shaw/sub2api` | Upstream |
-| `FORK_SLUG` | `webimg` | Tag middle part |
+| `FORK_SLUG` | `plus` | Tag middle part |
 | `SYNC_BASE_BRANCH` | `main` | **Where merges land on your fork** |
 
 ### 4. Token (if branch protection blocks GITHUB_TOKEN)
@@ -61,8 +61,8 @@ Secret `SYNC_TOKEN` = PAT with `repo` scope, used for push + PR.
 ## Tag scheme
 
 ```text
-v0.1.154-webimg.1   # first fork release based on upstream v0.1.154
-v0.1.154-webimg.2   # second fork-only fix still on 0.1.154
+v0.1.154-plus.1   # first fork release based on upstream v0.1.154
+v0.1.154-plus.2   # second fork-only fix still on 0.1.154
 ```
 
 ## Local manual (same idea)

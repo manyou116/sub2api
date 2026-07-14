@@ -185,8 +185,11 @@ func (s *OpenAIGatewayService) ShouldStopOpenAIOAuth429Failover(account *Account
 	if statusCode != http.StatusTooManyRequests || failedSwitches < openAIOAuth429StormMaxAccountSwitches {
 		return false
 	}
+	// Grok free-usage exhaustion is per-account (often 24h). Keep switching so
+	// clients stay seamless until MaxAccountSwitches is hit. OpenAI OAuth still
+	// uses the short-window storm circuit breaker.
 	if isGrokOAuthAccount(account) {
-		return true
+		return false
 	}
 	if !isOpenAIOAuthAccount(account) {
 		return false

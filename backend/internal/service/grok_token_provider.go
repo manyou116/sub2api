@@ -68,7 +68,7 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 		}
 	}
 
-	expiresAt := account.GetCredentialAsTime("expires_at")
+	expiresAt := getGrokTokenExpiresAt(account)
 	needsRefresh := expiresAt == nil || time.Until(*expiresAt) <= grokTokenRefreshSkew
 	if needsRefresh && strings.TrimSpace(account.GetGrokRefreshToken()) == "" {
 		if expiresAt == nil || !time.Now().Before(*expiresAt) {
@@ -85,9 +85,16 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 			if p.refreshPolicy.OnRefreshError == ProviderRefreshErrorReturn {
 				return "", err
 			}
-		} else if !result.LockHeld && result.Account != nil {
-			account = result.Account
-			expiresAt = account.GetCredentialAsTime("expires_at")
+		} else if result != nil {
+			if result.LockHeld && p.accountRepo != nil {
+				// Another worker holds the refresh lock; reload credentials.
+				if latest, err := p.accountRepo.GetByID(ctx, account.ID); err == nil && latest != nil {
+					account = latest
+				}
+			} else if result.Account != nil {
+				account = result.Account
+			}
+			expiresAt = getGrokTokenExpiresAt(account)
 		}
 	}
 
@@ -155,6 +162,17 @@ func (p *GrokTokenProvider) markTempUnschedulable(account *Account, refreshErr e
 			slog.Warn(grokTokenProviderLogComponent+".temp_unsched_cache_set_failed", "account_id", account.ID, "error", err)
 		}
 	}
+}
+
+func getGrokTokenExpiresAt(account *Account) *time.Time {
+	if account == nil {
+		return nil
+	}
+	if expiresAt := account.GetCredentialAsTime("expires_at"); expiresAt != nil {
+		return expiresAt
+	}
+	// CPA credential files use "expired".
+	return account.GetCredentialAsTime("expired")
 }
 
 func GrokTokenCacheKey(account *Account) string {

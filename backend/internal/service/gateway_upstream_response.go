@@ -286,7 +286,7 @@ func ExtractUpstreamErrorMessage(body []byte) string {
 }
 
 func extractUpstreamErrorMessage(body []byte) string {
-	// Claude 风格：{"type":"error","error":{"type":"...","message":"..."}}
+	// Claude / OpenAI 风格：{"type":"error","error":{"type":"...","message":"..."}}
 	if m := gjson.GetBytes(body, "error.message").String(); strings.TrimSpace(m) != "" {
 		inner := strings.TrimSpace(m)
 		// 有些上游会把完整 JSON 作为字符串塞进 message
@@ -296,6 +296,14 @@ func extractUpstreamErrorMessage(body []byte) string {
 			}
 		}
 		return m
+	}
+
+	// xAI / Grok CLI 风格：{"code":"...","error":"string message"}
+	// gjson "error.message" 在 error 为 string 时为空，必须单独取 error 字符串。
+	if errNode := gjson.GetBytes(body, "error"); errNode.Exists() && errNode.Type == gjson.String {
+		if m := strings.TrimSpace(errNode.String()); m != "" {
+			return m
+		}
 	}
 
 	// ChatGPT 内部 API 风格：{"detail":"..."}
@@ -309,6 +317,10 @@ func extractUpstreamErrorMessage(body []byte) string {
 
 func extractUpstreamErrorCode(body []byte) string {
 	if code := strings.TrimSpace(gjson.GetBytes(body, "error.code").String()); code != "" {
+		return code
+	}
+	// xAI top-level code: {"code":"subscription:free-usage-exhausted","error":"..."}
+	if code := strings.TrimSpace(gjson.GetBytes(body, "code").String()); code != "" {
 		return code
 	}
 
