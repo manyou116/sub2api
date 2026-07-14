@@ -4,7 +4,11 @@ name: Upstream Sync
 # THIS fork (origin BASE_BRANCH). Clean merge → push here + fork tag.
 # Conflicts → PR for manual resolve (never force-push over conflicts).
 #
-# Tag scheme: v{upstream}-{FORK_SLUG}.{n}  e.g. v0.1.154-plus.1
+# Tag scheme: v99.{upstream_without_v}-{FORK_SLUG}.{n}
+# e.g. upstream v0.1.154 → v99.0.1.154-plus.1
+# Leading 99. makes in-app parseVersion() treat us as newer than official
+# Wei-Shaw tags, so admin never shows "update available" / one-click upgrade
+# to the official binary (which would wipe fork features).
 
 on:
   schedule:
@@ -114,13 +118,15 @@ jobs:
             exit 0
           fi
 
-          # Next fork release tag on this upstream base
+          # Next fork release tag on this upstream base.
+          # v99.{X.Y.Z}-plus.N — not v{X.Y.Z}-plus.N (that false-triggers update UI).
+          BASE_VER="${UTAG#v}"
           n=1
-          while git ls-remote --tags origin "refs/tags/${UTAG}-${FORK_SLUG}.${n}" | grep -q . \
-            || git rev-parse -q --verify "refs/tags/${UTAG}-${FORK_SLUG}.${n}" >/dev/null 2>&1; do
+          while git ls-remote --tags origin "refs/tags/v99.${BASE_VER}-${FORK_SLUG}.${n}" | grep -q . \
+            || git rev-parse -q --verify "refs/tags/v99.${BASE_VER}-${FORK_SLUG}.${n}" >/dev/null 2>&1; do
             n=$((n+1))
           done
-          FORK_TAG="${UTAG}-${FORK_SLUG}.${n}"
+          FORK_TAG="v99.${BASE_VER}-${FORK_SLUG}.${n}"
           BRANCH="sync/upstream-${UTAG#v}"
 
           echo "skip=false" >> "$GITHUB_OUTPUT"

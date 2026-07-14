@@ -6,7 +6,7 @@ When [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) has a **new pure ta
 | Result | Action **here** (your repo) |
 |--------|-----------------------------|
 | Merge clean | Merge into `SYNC_BASE_BRANCH` (default `main`) **and push** |
-| Merge clean | Create tag `vX.Y.Z-plus.N` → triggers image Release |
+| Merge clean | Create tag `v99.X.Y.Z-plus.N` → triggers image Release |
 | Conflicts | Open PR only (you resolve, then merge) |
 
 It does **not** change Wei-Shaw/sub2api. All writes are to **your** `origin`.
@@ -61,9 +61,19 @@ Secret `SYNC_TOKEN` = PAT with `repo` scope, used for push + PR.
 ## Tag scheme
 
 ```text
-v0.1.154-plus.1   # first fork release based on upstream v0.1.154
-v0.1.154-plus.2   # second fork-only fix still on 0.1.154
+v99.0.1.154-plus.1   # first fork release based on upstream v0.1.154
+v99.0.1.154-plus.2   # second fork-only fix still on 0.1.154
 ```
+
+Why `99.` prefix?
+
+In-app update check compares only the first three numeric segments of
+`VERSION` against Wei-Shaw/sub2api. A tag like `0.1.153-plus.1` parses as
+`[0,1,0]` and falsely offers an upgrade to official `0.1.153` (one-click
+would replace the fork binary). `99.0.1.153-plus.1` parses as `[99,0,1]`,
+so the admin UI never prompts upgrade to official releases.
+
+Docker image tags and embedded `VERSION` both follow this form.
 
 ## Local manual (same idea)
 

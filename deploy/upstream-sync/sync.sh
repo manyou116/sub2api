@@ -32,12 +32,14 @@ fi
 
 echo "upstream base: $tag"
 
-# Next fork revision on this base
+# Next fork revision on this base: v99.{upstream}-plus.N
+# (99. prefix avoids false "update available" vs official Wei-Shaw tags)
+base_ver="${tag#v}"
 n=1
-while git rev-parse -q --verify "refs/tags/${tag}-${FORK_SLUG}.${n}" >/dev/null 2>&1; do
+while git rev-parse -q --verify "refs/tags/v99.${base_ver}-${FORK_SLUG}.${n}" >/dev/null 2>&1; do
   n=$((n + 1))
 done
-fork_tag="${tag}-${FORK_SLUG}.${n}"
+fork_tag="v99.${base_ver}-${FORK_SLUG}.${n}"
 echo "next fork tag candidate: $fork_tag"
 
 branch="sync/upstream-${tag#v}"
