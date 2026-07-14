@@ -5,12 +5,15 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
-const grokTokenRefreshSkew = time.Hour
+const grokTokenRefreshSkew = 5 * time.Minute
 
 type GrokTokenRefresher struct {
 	grokOAuthService GrokOAuthTokenService
+	refreshGroup     singleflight.Group
 }
 
 func NewGrokTokenRefresher(grokOAuthService GrokOAuthTokenService) *GrokTokenRefresher {
@@ -29,7 +32,7 @@ func (r *GrokTokenRefresher) NeedsRefresh(account *Account, refreshWindow time.D
 	if account == nil || strings.TrimSpace(account.GetGrokRefreshToken()) == "" {
 		return false
 	}
-	expiresAt := account.GetCredentialAsTime("expires_at")
+	expiresAt := getGrokTokenExpiresAt(account)
 	if expiresAt == nil {
 		return true
 	}
@@ -43,14 +46,31 @@ func (r *GrokTokenRefresher) Refresh(ctx context.Context, account *Account) (map
 	if r == nil || r.grokOAuthService == nil {
 		return nil, errors.New("grok oauth service is not configured")
 	}
-	tokenInfo, err := r.grokOAuthService.RefreshAccountToken(ctx, account)
+	if account == nil {
+		return nil, errors.New("account is nil")
+	}
+	flightKey := strings.TrimSpace(account.GetGrokRefreshToken())
+	if flightKey == "" {
+		flightKey = GrokTokenCacheKey(account)
+	}
+	v, err, _ := r.refreshGroup.Do("grok-rt:"+flightKey, func() (any, error) {
+		tokenInfo, err := r.grokOAuthService.RefreshAccountToken(ctx, account)
+		if err != nil {
+			return nil, err
+		}
+		creds := r.grokOAuthService.BuildAccountCredentials(tokenInfo)
+		creds = MergeCredentials(account.Credentials, creds)
+		if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
+			creds["base_url"] = baseURL
+		}
+		return creds, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	newCredentials := r.grokOAuthService.BuildAccountCredentials(tokenInfo)
-	newCredentials = MergeCredentials(account.Credentials, newCredentials)
-	if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
-		newCredentials["base_url"] = baseURL
+	creds, _ := v.(map[string]any)
+	if creds == nil {
+		return nil, errors.New("grok token refresh: empty singleflight result")
 	}
-	return newCredentials, nil
+	return creds, nil
 }

@@ -158,23 +158,9 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier"} {
-		if gjson.GetBytes(out, unsupportedField).Exists() {
-			out, err = sjson.DeleteBytes(out, unsupportedField)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	if strings.EqualFold(upstreamModel, "grok-4.5") {
-		for _, unsupportedField := range []string{"presence_penalty", "presencePenalty", "frequency_penalty", "frequencyPenalty", "stop"} {
-			if gjson.GetBytes(out, unsupportedField).Exists() {
-				out, err = sjson.DeleteBytes(out, unsupportedField)
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
+	out, err = normalizeGrokOpenAIClientBody(out, upstreamModel, false)
+	if err != nil {
+		return nil, err
 	}
 	out, err = sanitizeGrokResponsesUnsupportedFields(out)
 	if err != nil {
@@ -189,6 +175,151 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// --- Grok OpenAI-compat (new-api / Codex → xAI) ---
+// Keep this block self-contained so upstream merges only conflict here.
+// Fields OpenAI clients (new-api/SDK) send that xAI Grok rejects.
+var (
+	grokDropPenaltyFields = []string{
+		"presence_penalty", "presencePenalty",
+		"frequency_penalty", "frequencyPenalty",
+	}
+	grokDropChatNoiseFields = []string{
+		"user", "seed", "n", "logit_bias", "logprobs", "top_logprobs",
+		"service_tier", "store", "metadata", "modalities", "audio",
+		"prediction", "web_search_options", "prompt_cache_retention",
+		"safety_identifier", "reasoning_effort",
+	}
+	grokDropResponsesNoiseFields = []string{
+		"stream_options", "metadata", "user", "service_tier", "store",
+		"previous_response_id", "prompt_cache_retention", "safety_identifier",
+		"truncation", "max_tool_calls", "prompt",
+	}
+)
+
+const grokMinOutputTokens = 128
+
+func grokBaseModelID(model string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(model, "/"); i >= 0 {
+		model = strings.TrimSpace(model[i+1:])
+	}
+	return model
+}
+
+func deleteGrokTopLevelFields(body []byte, fields []string) ([]byte, error) {
+	out := body
+	for _, field := range fields {
+		if !gjson.GetBytes(out, field).Exists() {
+			continue
+		}
+		next, err := sjson.DeleteBytes(out, field)
+		if err != nil {
+			return nil, err
+		}
+		out = next
+	}
+	return out, nil
+}
+
+func clampGrokMinTokens(body []byte, field string) ([]byte, error) {
+	v := gjson.GetBytes(body, field)
+	if !v.Exists() || v.Type != gjson.Number || v.Int() <= 0 || v.Int() >= grokMinOutputTokens {
+		return body, nil
+	}
+	return sjson.SetBytes(body, field, grokMinOutputTokens)
+}
+
+// normalizeGrokOpenAIClientBody strips OpenAI-client noise for xAI Grok.
+// forChat=true: /v1/chat/completions; false: /v1/responses (and patch path).
+func normalizeGrokOpenAIClientBody(body []byte, upstreamModel string, forChat bool) ([]byte, error) {
+	if len(body) == 0 {
+		return body, nil
+	}
+	if !json.Valid(body) {
+		return nil, fmt.Errorf("invalid json request body")
+	}
+
+	drop := append([]string{}, grokDropPenaltyFields...)
+	model := grokBaseModelID(upstreamModel)
+	if model == "grok-4.5" || strings.HasPrefix(model, "grok-4.5-") {
+		drop = append(drop, "stop")
+	}
+	if forChat {
+		drop = append(drop, grokDropChatNoiseFields...)
+	} else {
+		drop = append(drop, grokDropResponsesNoiseFields...)
+	}
+
+	out, err := deleteGrokTopLevelFields(body, drop)
+	if err != nil {
+		return nil, err
+	}
+	if !forChat {
+		return clampGrokMinTokens(out, "max_output_tokens")
+	}
+
+	// Bridge eligibility forbids both max_tokens and max_completion_tokens.
+	if gjson.GetBytes(out, "max_tokens").Exists() && gjson.GetBytes(out, "max_completion_tokens").Exists() {
+		out, err = sjson.DeleteBytes(out, "max_tokens")
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, field := range []string{"max_tokens", "max_completion_tokens"} {
+		out, err = clampGrokMinTokens(out, field)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Drop empty tools / tool_choice=none so bridge eligibility can pass.
+	for _, field := range []string{"tools", "functions"} {
+		raw := gjson.GetBytes(out, field)
+		if raw.Exists() && (raw.Type == gjson.Null || (raw.IsArray() && len(raw.Array()) == 0)) {
+			out, err = sjson.DeleteBytes(out, field)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, field := range []string{"tool_choice", "function_call"} {
+		raw := gjson.GetBytes(out, field)
+		if !raw.Exists() {
+			continue
+		}
+		if raw.Type == gjson.Null || (raw.Type == gjson.String && strings.EqualFold(raw.String(), "none")) {
+			out, err = sjson.DeleteBytes(out, field)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return out, nil
+}
+
+// reapplyGrokChatRouteSignals restores fields that must remain for bridge vs raw
+// routing after OpenAI-client noise stripping (new-api penalties/empty tools).
+// stop and reasoning_effort force raw Chat Completions; do not hide them from
+// grokChatResponsesBridgeEligibility.
+func reapplyGrokChatRouteSignals(original, normalized []byte) []byte {
+	if len(original) == 0 || len(normalized) == 0 {
+		return normalized
+	}
+	out := normalized
+	for _, field := range []string{"stop", "reasoning_effort"} {
+		src := gjson.GetBytes(original, field)
+		if !src.Exists() || gjson.GetBytes(out, field).Exists() {
+			continue
+		}
+		next, err := sjson.SetRawBytes(out, field, []byte(src.Raw))
+		if err != nil {
+			return out
+		}
+		out = next
+	}
+	return out
 }
 
 func sanitizeGrokResponsesModelCapabilities(body []byte, upstreamModel string) ([]byte, error) {
@@ -271,36 +402,205 @@ func deleteJSONFields(value any, fields map[string]struct{}) bool {
 	}
 }
 
-// additional_tools is a Codex/Responses Lite private input carrier. xAI's
-// Responses schema accepts ordinary message/function-call input items but
-// rejects this carrier before inference with a ModelInput deserialization
-// error. Top-level supported tools remain available through the separate
-// sanitizeGrokResponsesTools path.
+// sanitizeGrokResponsesInput aligns Codex/OpenAI Responses input with xAI ModelInput.
+// Strategy (CPA-compatible):
+//  1. Drop private/unsupported item types (additional_tools, compaction_trigger, tool-call residues…)
+//  2. Keep compaction only when encrypted_content validates as Grok-shaped; else drop the item
+//  3. Strip invalid reasoning.encrypted_content; delete null content; merge adjacent reasoning summaries
+//
+// Never "strip everything and hope" — that produces 422 ModelInput errors.
 func sanitizeGrokResponsesInput(body []byte) ([]byte, error) {
-	if !bytes.Contains(body, []byte(`"additional_tools"`)) {
-		return body, nil
-	}
 	input := gjson.GetBytes(body, "input")
 	if !input.Exists() || !input.IsArray() {
 		return body, nil
 	}
 
-	rawItems := input.Array()
-	filtered := make([]json.RawMessage, 0, len(rawItems))
-	for _, item := range rawItems {
-		if strings.TrimSpace(item.Get("type").String()) == "additional_tools" {
+	items := make([]json.RawMessage, 0, len(input.Array()))
+	changed := false
+	for _, item := range input.Array() {
+		itemType := strings.ToLower(strings.TrimSpace(item.Get("type").String()))
+		role := strings.TrimSpace(item.Get("role").String())
+
+		switch itemType {
+		case "additional_tools", "compaction_trigger":
+			changed = true
+			continue
+		case "web_search_call", "file_search_call", "code_interpreter_call",
+			"image_generation_call", "computer_call", "computer_call_output",
+			"mcp_call", "mcp_list_tools", "mcp_approval_request", "mcp_approval_response",
+			"item_reference", "local_shell_call", "local_shell_call_output",
+			"shell_call", "shell_call_output", "apply_patch_call", "apply_patch_call_output":
+			// Codex/OpenAI tool residue — not valid xAI ModelInput variants.
+			changed = true
+			continue
+		case "compaction":
+			enc := item.Get("encrypted_content")
+			if enc.Type != gjson.String || !isValidGrokEncryptedContent(enc.String()) {
+				changed = true
+				continue
+			}
+			items = append(items, json.RawMessage(item.Raw))
+			continue
+		case "reasoning":
+			next, itemChanged, keep := normalizeGrokReasoningInputItem(item)
+			if itemChanged {
+				changed = true
+			}
+			if !keep {
+				continue
+			}
+			// Merge consecutive reasoning summary-only items (CPA behavior).
+			if len(items) > 0 && canMergeGrokReasoningSummary(items[len(items)-1], gjson.ParseBytes(next)) {
+				merged, ok := mergeGrokReasoningSummary(items[len(items)-1], gjson.ParseBytes(next))
+				if ok {
+					items[len(items)-1] = json.RawMessage(merged)
+					changed = true
+					continue
+				}
+			}
+			items = append(items, json.RawMessage(next))
+			continue
+		case "message", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output":
+			items = append(items, json.RawMessage(item.Raw))
+			continue
+		case "":
+			// Role-based messages without type (user/system/assistant/developer).
+			if role == "" {
+				// Orphan object (often bare encrypted_content) — drop.
+				if item.Get("encrypted_content").Exists() {
+					changed = true
+					continue
+				}
+				changed = true
+				continue
+			}
+			items = append(items, json.RawMessage(item.Raw))
+			continue
+		default:
+			// Unknown typed item: drop rather than 422 ModelInput.
+			changed = true
 			continue
 		}
-		filtered = append(filtered, json.RawMessage(item.Raw))
 	}
-	if len(filtered) == len(rawItems) {
+
+	if !changed {
 		return body, nil
 	}
-	encoded, err := json.Marshal(filtered)
+	if len(items) == 0 {
+		// Keep a minimal user turn so the request remains valid.
+		items = []json.RawMessage{json.RawMessage(`{"role":"user","content":"continue"}`)}
+	}
+	encoded, err := json.Marshal(items)
 	if err != nil {
 		return nil, err
 	}
 	return sjson.SetRawBytes(body, "input", encoded)
+}
+
+func normalizeGrokReasoningInputItem(item gjson.Result) (next []byte, changed, keep bool) {
+	raw := []byte(item.Raw)
+	changed = false
+
+	// xAI rejects content:null on reasoning items.
+	if content := item.Get("content"); content.Exists() && content.Type == gjson.Null {
+		cleaned, err := sjson.DeleteBytes(raw, "content")
+		if err != nil {
+			return raw, false, true
+		}
+		raw, changed = cleaned, true
+	}
+
+	if enc := item.Get("encrypted_content"); enc.Exists() {
+		if enc.Type != gjson.String || !isValidGrokEncryptedContent(enc.String()) {
+			cleaned, err := sjson.DeleteBytes(raw, "encrypted_content")
+			if err != nil {
+				return raw, changed, true
+			}
+			raw, changed = cleaned, true
+		}
+	}
+
+	parsed := gjson.ParseBytes(raw)
+	hasSummary := false
+	if summary := parsed.Get("summary"); summary.IsArray() {
+		for _, s := range summary.Array() {
+			if strings.TrimSpace(s.Get("text").String()) != "" {
+				hasSummary = true
+				break
+			}
+		}
+	}
+	enc := parsed.Get("encrypted_content")
+	hasEC := enc.Exists() && enc.Type == gjson.String && isValidGrokEncryptedContent(enc.String())
+	if !hasSummary && !hasEC {
+		return raw, true, false
+	}
+	return raw, changed, true
+}
+
+func canMergeGrokReasoningSummary(previous json.RawMessage, current gjson.Result) bool {
+	prev := gjson.ParseBytes(previous)
+	if prev.Get("type").String() != "reasoning" || current.Get("type").String() != "reasoning" {
+		return false
+	}
+	// Only merge summary-only items (no encrypted_content on either side).
+	if prev.Get("encrypted_content").Exists() || current.Get("encrypted_content").Exists() {
+		return false
+	}
+	return current.Get("summary").IsArray()
+}
+
+func mergeGrokReasoningSummary(previous json.RawMessage, current gjson.Result) ([]byte, bool) {
+	prev := gjson.ParseBytes(previous)
+	summary := prev.Get("summary")
+	buf := []byte(`[]`)
+	if summary.IsArray() {
+		for _, s := range summary.Array() {
+			var err error
+			buf, err = sjson.SetRawBytes(buf, "-1", []byte(s.Raw))
+			if err != nil {
+				return nil, false
+			}
+		}
+	}
+	if current.Get("summary").IsArray() {
+		for _, s := range current.Get("summary").Array() {
+			var err error
+			buf, err = sjson.SetRawBytes(buf, "-1", []byte(s.Raw))
+			if err != nil {
+				return nil, false
+			}
+		}
+	}
+	out, err := sjson.SetRawBytes(previous, "summary", buf)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// isValidGrokEncryptedContent is a transport-shape check (CPA-inspired, not crypto).
+func isValidGrokEncryptedContent(raw string) bool {
+	sig := strings.TrimSpace(raw)
+	if len(sig) < 64 || sig != raw {
+		return false
+	}
+	if strings.HasPrefix(sig, "gAAAA") || strings.Contains(sig, "=") {
+		return false
+	}
+	for _, r := range sig {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '+', r == '/':
+		default:
+			return false
+		}
+	}
+	// Reject tiny decoded payloads (foreign stubs).
+	// base64 length 64 ≈ 48 bytes decoded — require longer for real Grok blobs.
+	if len(sig) < 80 {
+		return false
+	}
+	return true
 }
 
 var grokResponsesSupportedToolTypes = map[string]struct{}{
@@ -908,12 +1208,76 @@ func (s *OpenAIGatewayService) rateLimitGrok(ctx context.Context, account *Accou
 	persistGrokRateLimit(ctx, s.accountRepo, account, resetAt)
 }
 
+func applyGrokFreeUsageExhaustedCooldown(snapshot *xai.QuotaSnapshot, now time.Time, body []byte) *xai.QuotaSnapshot {
+	if snapshot == nil {
+		snapshot = &xai.QuotaSnapshot{}
+	}
+	secs := int(xai.FreeUsageExhaustedCooldown / time.Second)
+	if snapshot.RetryAfterSeconds == nil || *snapshot.RetryAfterSeconds < secs {
+		snapshot.RetryAfterSeconds = &secs
+	}
+	if snapshot.StatusCode == 0 {
+		snapshot.StatusCode = http.StatusTooManyRequests
+	}
+	if strings.TrimSpace(snapshot.UpdatedAt) == "" {
+		snapshot.UpdatedAt = now.UTC().Format(time.RFC3339)
+	}
+
+	// Free-usage budget is not the same as short x-ratelimit windows. When the
+	// body reports actual/limit, write that into the token window so the UI does
+	// not keep showing "100% remaining" from stale short-window headers.
+	resetAt := now.Add(xai.FreeUsageExhaustedCooldown).UTC()
+	resetUnix := resetAt.Unix()
+	resetRFC := resetAt.Format(time.RFC3339)
+	zero := int64(0)
+	if used, limit, ok := xai.FreeUsageTokenWindow(body); ok {
+		remaining := limit - used
+		if remaining < 0 {
+			remaining = 0
+		}
+		snapshot.Tokens = &xai.QuotaWindow{
+			Limit:     &limit,
+			Remaining: &remaining,
+			ResetUnix: &resetUnix,
+			ResetAt:   resetRFC,
+		}
+	} else if snapshot.Tokens != nil && snapshot.Tokens.Limit != nil {
+		snapshot.Tokens.Remaining = &zero
+		if snapshot.Tokens.ResetUnix == nil {
+			snapshot.Tokens.ResetUnix = &resetUnix
+			snapshot.Tokens.ResetAt = resetRFC
+		}
+	} else {
+		// No headers and no parseable window: still mark tokens exhausted for UI.
+		lim := int64(1)
+		snapshot.Tokens = &xai.QuotaWindow{
+			Limit:     &lim,
+			Remaining: &zero,
+			ResetUnix: &resetUnix,
+			ResetAt:   resetRFC,
+		}
+	}
+	// Short request windows often still look "full" while free budget is dead.
+	if snapshot.Requests != nil && snapshot.Requests.Limit != nil {
+		snapshot.Requests.Remaining = &zero
+		if snapshot.Requests.ResetUnix == nil {
+			snapshot.Requests.ResetUnix = &resetUnix
+			snapshot.Requests.ResetAt = resetRFC
+		}
+	}
+	return snapshot
+}
+
 func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) {
 	if s == nil || account == nil {
 		return
 	}
 	now := time.Now()
-	s.updateGrokUsageSnapshot(ctx, account, parseGrokQuotaSnapshot(headers, statusCode, now))
+	snapshot := parseGrokQuotaSnapshot(headers, statusCode, now)
+	if statusCode == http.StatusTooManyRequests && xai.FreeUsageExhausted(responseBody) {
+		snapshot = applyGrokFreeUsageExhaustedCooldown(snapshot, now, responseBody)
+	}
+	s.updateGrokUsageSnapshot(ctx, account, snapshot)
 	switch statusCode {
 	case http.StatusUnauthorized:
 		s.tempUnscheduleGrok(ctx, account, 10*time.Minute, "grok credentials unauthorized")
@@ -926,7 +1290,6 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
 	}
-	_ = responseBody
 }
 
 func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *Account, cooldown time.Duration, reason string) {

@@ -121,7 +121,7 @@ func TestPatchGrokResponsesBodyDropsGrok45ReasoningUnsupportedFields(t *testing.
 	require.False(t, gjson.GetBytes(patched, "stop").Exists())
 }
 
-func TestPatchGrokResponsesBodyKeepsPenaltyAndStopFieldsForNon45Models(t *testing.T) {
+func TestPatchGrokResponsesBodyStripsPenaltiesForNon45Models(t *testing.T) {
 	t.Parallel()
 
 	body := []byte(`{
@@ -136,8 +136,8 @@ func TestPatchGrokResponsesBodyKeepsPenaltyAndStopFieldsForNon45Models(t *testin
 	require.NoError(t, err)
 	require.True(t, json.Valid(patched))
 	require.Equal(t, "grok-4.3", gjson.GetBytes(patched, "model").String())
-	require.Equal(t, 0.1, gjson.GetBytes(patched, "presence_penalty").Float())
-	require.Equal(t, 0.2, gjson.GetBytes(patched, "frequency_penalty").Float())
+	require.False(t, gjson.GetBytes(patched, "presence_penalty").Exists())
+	require.False(t, gjson.GetBytes(patched, "frequency_penalty").Exists())
 	require.Len(t, gjson.GetBytes(patched, "stop").Array(), 1)
 }
 
@@ -1734,4 +1734,175 @@ func TestFailoverOpenAIUpstreamHTTPErrorUsesOnlyGrokRateLimitPolicy(t *testing.T
 	require.NotNil(t, failoverErr)
 	require.Equal(t, 1, repo.rateLimitedCalls)
 	require.Zero(t, repo.tempUnschedCalls)
+}
+
+func TestHandleGrokAccountUpstreamErrorFreeUsageExhaustedUses24hCooldown(t *testing.T) {
+	account := &Account{ID: 70, Platform: PlatformGrok, Type: AccountTypeOAuth}
+	repo := &grokQuotaAccountRepo{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	body := []byte(`{"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage for model grok-4.5-build-free for now."}`)
+	before := time.Now()
+
+	svc.handleGrokAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, nil, body)
+
+	require.Equal(t, 1, repo.rateLimitedCalls)
+	require.Equal(t, account.ID, repo.lastRateLimitedID)
+	require.WithinDuration(t, before.Add(24*time.Hour), repo.lastRateLimitResetAt, 2*time.Second)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+}
+
+func TestSanitizeGrokResponsesInputCPAAligned(t *testing.T) {
+	t.Parallel()
+	// invalid compaction dropped; foreign reasoning EC stripped; valid message kept
+	body := []byte(`{
+		"model":"grok-4.5",
+		"input":[
+			{"type":"compaction","encrypted_content":"short"},
+			{"type":"compaction_trigger"},
+			{"type":"item_reference","id":"item_1"},
+			{"type":"reasoning","content":null,"encrypted_content":"gAAAA_foreign","summary":[{"type":"summary_text","text":"a"}]},
+			{"type":"reasoning","summary":[{"type":"summary_text","text":"b"}]},
+			{"type":"web_search_call","id":"ws_1"},
+			{"role":"user","content":"hi"}
+		]
+	}`)
+	out, err := sanitizeGrokResponsesInput(body)
+	require.NoError(t, err)
+	items := gjson.GetBytes(out, "input").Array()
+	// reasoning a+b merged; user kept; junk dropped
+	require.GreaterOrEqual(t, len(items), 2)
+	require.Equal(t, "reasoning", items[0].Get("type").String())
+	require.False(t, items[0].Get("encrypted_content").Exists())
+	require.False(t, items[0].Get("content").Exists())
+	// merged summaries
+	require.Equal(t, "a", items[0].Get("summary.0.text").String())
+	require.Equal(t, "b", items[0].Get("summary.1.text").String())
+	require.Equal(t, "user", items[len(items)-1].Get("role").String())
+	require.False(t, gjson.GetBytes(out, `input.#(type=="compaction")`).Exists())
+	require.False(t, gjson.GetBytes(out, `input.#(type=="item_reference")`).Exists())
+	require.False(t, gjson.GetBytes(out, `input.#(type=="web_search_call")`).Exists())
+}
+
+func TestReapplyGrokChatRouteSignalsKeepsStopForRouting(t *testing.T) {
+	t.Parallel()
+	original := []byte(`{"model":"grok-4.5","messages":[{"role":"user","content":"hi"}],"stop":"done","presence_penalty":0}`)
+	normalized, err := normalizeGrokOpenAIClientBody(original, "grok-4.5", true)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(normalized, "stop").Exists())
+	require.False(t, gjson.GetBytes(normalized, "presence_penalty").Exists())
+
+	out := reapplyGrokChatRouteSignals(original, normalized)
+	require.Equal(t, "done", gjson.GetBytes(out, "stop").String())
+	require.False(t, gjson.GetBytes(out, "presence_penalty").Exists())
+	eligible, reason := grokChatResponsesBridgeEligibility(out)
+	require.False(t, eligible)
+	require.Equal(t, "unsupported_stop", reason)
+}
+
+func TestNormalizeGrokOpenAIClientBodyForNewAPI(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{
+		"model": "grok-4.5",
+		"messages": [{"role":"user","content":"hello"}],
+		"stream": true,
+		"stream_options": {"include_usage": true},
+		"temperature": 0.7,
+		"top_p": 1,
+		"n": 1,
+		"user": "new-api-user",
+		"seed": 42,
+		"presence_penalty": 0,
+		"frequency_penalty": 0,
+		"max_tokens": 16,
+		"tools": [],
+		"tool_choice": "none"
+	}`)
+	out, err := normalizeGrokOpenAIClientBody(body, "grok-4.5", true)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(out, "presence_penalty").Exists())
+	require.False(t, gjson.GetBytes(out, "frequency_penalty").Exists())
+	require.False(t, gjson.GetBytes(out, "user").Exists())
+	require.False(t, gjson.GetBytes(out, "seed").Exists())
+	require.False(t, gjson.GetBytes(out, "n").Exists())
+	require.False(t, gjson.GetBytes(out, "tools").Exists())
+	require.False(t, gjson.GetBytes(out, "tool_choice").Exists())
+	require.Equal(t, int64(128), gjson.GetBytes(out, "max_tokens").Int())
+	require.True(t, gjson.GetBytes(out, "stream").Bool())
+
+	eligible, reason := grokChatResponsesBridgeEligibility(out)
+	require.True(t, eligible, "reason=%s body=%s", reason, string(out))
+}
+
+func TestNormalizeGrokOpenAIClientBodyKeepsRealTools(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{
+		"model": "grok-4.5",
+		"messages": [{"role":"user","content":"hi"}],
+		"tools": [{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],
+		"tool_choice": "auto"
+	}`)
+	out, err := normalizeGrokOpenAIClientBody(body, "grok-4.5", true)
+	require.NoError(t, err)
+	require.True(t, gjson.GetBytes(out, "tools").Exists())
+	require.Equal(t, "auto", gjson.GetBytes(out, "tool_choice").String())
+	eligible, reason := grokChatResponsesBridgeEligibility(out)
+	require.False(t, eligible)
+	require.Equal(t, "unsupported_tools", reason)
+}
+
+func TestPatchGrokResponsesBodyStripsResponsesClientNoise(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{
+		"model": "grok-4.5",
+		"input": "hello",
+		"stream": true,
+		"stream_options": {"include_usage": true},
+		"user": "new-api",
+		"metadata": {"src": "new-api"},
+		"store": false,
+		"service_tier": "auto",
+		"previous_response_id": "resp_old",
+		"presence_penalty": 0,
+		"max_output_tokens": 16,
+		"prompt_cache_retention": "24h",
+		"safety_identifier": "x"
+	}`)
+	patched, err := patchGrokResponsesBody(body, "grok-4.5")
+	require.NoError(t, err)
+	require.Equal(t, "grok-4.5", gjson.GetBytes(patched, "model").String())
+	require.False(t, gjson.GetBytes(patched, "stream_options").Exists())
+	require.False(t, gjson.GetBytes(patched, "user").Exists())
+	require.False(t, gjson.GetBytes(patched, "metadata").Exists())
+	require.False(t, gjson.GetBytes(patched, "store").Exists())
+	require.False(t, gjson.GetBytes(patched, "service_tier").Exists())
+	require.False(t, gjson.GetBytes(patched, "previous_response_id").Exists())
+	require.False(t, gjson.GetBytes(patched, "presence_penalty").Exists())
+	require.False(t, gjson.GetBytes(patched, "prompt_cache_retention").Exists())
+	require.False(t, gjson.GetBytes(patched, "safety_identifier").Exists())
+	require.Equal(t, int64(128), gjson.GetBytes(patched, "max_output_tokens").Int())
+	require.True(t, gjson.GetBytes(patched, "stream").Bool())
+	require.Equal(t, "hello", gjson.GetBytes(patched, "input").String())
+}
+
+func TestApplyGrokFreeUsageExhaustedCooldownSetsTokenWindow(t *testing.T) {
+	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
+	body := []byte(`{"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage for model grok-4.5-build-free for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 2090399/2000000."}`)
+	// Stale short-window headers that would otherwise look like 100% remaining.
+	limit := int64(100)
+	remaining := int64(100)
+	snapshot := &xai.QuotaSnapshot{
+		StatusCode: http.StatusOK,
+		Requests:   &xai.QuotaWindow{Limit: &limit, Remaining: &remaining},
+		Tokens:     &xai.QuotaWindow{Limit: &limit, Remaining: &remaining},
+	}
+	out := applyGrokFreeUsageExhaustedCooldown(snapshot, now, body)
+	require.NotNil(t, out.Tokens)
+	require.NotNil(t, out.Tokens.Limit)
+	require.NotNil(t, out.Tokens.Remaining)
+	require.Equal(t, int64(2000000), *out.Tokens.Limit)
+	require.Equal(t, int64(0), *out.Tokens.Remaining) // used > limit clamps to 0
+	require.NotNil(t, out.Requests)
+	require.Equal(t, int64(0), *out.Requests.Remaining)
+	require.NotNil(t, out.RetryAfterSeconds)
+	require.Equal(t, int(24*time.Hour/time.Second), *out.RetryAfterSeconds)
 }
