@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,17 +24,16 @@ const (
 	baseURL            = "https://chatgpt.com"
 	defaultUA          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 	defaultPollTimeout = 180 * time.Second
-	// Baseline poll interval floor for post-SSE fallback only (see poll_schedule.go).
-	// Keep >= 4s to avoid conversation GET 429 storms.
-	defaultPollEvery = 4 * time.Second
+	// Minimum gap floor for sparse post-SSE schedule (see poll_schedule.go).
+	defaultPollEvery = 5 * time.Second
 	// SSE-only while stream is alive. Poll ONLY after SSE ends/idle/disconnect.
 	defaultSSEMaxWait = 120 * time.Second
-	// Quiet stream with cid: leave SSE sooner so post-SSE poll can find assets / quota text.
-	defaultSSEIdleWait = 2500 * time.Millisecond
+	// Prefer SSE longer: early leave forces conversation GETs and 429 risk.
+	defaultSSEIdleWait = 8 * time.Second
 	// No conversation_id yet.
-	defaultSSEIdleWaitNoCID = 2500 * time.Millisecond
-	// After [DONE] without assets, briefly drain trailing SSE lines (late pointers) before poll.
-	defaultSSEDrainAfterDone = 800 * time.Millisecond
+	defaultSSEIdleWaitNoCID = 5 * time.Second
+	// After [DONE] without assets, drain trailing SSE lines (late pointers) before poll.
+	defaultSSEDrainAfterDone = 2 * time.Second
 )
 
 type Driver struct {
@@ -45,6 +45,32 @@ type Driver struct {
 
 func NewDriver(factory func(proxyURL string) (*req.Client, error)) *Driver {
 	return &Driver{ClientFactory: factory, PollTimeout: defaultPollTimeout, PollInterval: defaultPollEvery}
+}
+
+// Serialize conversation GET polls per access-token within this process.
+// Concurrent webimg jobs otherwise stack 429s on the same account.
+var accountPollLocks sync.Map // key(string) -> *sync.Mutex
+
+func pollLockKey(auth Auth) string {
+	tok := strings.TrimSpace(auth.AccessToken)
+	if tok == "" {
+		return "anon"
+	}
+	if len(tok) > 24 {
+		return tok[:24]
+	}
+	return tok
+}
+
+func withAccountPollLock(key string, fn func() error) error {
+	if key == "" {
+		key = "anon"
+	}
+	v, _ := accountPollLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return fn()
 }
 
 func (d *Driver) ProbeQuota(ctx context.Context, auth Auth) (*Quota, error) {
@@ -181,7 +207,7 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 	// keep polling until a NEW generated asset appears (otherwise we "succeed" with the source image).
 	if len(fileIDs) == 0 && len(sedimentIDs) == 0 {
 		stageLog("poll", fmt.Sprintf("start cid=%s exclude_inputs=%d", conversationID, len(excludeInputs)))
-		fileIDs, sedimentIDs, err = d.pollImages(ctx, client, headers, conversationID, excludeInputs)
+		fileIDs, sedimentIDs, err = d.pollImages(ctx, client, headers, auth, conversationID, excludeInputs)
 		if err != nil {
 			stageLog("poll", err.Error())
 			return nil, err
@@ -647,125 +673,131 @@ loop:
 	return conversationID, fileIDs, sedimentIDs, nil
 }
 
-func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map[string]string, conversationID string, excludeInputs map[string]struct{}) ([]string, []string, error) {
+func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map[string]string, auth Auth, conversationID string, excludeInputs map[string]struct{}) ([]string, []string, error) {
 	stage := "poll"
 	timeout := d.PollTimeout
 	if timeout <= 0 {
 		timeout = defaultPollTimeout
 	}
-	baseEvery := d.PollInterval
-	if baseEvery <= 0 {
-		baseEvery = defaultPollEvery
+	minGap := d.PollInterval
+	if minGap <= 0 {
+		minGap = defaultPollEvery
 	}
 	started := time.Now()
 	deadline := started.Add(timeout)
+	offsets := pollScheduleOffsets(timeout, minGap)
+	stageLog("poll", fmt.Sprintf("sparse_schedule n=%d timeout=%s min_gap=%s", len(offsets), timeout, minGap))
 
-	// Elapsed-based adaptive poll + dedicated 429 backoff (see poll_schedule.go).
-	// Immediate first GET (no pre-wait); then ~4s cadence (see poll_schedule.go).
-	attempt := 0
-	consecutive429 := 0
-	for time.Now().Before(deadline) {
-		attempt++
-		elapsed := time.Since(started)
+	var (
+		fileIDs, sedimentIDs []string
+	)
+	lockKey := pollLockKey(auth)
+	err := withAccountPollLock(lockKey, func() error {
+		consecutive429 := 0
+		for attempt, at := range offsets {
+			target := started.Add(at)
+			if consecutive429 > 0 {
+				cool := jitterDuration(pollBackoffAfter429(consecutive429))
+				coolTarget := time.Now().Add(cool)
+				if coolTarget.After(target) {
+					target = coolTarget
+				}
+			}
+			if wait := waitUntilTarget(time.Now(), target, deadline); wait > 0 {
+				wait = jitterDuration(wait)
+				if time.Now().Add(wait).After(deadline) {
+					wait = time.Until(deadline)
+				}
+				if wait > 0 {
+					select {
+					case <-ctx.Done():
+						return NewError(ErrorKindTimeout, stage, ctx.Err().Error(), 0, true)
+					case <-time.After(wait):
+					}
+				}
+			}
+			if !time.Now().Before(deadline) && attempt > 0 {
+				break
+			}
 
-		path := "/backend-api/conversation/" + conversationID
-		pctx, pcancel := context.WithTimeout(ctx, 10*time.Second)
-		resp, err := client.R().SetContext(pctx).SetHeaders(cloneHeaders(headers)).SetHeader("Accept", "application/json").
-			SetHeader("X-OpenAI-Target-Path", path).
-			SetHeader("X-OpenAI-Target-Route", "/backend-api/conversation/{conversation_id}").
-			Get(baseURL + path)
-		pcancel()
-		if err != nil {
-			wait := pollIntervalForElapsed(elapsed, baseEvery)
-			stageLog("poll", fmt.Sprintf("transport attempt=%d wait=%s err=%s", attempt, wait, err.Error()))
-			select {
-			case <-ctx.Done():
-				return nil, nil, NewError(ErrorKindTimeout, stage, ctx.Err().Error(), 0, true)
-			case <-time.After(wait):
+			path := "/backend-api/conversation/" + conversationID
+			pctx, pcancel := context.WithTimeout(ctx, 12*time.Second)
+			resp, reqErr := client.R().SetContext(pctx).SetHeaders(cloneHeaders(headers)).SetHeader("Accept", "application/json").
+				SetHeader("X-OpenAI-Target-Path", path).
+				SetHeader("X-OpenAI-Target-Route", "/backend-api/conversation/{conversation_id}").
+				Get(baseURL + path)
+			pcancel()
+			elapsed := time.Since(started)
+			if reqErr != nil {
+				stageLog("poll", fmt.Sprintf("transport attempt=%d/%d elapsed=%s err=%s", attempt+1, len(offsets), elapsed.Round(time.Millisecond), reqErr.Error()))
+				continue
 			}
-			continue
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			consecutive429++
-			// Keep retrying until overall poll deadline — image may already exist upstream.
-			wait := pollBackoffAfter429(consecutive429)
-			stageLog("poll", fmt.Sprintf("429 attempt=%d consecutive=%d backoff=%s (continue until deadline)", attempt, consecutive429, wait))
-			select {
-			case <-ctx.Done():
-				return nil, nil, NewError(ErrorKindTimeout, stage, ctx.Err().Error(), 0, true)
-			case <-time.After(wait):
-			}
-			continue
-		}
-		if resp.StatusCode >= 500 {
-			wait := pollIntervalForElapsed(elapsed, baseEvery)
-			if wait < time.Second {
-				wait = time.Second
-			}
-			stageLog("poll", fmt.Sprintf("5xx attempt=%d status=%d wait=%s", attempt, resp.StatusCode, wait))
-			select {
-			case <-ctx.Done():
-				return nil, nil, NewError(ErrorKindTimeout, stage, ctx.Err().Error(), 0, true)
-			case <-time.After(wait):
-			}
-			continue
-		}
-		if resp.StatusCode >= 400 {
-			bodyText := resp.String()
-			// Early/mid polls can race before conversation ACL is fully visible (common right
-			// after SSE starts, especially on edits with attachments).
-			inaccessible := resp.StatusCode == http.StatusNotFound ||
-				strings.Contains(strings.ToLower(bodyText), "conversation_inaccessible") ||
-				strings.Contains(bodyText, "无权访问此对话")
-			if inaccessible && elapsed < 60*time.Second {
-				stageLog("poll", fmt.Sprintf("inaccessible attempt=%d elapsed=%s retry", attempt, elapsed.Round(time.Millisecond)))
-				select {
-				case <-ctx.Done():
-					return nil, nil, NewError(ErrorKindTimeout, stage, ctx.Err().Error(), 0, true)
-				case <-time.After(2 * time.Second):
+			if resp.StatusCode == http.StatusTooManyRequests {
+				consecutive429++
+				stageLog("poll", fmt.Sprintf("429 attempt=%d/%d consecutive=%d cool=%s elapsed=%s",
+					attempt+1, len(offsets), consecutive429, pollBackoffAfter429(consecutive429), elapsed.Round(time.Millisecond)))
+				if consecutive429 >= 3 {
+					return NewError(ErrorKindRateLimited, stage,
+						"conversation poll rate limited (too many 429); retry later",
+						http.StatusTooManyRequests, true)
 				}
 				continue
 			}
-			return nil, nil, classifyHTTP(stage, resp.StatusCode, bodyText)
-		}
-		consecutive429 = 0 // healthy response resets 429 streak
-		body := resp.Bytes()
-		var fileIDs, sedimentIDs []string
-		for _, p := range extractPointers(body) {
-			if strings.HasPrefix(p, "file-service://") {
-				id := strings.TrimPrefix(p, "file-service://")
-				if _, skip := excludeInputs[normalizeAssetID(id)]; !skip {
-					fileIDs = appendUnique(fileIDs, id)
+			if resp.StatusCode >= 500 {
+				stageLog("poll", fmt.Sprintf("5xx attempt=%d/%d status=%d elapsed=%s", attempt+1, len(offsets), resp.StatusCode, elapsed.Round(time.Millisecond)))
+				continue
+			}
+			if resp.StatusCode >= 400 {
+				bodyText := resp.String()
+				inaccessible := resp.StatusCode == http.StatusNotFound ||
+					strings.Contains(strings.ToLower(bodyText), "conversation_inaccessible") ||
+					strings.Contains(bodyText, "无权访问此对话")
+				if inaccessible && elapsed < 90*time.Second {
+					stageLog("poll", fmt.Sprintf("inaccessible attempt=%d/%d elapsed=%s retry_later", attempt+1, len(offsets), elapsed.Round(time.Millisecond)))
+					continue
 				}
-			} else if strings.HasPrefix(p, "sediment://") {
-				id := strings.TrimPrefix(p, "sediment://")
-				if _, skip := excludeInputs[normalizeAssetID(id)]; !skip {
-					sedimentIDs = appendUnique(sedimentIDs, id)
+				return classifyHTTP(stage, resp.StatusCode, bodyText)
+			}
+			consecutive429 = 0
+			body := resp.Bytes()
+			fileIDs, sedimentIDs = nil, nil
+			for _, ptr := range extractPointers(body) {
+				if strings.HasPrefix(ptr, "file-service://") {
+					id := strings.TrimPrefix(ptr, "file-service://")
+					if _, skip := excludeInputs[normalizeAssetID(id)]; !skip {
+						fileIDs = appendUnique(fileIDs, id)
+					}
+				} else if strings.HasPrefix(ptr, "sediment://") {
+					id := strings.TrimPrefix(ptr, "sediment://")
+					if _, skip := excludeInputs[normalizeAssetID(id)]; !skip {
+						sedimentIDs = appendUnique(sedimentIDs, id)
+					}
 				}
 			}
+			if len(fileIDs) > 0 || len(sedimentIDs) > 0 {
+				stageLog("poll", fmt.Sprintf("found attempt=%d/%d elapsed=%s files=%d sediment=%d",
+					attempt+1, len(offsets), elapsed.Round(time.Millisecond), len(fileIDs), len(sedimentIDs)))
+				return nil
+			}
+			if attempt == 0 || attempt == len(offsets)-1 || attempt%3 == 0 {
+				stageLog("poll", fmt.Sprintf("waiting attempt=%d/%d elapsed=%s", attempt+1, len(offsets), elapsed.Round(time.Millisecond)))
+			}
+			if rl := findConversationRateLimitError(body); rl != "" {
+				return NewError(ErrorKindRateLimited, stage, rl, http.StatusTooManyRequests, true)
+			}
+			if policy := findConversationPolicyError(body); policy != "" {
+				return NewError(ErrorKindPolicy, stage, policy, http.StatusBadRequest, false)
+			}
 		}
-		if len(fileIDs) > 0 || len(sedimentIDs) > 0 {
-			stageLog("poll", fmt.Sprintf("found attempt=%d elapsed=%s files=%d sediment=%d", attempt, elapsed.Round(time.Millisecond), len(fileIDs), len(sedimentIDs)))
-			return fileIDs, sedimentIDs, nil
+		if len(fileIDs) == 0 && len(sedimentIDs) == 0 {
+			return NewError(ErrorKindTimeout, stage, "image poll timeout (sparse schedule exhausted)", 0, true)
 		}
-		if attempt == 1 || attempt%8 == 0 {
-			stageLog("poll", fmt.Sprintf("waiting attempt=%d elapsed=%s", attempt, elapsed.Round(time.Millisecond)))
-		}
-		if rl := findConversationRateLimitError(body); rl != "" {
-			return nil, nil, NewError(ErrorKindRateLimited, stage, rl, http.StatusTooManyRequests, true)
-		}
-		if policy := findConversationPolicyError(body); policy != "" {
-			return nil, nil, NewError(ErrorKindPolicy, stage, policy, http.StatusBadRequest, false)
-		}
-
-		wait := pollIntervalForElapsed(elapsed, baseEvery)
-		select {
-		case <-ctx.Done():
-			return nil, nil, NewError(ErrorKindTimeout, stage, ctx.Err().Error(), 0, true)
-		case <-time.After(wait):
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
 	}
-	return nil, nil, NewError(ErrorKindTimeout, stage, "image poll timeout", 0, true)
+	return fileIDs, sedimentIDs, nil
 }
 
 func inputAssetExcludeSet(refs []map[string]any) map[string]struct{} {
