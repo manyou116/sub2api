@@ -126,12 +126,12 @@ scripts
 .code-review-state
 #openspec/
 code-reviews/
-AGENTS.md
 backend/cmd/server/server
 deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/FORK_HOOKS.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
@@ -142,3 +142,9 @@ docs/*
 frontend/coverage/
 aicodex
 output/
+
+# Local dev helpers (web images fork / air) — do not commit
+DEV_LOCAL.md
+backend/.air.toml
+backend/tmp/
+backend/build-errors.log
