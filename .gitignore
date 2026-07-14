@@ -142,3 +142,9 @@ docs/*
 frontend/coverage/
 aicodex
 output/
+
+# Local dev helpers (web images fork / air) — do not commit
+DEV_LOCAL.md
+backend/.air.toml
+backend/tmp/
+backend/build-errors.log
