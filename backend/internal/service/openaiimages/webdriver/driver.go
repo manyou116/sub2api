@@ -24,7 +24,8 @@ const (
 	defaultUA          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 	defaultPollTimeout = 180 * time.Second
 	// Baseline poll interval floor for post-SSE fallback only (see poll_schedule.go).
-	defaultPollEvery = 700 * time.Millisecond
+	// Keep >= 4s to avoid conversation GET 429 storms.
+	defaultPollEvery = 4 * time.Second
 	// SSE-only while stream is alive. Poll ONLY after SSE ends/idle/disconnect.
 	defaultSSEMaxWait = 120 * time.Second
 	// Quiet stream with cid: leave SSE sooner so post-SSE poll can find assets / quota text.
@@ -660,7 +661,7 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 	deadline := started.Add(timeout)
 
 	// Elapsed-based adaptive poll + dedicated 429 backoff (see poll_schedule.go).
-	// Immediate first GET (no pre-wait); then slow down so browser UI can share the quota.
+	// Immediate first GET (no pre-wait); then ~4s cadence (see poll_schedule.go).
 	attempt := 0
 	consecutive429 := 0
 	for time.Now().Before(deadline) {
@@ -721,7 +722,7 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 				select {
 				case <-ctx.Done():
 					return nil, nil, NewError(ErrorKindTimeout, stage, ctx.Err().Error(), 0, true)
-				case <-time.After(800 * time.Millisecond):
+				case <-time.After(2 * time.Second):
 				}
 				continue
 			}
