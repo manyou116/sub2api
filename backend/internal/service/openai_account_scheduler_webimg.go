@@ -11,7 +11,7 @@ func (s *defaultOpenAIAccountScheduler) acquireAccountSlotForSchedule(ctx contex
 	if account == nil {
 		return nil, nil
 	}
-	if req.RequiredImageCapability != "" && s.service != nil && s.service.UsesOpenAIWebImagesPath(account) {
+	if shouldSkipAccountTextSlotForWebImages(s.service, ctx, account, req.RequestedModel, req.RequiredImageCapability) {
 		return &AccountSelectionResult{Account: account, Acquired: true, ReleaseFunc: func() {}}, nil
 	}
 	result, err := s.service.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
@@ -35,4 +35,57 @@ func accountBlockedByWebImageCooldown(account *Account, req OpenAIAccountSchedul
 		return false
 	}
 	return account.IsWebImageRateLimited()
+}
+
+// shouldSkipAccountTextSlotForWebImages reports whether account text concurrency
+// must stay free for a ChatGPT Web image request.
+func shouldSkipAccountTextSlotForWebImages(
+	svc *OpenAIGatewayService,
+	ctx context.Context,
+	account *Account,
+	requestedModel string,
+	imageCap OpenAIImagesCapability,
+) bool {
+	if svc == nil || account == nil || !svc.UsesOpenAIWebImagesPath(account) {
+		return false
+	}
+	if imageCap != "" {
+		return true
+	}
+	if isOpenAIImageGenerationModel(requestedModel) {
+		return true
+	}
+	return OpenAIImageGenerationIntentFromContext(ctx)
+}
+
+// ReleaseAccountTextSlotIfWebImages drops a mistakenly acquired text concurrency
+// slot when the selected account will serve via ChatGPT Web images.
+func ReleaseAccountTextSlotIfWebImages(svc *OpenAIGatewayService, selection *AccountSelectionResult) {
+	if selection == nil || selection.Account == nil || svc == nil {
+		return
+	}
+	if !svc.UsesOpenAIWebImagesPath(selection.Account) {
+		return
+	}
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+		selection.ReleaseFunc = nil
+	}
+	selection.Acquired = false
+}
+
+// tryAcquireAccountSlotForOpenAIRequest skips text slots for ChatGPT Web image accounts.
+func (s *OpenAIGatewayService) tryAcquireAccountSlotForOpenAIRequest(
+	ctx context.Context,
+	account *Account,
+	requestedModel string,
+	imageCap OpenAIImagesCapability,
+) (*AcquireResult, error) {
+	if account == nil {
+		return nil, nil
+	}
+	if shouldSkipAccountTextSlotForWebImages(s, ctx, account, requestedModel, imageCap) {
+		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
+	}
+	return s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
 }

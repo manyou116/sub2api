@@ -75,3 +75,48 @@ func TestIsSchedulableIgnoringTextRateLimitHonorsWebImageCooldown(t *testing.T) 
 	require.True(t, acc2.IsSchedulableIgnoringTextRateLimit())
 	require.False(t, acc2.IsWebImageRateLimited())
 }
+
+func TestShouldSkipAccountTextSlotForWebImages(t *testing.T) {
+	t.Parallel()
+	svc := &OpenAIGatewayService{
+		webImages: NewOpenAIWebImagesService(&config.Config{Gateway: config.GatewayConfig{OpenAIWebImages: config.OpenAIWebImagesConfig{
+			InflightBackend: "memory", DefaultMaxInflight: 1}}}, nil, nil),
+	}
+	webAcc := &Account{
+		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
+		Extra: map[string]any{"openai_web_images": map[string]any{"enabled": true, "max_inflight": 3}},
+	}
+	plainAcc := &Account{
+		ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
+	}
+
+	require.True(t, shouldSkipAccountTextSlotForWebImages(svc, context.Background(), webAcc, "gpt-image-2", ""))
+	require.True(t, shouldSkipAccountTextSlotForWebImages(svc, context.Background(), webAcc, "gpt-5.4", OpenAIImagesCapabilityBasic))
+	require.True(t, shouldSkipAccountTextSlotForWebImages(svc, WithOpenAIImageGenerationIntent(context.Background()), webAcc, "gpt-5.4", ""))
+	require.False(t, shouldSkipAccountTextSlotForWebImages(svc, context.Background(), webAcc, "gpt-5.4", ""))
+	require.False(t, shouldSkipAccountTextSlotForWebImages(svc, context.Background(), plainAcc, "gpt-image-2", OpenAIImagesCapabilityBasic))
+}
+
+func TestReleaseAccountTextSlotIfWebImages(t *testing.T) {
+	t.Parallel()
+	svc := &OpenAIGatewayService{
+		webImages: NewOpenAIWebImagesService(&config.Config{Gateway: config.GatewayConfig{OpenAIWebImages: config.OpenAIWebImagesConfig{
+			InflightBackend: "memory", DefaultMaxInflight: 1}}}, nil, nil),
+	}
+	released := false
+	webAcc := &Account{
+		ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
+		Extra: map[string]any{"openai_web_images": map[string]any{"enabled": true}},
+	}
+	sel := &AccountSelectionResult{
+		Account:  webAcc,
+		Acquired: true,
+		ReleaseFunc: func() {
+			released = true
+		},
+	}
+	ReleaseAccountTextSlotIfWebImages(svc, sel)
+	require.True(t, released)
+	require.False(t, sel.Acquired)
+	require.Nil(t, sel.ReleaseFunc)
+}

@@ -211,7 +211,8 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		// Do not consume text account concurrency so capacity UI stays split correctly.
 		var accountReleaseFunc func()
 		if h.gatewayService != nil && h.gatewayService.UsesOpenAIWebImagesPath(account) {
-			// no account text slot
+			// Drop any text slot the scheduler may have acquired on fallback paths.
+			service.ReleaseAccountTextSlotIfWebImages(h.gatewayService, selection)
 		} else {
 			var acquired bool
 			accountReleaseFunc, acquired = h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, parsed.Stream, &streamStarted, reqLog)
