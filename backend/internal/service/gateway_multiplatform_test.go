@@ -150,6 +150,14 @@ func (m *mockAccountRepoForPlatform) ListSchedulableByPlatforms(ctx context.Cont
 func (m *mockAccountRepoForPlatform) ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]Account, error) {
 	return m.ListSchedulableByPlatforms(ctx, platforms)
 }
+
+func (m *mockAccountRepoForPlatform) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
+	return nil, nil
+}
+func (m *mockAccountRepoForPlatform) ListActiveAllowingTextRateLimitByPlatforms(context.Context, []string) ([]Account, error) {
+	return nil, nil
+}
+
 func (m *mockAccountRepoForPlatform) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	return m.ListSchedulableByPlatform(ctx, platform)
 }

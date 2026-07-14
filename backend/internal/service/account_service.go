@@ -61,6 +61,10 @@ type AccountRepository interface {
 	ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]Account, error)
 	ListSchedulableByPlatforms(ctx context.Context, platforms []string) ([]Account, error)
 	ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]Account, error)
+	// ListActiveAllowingTextRateLimit* includes accounts still inside text RateLimitResetAt/OverloadUntil.
+	// Used only by ChatGPT Web image scheduling.
+	ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]Account, error)
+	ListActiveAllowingTextRateLimitByPlatforms(ctx context.Context, platforms []string) ([]Account, error)
 	ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error)
 	ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]Account, error)
 

@@ -1832,6 +1832,14 @@ func (s *stubAccountRepo) ListSchedulableByGroupIDAndPlatforms(ctx context.Conte
 	return nil, errors.New("not implemented")
 }
 
+func (s *stubAccountRepo) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(context.Context, int64, []string) ([]service.Account, error) {
+	return nil, nil
+}
+func (s *stubAccountRepo) ListActiveAllowingTextRateLimitByPlatforms(context.Context, []string) ([]service.Account, error) {
+	return nil, nil
+}
+
+
 func (s *stubAccountRepo) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
 	return nil, errors.New("not implemented")
 }

@@ -745,7 +745,33 @@ const (
 	ImageConcurrencyOverflowModeWait   = "wait"
 )
 
-// GatewayConfig API网关相关配置
+// OpenAIWebImagesConfig holds runtime defaults for the ChatGPT Web image path (fork feature).
+// Feature enablement is per-account only: account.extra.openai_web_images.enabled.
+type OpenAIWebImagesConfig struct {
+	DefaultMaxInflight       int    `mapstructure:"default_max_inflight"`
+	QuotaCacheTTLSeconds     int    `mapstructure:"quota_cache_ttl_seconds"`
+	ProbeOnSchedule          bool   `mapstructure:"probe_on_schedule"`
+	UnknownQuotaPolicy       string `mapstructure:"unknown_quota_policy"`
+	SuccessDecrementLocal    bool   `mapstructure:"success_decrement_local"`
+	RateLimitCooldownSeconds int    `mapstructure:"rate_limit_cooldown_seconds"`
+	TransportMaxRetries      int    `mapstructure:"transport_max_retries"`
+	PollTimeoutSeconds       int    `mapstructure:"poll_timeout_seconds"`
+	InflightBackend          string `mapstructure:"inflight_backend"`
+	InflightTTLSeconds       int    `mapstructure:"inflight_ttl_seconds"`
+	RedisKeyPrefix           string `mapstructure:"redis_key_prefix"`
+	BulkMaxAccounts          int    `mapstructure:"bulk_max_accounts"`
+	BulkProbeConcurrency     int    `mapstructure:"bulk_probe_concurrency"`
+	// DefaultModelMode: auto (plan preset) or fixed (use default_upstream_model/thinking_effort).
+	DefaultModelMode string `mapstructure:"default_model_mode"`
+	// DefaultUpstreamModel is the ChatGPT web model slug used for auto fallback / fixed global mode.
+	DefaultUpstreamModel string `mapstructure:"default_upstream_model"`
+	// DefaultThinkingEffort e.g. extended|high|medium|low|minimal.
+	DefaultThinkingEffort string `mapstructure:"default_thinking_effort"`
+	// KeepConversationAfter keeps the ChatGPT web conversation after image result.
+	// Default false: PATCH conversation is_visible=false (same as chatgpt2api).
+	KeepConversationAfter bool `mapstructure:"keep_conversation_after"`
+}
+
 type GatewayConfig struct {
 	// 等待上游响应头的超时时间（秒），0表示无超时
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
@@ -781,6 +807,8 @@ type GatewayConfig struct {
 	// OpenAICompactModel: /responses/compact 上游使用的模型。
 	// compact 端点支持模型滞后于普通 /responses 时，可用该配置降级规避上游错误。
 	OpenAICompactModel string `mapstructure:"openai_compact_model"`
+	// OpenAIWebImages: optional ChatGPT Web image generations path (default off).
+	OpenAIWebImages OpenAIWebImagesConfig `mapstructure:"openai_web_images"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// OpenAIScheduler: OpenAI 高级调度器粘性逃逸配置
@@ -1687,6 +1715,25 @@ func setDefaults() {
 
 	// Security - disable direct fallback on proxy error
 	viper.SetDefault("security.proxy_fallback.allow_direct_on_error", false)
+
+	// OpenAI Web Images (fork): per-account extra.openai_web_images.enabled only.
+	viper.SetDefault("gateway.openai_web_images.default_max_inflight", 1)
+	viper.SetDefault("gateway.openai_web_images.quota_cache_ttl_seconds", 300)
+	viper.SetDefault("gateway.openai_web_images.probe_on_schedule", false)
+	viper.SetDefault("gateway.openai_web_images.unknown_quota_policy", "strict")
+	viper.SetDefault("gateway.openai_web_images.success_decrement_local", true)
+	viper.SetDefault("gateway.openai_web_images.rate_limit_cooldown_seconds", 600)
+	viper.SetDefault("gateway.openai_web_images.transport_max_retries", 1)
+	viper.SetDefault("gateway.openai_web_images.poll_timeout_seconds", 180)
+	viper.SetDefault("gateway.openai_web_images.inflight_backend", "redis")
+	viper.SetDefault("gateway.openai_web_images.inflight_ttl_seconds", 900)
+	viper.SetDefault("gateway.openai_web_images.redis_key_prefix", "sub2api:webimg:")
+	viper.SetDefault("gateway.openai_web_images.bulk_max_accounts", 500)
+	viper.SetDefault("gateway.openai_web_images.bulk_probe_concurrency", 5)
+	viper.SetDefault("gateway.openai_web_images.default_model_mode", "auto")
+	viper.SetDefault("gateway.openai_web_images.default_upstream_model", "gpt-5-6-thinking")
+	viper.SetDefault("gateway.openai_web_images.default_thinking_effort", "extended")
+	viper.SetDefault("gateway.openai_web_images.keep_conversation_after", false)
 
 	// Billing
 	viper.SetDefault("billing.circuit_breaker.enabled", true)

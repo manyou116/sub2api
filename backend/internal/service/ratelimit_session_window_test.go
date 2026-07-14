@@ -137,6 +137,14 @@ func (m *sessionWindowMockRepo) ListSchedulableByPlatforms(context.Context, []st
 func (m *sessionWindowMockRepo) ListSchedulableByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
 	panic("unexpected")
 }
+
+func (m *sessionWindowMockRepo) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
+	panic("unexpected ListActiveAllowingTextRateLimitByGroupIDAndPlatforms call")
+}
+func (m *sessionWindowMockRepo) ListActiveAllowingTextRateLimitByPlatforms(context.Context, []string) ([]Account, error) {
+	panic("unexpected ListActiveAllowingTextRateLimitByPlatforms call")
+}
+
 func (m *sessionWindowMockRepo) ListSchedulableUngroupedByPlatform(context.Context, string) ([]Account, error) {
 	panic("unexpected")
 }
