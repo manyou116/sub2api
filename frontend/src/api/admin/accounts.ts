@@ -806,9 +806,12 @@ export async function createSparkShadow(parentId: number, payload: SparkShadowCr
 
 
 export type OpenAIWebImagesModelMode = 'auto' | 'fixed'
+export type OpenAIWebImagesEnabledMode = 'inherit' | 'on' | 'off'
 
 export interface OpenAIWebImagesPatch {
   enabled?: boolean
+  /** inherit = remove per-account override (use GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED) */
+  enabled_mode?: OpenAIWebImagesEnabledMode
   max_inflight?: number
   priority?: number
   model_mode?: OpenAIWebImagesModelMode
@@ -820,6 +823,9 @@ export interface OpenAIWebImagesStatus {
   account_id: number
   email?: string
   enabled: boolean
+  /** global = inherits default_enabled; account = explicit override */
+  enabled_source?: 'global' | 'account' | string
+  default_enabled?: boolean
   max_inflight: number
   priority: number
   model_mode?: OpenAIWebImagesModelMode | string

@@ -73,8 +73,9 @@ import { computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
+import type { OpenAIWebImagesStatus } from '@/api/admin/accounts'
 
-const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
+const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null; webImagesStatus?: OpenAIWebImagesStatus | null }>()
 const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow', 'web-images-toggle', 'web-images-probe'])
 const { t } = useI18n()
 const isRateLimited = computed(() => {
@@ -102,9 +103,11 @@ const isOpenAIWebImagesCapable = computed(() => {
   return !!acc && acc.platform === 'openai' && (acc.type === 'oauth' || acc.type === 'setup-token')
 })
 const webImagesEnabled = computed(() => {
+  if (props.webImagesStatus) return Boolean(props.webImagesStatus.enabled)
   const extra = (props.account?.extra || {}) as Record<string, any>
   const cfg = extra.openai_web_images
-  return !!(cfg && typeof cfg === 'object' && cfg.enabled)
+  // Without status, only explicit account override is known (global inherit may still be on).
+  return !!(cfg && typeof cfg === 'object' && cfg.enabled === true)
 })
 const webImagesToggleLabel = computed(() =>
   webImagesEnabled.value ? t('admin.accounts.webImages.disable') : t('admin.accounts.webImages.enable')

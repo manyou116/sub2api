@@ -404,7 +404,7 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" @web-images-toggle="handleMenuWebImagesToggle" @web-images-probe="handleMenuWebImagesProbe" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" :web-images-status="menu.acc ? (webImagesStatusById[String(menu.acc.id)] ?? null) : null" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" @web-images-toggle="handleMenuWebImagesToggle" @web-images-probe="handleMenuWebImagesProbe" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -1505,9 +1505,15 @@ const handleBulkRefreshToken = async () => {
 
 const handleMenuWebImagesToggle = async (account: Account) => {
   try {
+    const cached = webImagesStatusById.value[String(account.id)]
     const extra = (account.extra || {}) as Record<string, any>
-    const enabled = !!(extra.openai_web_images && typeof extra.openai_web_images === 'object' && extra.openai_web_images.enabled)
-    const st = await adminAPI.accounts.patchOpenAIWebImages(account.id, { enabled: !enabled })
+    const enabled = cached
+      ? Boolean(cached.enabled)
+      : !!(extra.openai_web_images && typeof extra.openai_web_images === 'object' && extra.openai_web_images.enabled === true)
+    // Menu toggles force on/off (explicit account override). Use edit modal for inherit.
+    const st = await adminAPI.accounts.patchOpenAIWebImages(account.id, {
+      enabled_mode: enabled ? 'off' : 'on'
+    })
     onWebImagesUpdated(st)
     appStore.showSuccess(!enabled ? t('admin.accounts.webImages.on') : t('admin.accounts.webImages.off'))
   } catch (error) {

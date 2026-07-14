@@ -519,6 +519,13 @@ export default {
         title: 'ChatGPT Web 生图',
         bulkDesc: '批量设置选中/筛选账号的 ChatGPT Web 生图开关、并发与优先级。',
         enableSwitch: '启用 Web 生图路径',
+        enableMode: '启用方式',
+        enableModeInherit: '跟随全局',
+        enableModeOn: '强制开启',
+        enableModeOff: '强制关闭',
+        enableModeHint: '跟随全局时使用 gateway.openai_web_images.default_enabled（环境变量 GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED）。仅在需要例外账号时强制开/关。',
+        inheritShort: '全局',
+
         probeAfterApply: '应用后立即探测 Web 额度',
 
         modelMode: '模型策略',
@@ -528,7 +535,7 @@ export default {
         upstreamModel: '上游模型',
         thinkingEffort: '思考深度',
         resolvedPreview: '实际生效：{model} / {effort}（{source}）',
-        desc: '使用官网 Web 额度 (picture_v2)。开启后该 OAuth 账号的 /v1/images 会优先走 Web 路径。',
+        desc: '使用官网 Web 额度 (picture_v2)。全局默认 + 账号继承/覆盖；有效开启时 /v1/images 走 Web 路径。',
         on: '已开启',
         off: '未开启',
         remaining: '剩余额度',

@@ -940,24 +940,19 @@
           aria-labelledby="bulk-edit-openai-web-images-label"
           class="space-y-3"
         >
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.accounts.webImages.enableSwitch') }}</span>
-            <button
-              id="bulk-edit-openai-web-images-toggle"
-              type="button"
-              :class="[
-                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
-                openAIWebImagesEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
-              @click="openAIWebImagesEnabled = !openAIWebImagesEnabled"
+          <div>
+            <label class="input-label" for="bulk-edit-openai-web-images-enable-mode">{{ t('admin.accounts.webImages.enableMode') }}</label>
+            <select
+              id="bulk-edit-openai-web-images-enable-mode"
+              v-model="openAIWebImagesEnableMode"
+              class="input"
+              data-testid="bulk-edit-openai-web-images-enable-mode"
             >
-              <span
-                :class="[
-                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  openAIWebImagesEnabled ? 'translate-x-5' : 'translate-x-0'
-                ]"
-              />
-            </button>
+              <option value="inherit">{{ t('admin.accounts.webImages.enableModeInherit') }}</option>
+              <option value="on">{{ t('admin.accounts.webImages.enableModeOn') }}</option>
+              <option value="off">{{ t('admin.accounts.webImages.enableModeOff') }}</option>
+            </select>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.webImages.enableModeHint') }}</p>
           </div>
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
@@ -1577,7 +1572,8 @@ const rateMultiplier = ref(1)
 const status = ref<'active' | 'inactive'>('active')
 const groupIds = ref<number[]>([])
 const openaiPassthroughEnabled = ref(false)
-const openAIWebImagesEnabled = ref(false)
+type OpenAIWebImagesEnableMode = 'inherit' | 'on' | 'off'
+const openAIWebImagesEnableMode = ref<OpenAIWebImagesEnableMode>('inherit')
 const openAIWebImagesMaxInflight = ref(1)
 const openAIWebImagesPriority = ref(0)
 const openAIWebImagesModelMode = ref<'auto' | 'fixed'>('auto')
@@ -2066,7 +2062,7 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
         const webRes = await adminAPI.accounts.bulkOpenAIWebImages({
           account_ids: ids,
           patch: {
-            enabled: openAIWebImagesEnabled.value,
+            enabled_mode: openAIWebImagesEnableMode.value,
             max_inflight: Number(openAIWebImagesMaxInflight.value) || 1,
             priority: Number(openAIWebImagesPriority.value) || 0,
             model_mode: openAIWebImagesModelMode.value,
@@ -2149,7 +2145,7 @@ watch(
       enableOpenAICompactMode.value = false
       enableOpenAICompactModelMapping.value = false
       enableOpenAIWebImages.value = false
-      openAIWebImagesEnabled.value = false
+      openAIWebImagesEnableMode.value = 'inherit'
       openAIWebImagesMaxInflight.value = 1
       openAIWebImagesPriority.value = 0
       openAIWebImagesModelMode.value = 'auto'

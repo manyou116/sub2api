@@ -747,8 +747,12 @@ const (
 )
 
 // OpenAIWebImagesConfig holds runtime defaults for the ChatGPT Web image path (fork feature).
-// Feature enablement is per-account only: account.extra.openai_web_images.enabled.
+// Enablement: gateway.openai_web_images.default_enabled is the global default.
+// Account extra.openai_web_images.enabled, when present, overrides the global default.
 type OpenAIWebImagesConfig struct {
+	// DefaultEnabled applies when an account has no explicit openai_web_images.enabled.
+	// Default false (opt-in). Set true to enable web images for all OpenAI OAuth accounts.
+	DefaultEnabled bool `mapstructure:"default_enabled"`
 	DefaultMaxInflight       int    `mapstructure:"default_max_inflight"`
 	QuotaCacheTTLSeconds     int    `mapstructure:"quota_cache_ttl_seconds"`
 	ProbeOnSchedule          bool   `mapstructure:"probe_on_schedule"`
@@ -1723,7 +1727,8 @@ func setDefaults() {
 	// Security - disable direct fallback on proxy error
 	viper.SetDefault("security.proxy_fallback.allow_direct_on_error", false)
 
-	// OpenAI Web Images (fork): per-account extra.openai_web_images.enabled only.
+	// OpenAI Web Images (fork): global default_enabled + optional per-account override in extra.
+	viper.SetDefault("gateway.openai_web_images.default_enabled", false)
 	viper.SetDefault("gateway.openai_web_images.default_max_inflight", 1)
 	viper.SetDefault("gateway.openai_web_images.quota_cache_ttl_seconds", 300)
 	viper.SetDefault("gateway.openai_web_images.probe_on_schedule", true)

@@ -414,6 +414,13 @@ export default {
         title: 'ChatGPT Web Images',
         bulkDesc: 'Batch set ChatGPT Web image switch, concurrency and priority for selected/filtered accounts.',
         enableSwitch: 'Enable Web image path',
+        enableMode: 'Enable mode',
+        enableModeInherit: 'Inherit global',
+        enableModeOn: 'Force on',
+        enableModeOff: 'Force off',
+        enableModeHint: 'Inherit uses gateway.openai_web_images.default_enabled (env GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED). Force on/off only for account exceptions.',
+        inheritShort: 'global',
+
         probeAfterApply: 'Probe Web quota after apply',
 
         modelMode: 'Model Strategy',
@@ -423,7 +430,7 @@ export default {
         upstreamModel: 'Upstream Model',
         thinkingEffort: 'Thinking Effort',
         resolvedPreview: 'Resolved: {model} / {effort} ({source})',
-        desc: 'Use official Web image quota (picture_v2). When enabled, this OAuth account routes /v1/images via Web path.',
+        desc: 'Use official Web image quota (picture_v2). Global default + per-account inherit/override; when effective, /v1/images uses Web path.',
         on: 'On',
         off: 'Off',
         remaining: 'Remaining',

@@ -19,6 +19,7 @@ func (h *AccountHandler) SetOpenAIWebImagesService(svc *service.OpenAIWebImagesS
 
 type openAIWebImagesPatchRequest struct {
 	Enabled        *bool   `json:"enabled"`
+	EnabledMode    *string `json:"enabled_mode"`
 	MaxInflight    *int    `json:"max_inflight"`
 	Priority       *int    `json:"priority"`
 	ModelMode      *string `json:"model_mode"`
@@ -50,7 +51,7 @@ func (h *AccountHandler) PatchOpenAIWebImages(c *gin.Context) {
 		return
 	}
 	if err := h.webImages.PatchAccount(c.Request.Context(), id, service.OpenAIWebImagesBulkPatch{
-		Enabled: req.Enabled, MaxInflight: req.MaxInflight, Priority: req.Priority,
+		Enabled: req.Enabled, EnabledMode: req.EnabledMode, MaxInflight: req.MaxInflight, Priority: req.Priority,
 		ModelMode: req.ModelMode, Model: req.Model, ThinkingEffort: req.ThinkingEffort,
 	}); err != nil {
 		response.ErrorFrom(c, err)
@@ -126,7 +127,7 @@ func (h *AccountHandler) BulkOpenAIWebImages(c *gin.Context) {
 		return
 	}
 	result, err := h.webImages.BulkPatch(c.Request.Context(), req.AccountIDs, service.OpenAIWebImagesBulkPatch{
-		Enabled: req.Patch.Enabled, MaxInflight: req.Patch.MaxInflight, Priority: req.Patch.Priority,
+		Enabled: req.Patch.Enabled, EnabledMode: req.Patch.EnabledMode, MaxInflight: req.Patch.MaxInflight, Priority: req.Patch.Priority,
 		ModelMode: req.Patch.ModelMode, Model: req.Patch.Model, ThinkingEffort: req.Patch.ThinkingEffort,
 	})
 	if err != nil {

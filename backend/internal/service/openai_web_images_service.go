@@ -42,7 +42,10 @@ type webImageQuotaCache struct {
 }
 
 type OpenAIWebImagesAccountConfig struct {
-	Enabled      bool `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// EnabledSet is true when account.extra.openai_web_images explicitly has "enabled".
+	// When false, Enabled comes from gateway.openai_web_images.default_enabled (global inherit).
+	EnabledSet   bool `json:"-"`
 	MaxInflight  int  `json:"max_inflight"`
 	Priority     int  `json:"priority"`
 	ProbeEnabled bool `json:"probe_enabled"`
@@ -62,12 +65,18 @@ type OpenAIWebImagesStats struct {
 	LastFailAt    string `json:"last_fail_at,omitempty"`
 	LastError     string `json:"last_error,omitempty"`
 	LastUsedAt    string `json:"last_used_at,omitempty"`
+	// LastRateLimitReason: quota_daily | rate_limit | soft (observability; durable gate is still DB reset_at).
+	LastRateLimitReason string `json:"last_rate_limit_reason,omitempty"`
 }
 
 type OpenAIWebImagesStatus struct {
-	AccountID           int64                `json:"account_id"`
-	Email               string               `json:"email,omitempty"`
-	Enabled             bool                 `json:"enabled"`
+	AccountID int64  `json:"account_id"`
+	Email     string `json:"email,omitempty"`
+	Enabled   bool   `json:"enabled"`
+	// EnabledSource: "global" inherits gateway.openai_web_images.default_enabled; "account" is an explicit override.
+	EnabledSource string `json:"enabled_source,omitempty"`
+	// DefaultEnabled is the current global default (for admin UI).
+	DefaultEnabled      bool                 `json:"default_enabled"`
 	MaxInflight         int                  `json:"max_inflight"`
 	Priority            int                  `json:"priority"`
 	ModelMode           string               `json:"model_mode"`
@@ -92,7 +101,11 @@ type OpenAIWebImagesStatus struct {
 }
 
 type OpenAIWebImagesBulkPatch struct {
-	Enabled        *bool   `json:"enabled"`
+	// Enabled sets an explicit per-account override when non-nil.
+	Enabled *bool `json:"enabled"`
+	// EnabledMode: "inherit" | "on" | "off". When set, takes precedence over Enabled.
+	// "inherit" removes the account override so gateway.openai_web_images.default_enabled applies.
+	EnabledMode    *string `json:"enabled_mode,omitempty"`
 	MaxInflight    *int    `json:"max_inflight"`
 	Priority       *int    `json:"priority"`
 	ModelMode      *string `json:"model_mode"`
@@ -213,26 +226,81 @@ func (s *OpenAIWebImagesService) cfgOrDefault() config.OpenAIWebImagesConfig {
 }
 
 func (s *OpenAIWebImagesService) ParseAccountConfig(account *Account) OpenAIWebImagesAccountConfig {
-	cfg := OpenAIWebImagesAccountConfig{Enabled: false, MaxInflight: s.cfgOrDefault().DefaultMaxInflight, Priority: 0, ProbeEnabled: true}
+	g := s.cfgOrDefault()
+	cfg := OpenAIWebImagesAccountConfig{
+		Enabled:      g.DefaultEnabled,
+		EnabledSet:   false,
+		MaxInflight:  g.DefaultMaxInflight,
+		Priority:     0,
+		ProbeEnabled: true,
+	}
 	if account == nil || account.Extra == nil {
 		return cfg
 	}
 	raw, ok := account.Extra[openAIWebImagesExtraKey]
 	if !ok || raw == nil {
+		// Legacy single-bool flag is always an explicit account override.
 		if v, ok2 := account.Extra["openai_oauth_legacy_images"].(bool); ok2 {
 			cfg.Enabled = v
+			cfg.EnabledSet = true
 		}
 		return cfg
 	}
+	// Treat "enabled" as optional so missing key falls back to global DefaultEnabled
+	// (json.Unmarshal would otherwise force false zero-value).
+	enabledOverride, hasEnabled := openAIWebImagesEnabledOverride(raw)
 	b, _ := json.Marshal(raw)
 	_ = json.Unmarshal(b, &cfg)
+	if hasEnabled {
+		cfg.Enabled = enabledOverride
+		cfg.EnabledSet = true
+	} else {
+		cfg.Enabled = g.DefaultEnabled
+		cfg.EnabledSet = false
+	}
 	if cfg.MaxInflight <= 0 {
-		cfg.MaxInflight = s.cfgOrDefault().DefaultMaxInflight
+		cfg.MaxInflight = g.DefaultMaxInflight
 	}
 	cfg.ModelMode = normalizeWebImageModelMode(cfg.ModelMode)
 	cfg.ThinkingEffort = strings.TrimSpace(cfg.ThinkingEffort)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	return cfg
+}
+
+// openAIWebImagesEnabledOverride returns (value, true) when account extra explicitly sets enabled.
+func openAIWebImagesEnabledOverride(raw any) (bool, bool) {
+	switch v := raw.(type) {
+	case map[string]any:
+		ev, ok := v["enabled"]
+		if !ok {
+			return false, false
+		}
+		switch t := ev.(type) {
+		case bool:
+			return t, true
+		case string:
+			s := strings.TrimSpace(strings.ToLower(t))
+			if s == "true" || s == "1" || s == "yes" {
+				return true, true
+			}
+			if s == "false" || s == "0" || s == "no" {
+				return false, true
+			}
+		case float64:
+			return t != 0, true
+		case int:
+			return t != 0, true
+		}
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return false, false
+	}
+	var m map[string]any
+	if json.Unmarshal(b, &m) != nil || m == nil {
+		return false, false
+	}
+	return openAIWebImagesEnabledOverride(m)
 }
 
 func (s *OpenAIWebImagesService) ShouldUseWebPath(account *Account) bool {
@@ -259,8 +327,13 @@ func (s *OpenAIWebImagesService) GetStatus(ctx context.Context, account *Account
 	quota, known := s.getQuotaCache(ctx, account.ID)
 	cooldown, _ := s.getCooldown(ctx, account.ID)
 	sel := s.ResolveUpstream(account)
+	enabledSource := "global"
+	if cfg.EnabledSet {
+		enabledSource = "account"
+	}
 	st := &OpenAIWebImagesStatus{
 		AccountID: account.ID, Email: account.GetCredential("email"), Enabled: cfg.Enabled,
+		EnabledSource: enabledSource, DefaultEnabled: s.cfgOrDefault().DefaultEnabled,
 		MaxInflight: cfg.MaxInflight, Priority: cfg.Priority,
 		ModelMode: sel.ModelMode, Model: cfg.Model, ThinkingEffort: cfg.ThinkingEffort,
 		PlanType: sel.PlanType, ResolvedModel: sel.UpstreamModel, ResolvedEffort: sel.ThinkingEffort, ResolveSource: sel.Source,
@@ -322,8 +395,24 @@ func (s *OpenAIWebImagesService) PatchAccount(ctx context.Context, accountID int
 		return err
 	}
 	cfg := s.ParseAccountConfig(account)
-	if patch.Enabled != nil {
+	if patch.EnabledMode != nil {
+		mode := strings.ToLower(strings.TrimSpace(*patch.EnabledMode))
+		switch mode {
+		case "inherit", "default", "global":
+			cfg.EnabledSet = false
+			cfg.Enabled = s.cfgOrDefault().DefaultEnabled
+		case "on", "enabled", "true", "1":
+			cfg.EnabledSet = true
+			cfg.Enabled = true
+		case "off", "disabled", "false", "0":
+			cfg.EnabledSet = true
+			cfg.Enabled = false
+		default:
+			return fmt.Errorf("enabled_mode must be inherit, on, or off")
+		}
+	} else if patch.Enabled != nil {
 		cfg.Enabled = *patch.Enabled
+		cfg.EnabledSet = true
 	}
 	if patch.MaxInflight != nil {
 		if *patch.MaxInflight <= 0 {
@@ -364,13 +453,18 @@ func (s *OpenAIWebImagesService) PatchAccount(ctx context.Context, accountID int
 
 func (s *OpenAIWebImagesService) saveAccountConfig(ctx context.Context, accountID int64, account *Account, cfg OpenAIWebImagesAccountConfig) error {
 	payload := map[string]any{
-		"enabled": cfg.Enabled, "max_inflight": cfg.MaxInflight, "priority": cfg.Priority, "probe_enabled": cfg.ProbeEnabled,
+		"max_inflight": cfg.MaxInflight, "priority": cfg.Priority, "probe_enabled": cfg.ProbeEnabled,
 		"model_mode": cfg.ModelMode, "model": cfg.Model, "thinking_effort": cfg.ThinkingEffort,
 		"stats": map[string]any{
 			"success": cfg.Stats.Success, "fail": cfg.Stats.Fail,
 			"last_success_at": cfg.Stats.LastSuccessAt, "last_fail_at": cfg.Stats.LastFailAt,
 			"last_error": cfg.Stats.LastError, "last_used_at": cfg.Stats.LastUsedAt,
+			"last_rate_limit_reason": cfg.Stats.LastRateLimitReason,
 		},
+	}
+	// Omit "enabled" when inheriting global default so fleet-wide GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED applies.
+	if cfg.EnabledSet {
+		payload["enabled"] = cfg.Enabled
 	}
 	return s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{openAIWebImagesExtraKey: payload})
 }
@@ -878,18 +972,54 @@ func (s *OpenAIWebImagesService) MarkFail(ctx context.Context, account *Account,
 		errMsg = errMsg[:500]
 	}
 	cfg.Stats.LastError = errMsg
-	_ = s.saveAccountConfig(ctx, account.ID, account, cfg)
 	if rateLimited {
+		reason := classifyWebImageRateLimitReason(errMsg)
+		cfg.Stats.LastRateLimitReason = reason
+		// Soft transport throttle: short Redis-only cool-down; do NOT zero quota or durable-pin.
+		if reason == "soft" {
+			softUntil := time.Now().UTC().Add(90 * time.Second)
+			s.setCooldownCache(ctx, account.ID, softUntil)
+			_ = s.saveAccountConfig(ctx, account.ID, account, cfg)
+			return
+		}
 		s.setQuotaCache(ctx, account.ID, webImageQuotaCache{Remaining: 0, ProbedAt: time.Now().UTC()})
+		// Hard / daily quota: durable DB reset_at (aligned with text rate_limit_reset_at design).
 		until := time.Now().Add(time.Duration(s.cfgOrDefault().RateLimitCooldownSeconds) * time.Second)
 		if d := parseWebImageResetDuration(errMsg); d > 0 {
-			// Prefer upstream reset hint when longer than default cooldown.
 			if cand := time.Now().Add(d); cand.After(until) {
 				until = cand
 			}
 		}
 		s.setCooldown(ctx, account.ID, until)
 	}
+	_ = s.saveAccountConfig(ctx, account.ID, account, cfg)
+}
+
+// classifyWebImageRateLimitReason mirrors text-channel thinking: durable window vs short fuse.
+// quota_daily = plan image cap with reset hint; rate_limit = hard image 429; soft = poll/CF noise.
+func classifyWebImageRateLimitReason(errMsg string) string {
+	msg := strings.ToLower(strings.TrimSpace(errMsg))
+	// Soft transport throttle (must not durable-pin accounts for ~day).
+	if strings.Contains(msg, "soft poll") ||
+		strings.Contains(msg, "conversation poll rate limited") ||
+		strings.Contains(msg, "conversation get 429") {
+		return "soft"
+	}
+	// Daily / plan image quota — prefer upstream reset duration when present.
+	if parseWebImageResetDuration(errMsg) > 0 ||
+		strings.Contains(msg, "free plan limit") ||
+		strings.Contains(msg, "plan limit for image") ||
+		strings.Contains(msg, "image generation limit") ||
+		(strings.Contains(msg, "image generations") && strings.Contains(msg, "limit")) {
+		return "quota_daily"
+	}
+	// Bare "too many requests" without image-quota phrasing → soft.
+	if strings.Contains(msg, "too many requests") &&
+		!strings.Contains(msg, "image") &&
+		parseWebImageResetDuration(errMsg) == 0 {
+		return "soft"
+	}
+	return "rate_limit"
 }
 
 // parseWebImageResetDuration extracts "resets in 23 hours and 5 minutes" style hints.

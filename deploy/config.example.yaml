@@ -262,10 +262,14 @@ gateway:
   openai_compact_model: "gpt-5.4"
   # OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
   # ---------------------------------------------------------------------------
-  # OpenAI Web Images (fork): runtime defaults only.
-  # Enable per account via admin UI / account.extra.openai_web_images.enabled.
+  # OpenAI Web Images (fork): ChatGPT Web picture_v2 path for gpt-image-2.
+  # Global default_enabled applies to all OpenAI OAuth accounts that have NOT
+  # set account.extra.openai_web_images.enabled. Per-account UI can inherit /
+  # force-on / force-off. Env: GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED=true
   # ---------------------------------------------------------------------------
   openai_web_images:
+    # Fleet-wide enable (opt-in). Account override only when extra has "enabled".
+    default_enabled: false
     inflight_backend: redis
     default_max_inflight: 1
     quota_cache_ttl_seconds: 300

@@ -7,7 +7,7 @@
           ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200'
           : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'"
       >
-        {{ enabled ? t('admin.accounts.webImages.on') : t('admin.accounts.webImages.off') }}
+        {{ enabledLabel }}
       </span>
       <span
         v-if="enabled && isRateLimited"
@@ -110,7 +110,15 @@ const extraCfg = computed(() => {
 
 const enabled = computed(() => {
   if (status.value) return Boolean(status.value.enabled)
-  return Boolean(extraCfg.value?.enabled)
+  return Boolean(extraCfg.value?.enabled === true)
+})
+
+const enabledLabel = computed(() => {
+  if (!enabled.value) return t('admin.accounts.webImages.off')
+  if (status.value?.enabled_source === 'global') {
+    return `${t('admin.accounts.webImages.on')}·${t('admin.accounts.webImages.inheritShort')}`
+  }
+  return t('admin.accounts.webImages.on')
 })
 
 const remainingLabel = computed(() => {

@@ -66,6 +66,7 @@ string” logic on responses path alone — that regresses chat/completions.
 |------|-------------|-------------------------|
 | Driver package | `backend/internal/service/openaiimages/**` | isolated webdriver + quota parse |
 | Service | `openai_web_images_service.go` | inflight + cooldown (DB truth + cache) |
+| Admin | `admin_account.go` UpdateAccount | preserves `openai_web_images` when extra omits key |
 | Path select | `openai_images_legacy_web.go` / images handler | `UsesOpenAIWebImagesPath` / legacy web path |
 | Scheduler | `openai_account_scheduler.go` | web image path does **not** consume text concurrency slots; filters `IsWebImageRateLimited` |
 | Durable RL | **`account_repo_webimg.go`** + `migrations/177_add_web_image_rate_limit.sql` | `SetWebImageRateLimited` / `ClearWebImageRateLimit` / `attachWebImageRateLimits` / capacity list |
@@ -74,7 +75,7 @@ string” logic on responses path alone — that regresses chat/completions.
 | Account helpers | **`account_webimg.go`** | `IsWebImageRateLimited`, `IsSchedulableIgnoringTextRateLimit` (fields stay on `account.go`) |
 | Scheduler slot | **`openai_account_scheduler_webimg.go`** | `acquireAccountSlotForSchedule` skips text slots for web path |
 | Hot scheduler | `openai_account_scheduler.go` | `accountBlockedByWebImageCooldown(...)` + text-RL bypass call |
-| Default-off | account `extra.openai_web_images.enabled` | must stay **opt-in per account** |
+| Default | `gateway.openai_web_images.default_enabled` + optional account `extra.openai_web_images.enabled` | global default (env `GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED`); account key only when present (inherit / force on / force off) |
 
 ### P3 — Infra / tags
 

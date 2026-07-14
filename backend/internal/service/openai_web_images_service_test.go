@@ -187,10 +187,26 @@ func (r *webImgAccountRepo) SetTempUnschedulable(context.Context, int64, time.Ti
 }
 func (r *webImgAccountRepo) ClearTempUnschedulable(context.Context, int64) error { panic("unused") }
 func (r *webImgAccountRepo) ClearRateLimit(context.Context, int64) error         { panic("unused") }
-func (r *webImgAccountRepo) SetWebImageRateLimited(context.Context, int64, time.Time) error {
+func (r *webImgAccountRepo) SetWebImageRateLimited(_ context.Context, id int64, until time.Time) error {
+	acc, ok := r.accounts[id]
+	if !ok {
+		return ErrAccountNotFound
+	}
+	now := time.Now().UTC()
+	acc.WebImageRateLimitedAt = &now
+	u := until.UTC()
+	acc.WebImageRateLimitResetAt = &u
 	return nil
 }
-func (r *webImgAccountRepo) ClearWebImageRateLimit(context.Context, int64) error { return nil }
+func (r *webImgAccountRepo) ClearWebImageRateLimit(_ context.Context, id int64) error {
+	acc, ok := r.accounts[id]
+	if !ok {
+		return ErrAccountNotFound
+	}
+	acc.WebImageRateLimitedAt = nil
+	acc.WebImageRateLimitResetAt = nil
+	return nil
+}
 
 func (r *webImgAccountRepo) ClearAntigravityQuotaScopes(context.Context, int64) error {
 	panic("unused")
@@ -295,4 +311,129 @@ func TestOpenAIWebImages_ClearCooldownRemovesRedisKeys(t *testing.T) {
 	require.False(t, svc.IsWebRateLimited(ctx, 66))
 	_, ok := svc.getQuotaCache(ctx, 66)
 	require.False(t, ok)
+}
+
+func TestOpenAIWebImages_ParseAccountConfig_GlobalInherit(t *testing.T) {
+	cfg := webImgTestCfg("memory")
+	cfg.Gateway.OpenAIWebImages.DefaultEnabled = true
+	svc := NewOpenAIWebImagesService(cfg, nil, nil)
+
+	// No extra -> inherit global
+	acc := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	parsed := svc.ParseAccountConfig(acc)
+	require.True(t, parsed.Enabled)
+	require.False(t, parsed.EnabledSet)
+	require.True(t, svc.ShouldUseWebPath(acc))
+
+	// extra without enabled key -> still inherit
+	acc2 := &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
+		"openai_web_images": map[string]any{"max_inflight": 4},
+	}}
+	parsed2 := svc.ParseAccountConfig(acc2)
+	require.True(t, parsed2.Enabled)
+	require.False(t, parsed2.EnabledSet)
+	require.Equal(t, 4, parsed2.MaxInflight)
+
+	// explicit off overrides global on
+	acc3 := &Account{ID: 3, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
+		"openai_web_images": map[string]any{"enabled": false},
+	}}
+	parsed3 := svc.ParseAccountConfig(acc3)
+	require.False(t, parsed3.Enabled)
+	require.True(t, parsed3.EnabledSet)
+	require.False(t, svc.ShouldUseWebPath(acc3))
+
+	// global off + no override
+	cfgOff := webImgTestCfg("memory")
+	cfgOff.Gateway.OpenAIWebImages.DefaultEnabled = false
+	svcOff := NewOpenAIWebImagesService(cfgOff, nil, nil)
+	acc4 := &Account{ID: 4, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	require.False(t, svcOff.ParseAccountConfig(acc4).Enabled)
+	require.False(t, svcOff.ShouldUseWebPath(acc4))
+
+	// legacy flag is explicit override
+	acc5 := &Account{ID: 5, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
+		"openai_oauth_legacy_images": true,
+	}}
+	parsed5 := svcOff.ParseAccountConfig(acc5)
+	require.True(t, parsed5.Enabled)
+	require.True(t, parsed5.EnabledSet)
+}
+
+func TestOpenAIWebImages_PatchInheritOmitsEnabled(t *testing.T) {
+	repo := &webImgAccountRepo{accounts: map[int64]*Account{
+		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
+			"openai_web_images": map[string]any{"enabled": true, "max_inflight": 2},
+		}},
+	}}
+	cfg := webImgTestCfg("memory")
+	cfg.Gateway.OpenAIWebImages.DefaultEnabled = true
+	svc := NewOpenAIWebImagesService(cfg, nil, repo)
+
+	mode := "inherit"
+	require.NoError(t, svc.PatchAccount(context.Background(), 1, OpenAIWebImagesBulkPatch{EnabledMode: &mode}))
+	raw := repo.accounts[1].Extra["openai_web_images"].(map[string]any)
+	_, hasEnabled := raw["enabled"]
+	require.False(t, hasEnabled, "enabled key must be omitted on inherit: %#v", raw)
+
+	parsed := svc.ParseAccountConfig(repo.accounts[1])
+	require.True(t, parsed.Enabled, "should inherit global default true")
+	require.False(t, parsed.EnabledSet)
+
+	st, err := svc.GetStatus(context.Background(), repo.accounts[1])
+	require.NoError(t, err)
+	require.Equal(t, "global", st.EnabledSource)
+	require.True(t, st.DefaultEnabled)
+	require.True(t, st.Enabled)
+
+	// force off override
+	modeOff := "off"
+	require.NoError(t, svc.PatchAccount(context.Background(), 1, OpenAIWebImagesBulkPatch{EnabledMode: &modeOff}))
+	raw = repo.accounts[1].Extra["openai_web_images"].(map[string]any)
+	require.Equal(t, false, raw["enabled"])
+	st, err = svc.GetStatus(context.Background(), repo.accounts[1])
+	require.NoError(t, err)
+	require.Equal(t, "account", st.EnabledSource)
+	require.False(t, st.Enabled)
+}
+
+func TestClassifyWebImageRateLimitReason(t *testing.T) {
+	require.Equal(t, "soft", classifyWebImageRateLimitReason("conversation poll rate limited (too many 429)"))
+	require.Equal(t, "soft", classifyWebImageRateLimitReason("soft poll 429"))
+	require.Equal(t, "soft", classifyWebImageRateLimitReason("Too Many Requests"))
+	require.Equal(t, "quota_daily", classifyWebImageRateLimitReason(
+		`You've hit the Free plan limit for image generations requests. You can create more images when the limit resets in 23 hours and 5 minutes.`))
+	require.Equal(t, "rate_limit", classifyWebImageRateLimitReason("image generation rate limit exceeded"))
+}
+
+func TestOpenAIWebImages_MarkFailSoftDoesNotDurablePin(t *testing.T) {
+	repo := &webImgAccountRepo{accounts: map[int64]*Account{
+		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
+			"openai_web_images": map[string]any{"enabled": true},
+		}},
+	}}
+	svc := NewOpenAIWebImagesService(webImgTestCfg("memory"), nil, repo)
+	acc := repo.accounts[1]
+	svc.MarkFail(context.Background(), acc, "conversation poll rate limited (too many 429)", true)
+	// soft uses cache only — durable DB field not set via repo SetWebImageRateLimited noop returns nil but account fields unchanged
+	require.Nil(t, acc.WebImageRateLimitResetAt)
+	// soft cool-down present in memory cache
+	require.True(t, svc.IsWebRateLimited(context.Background(), 1))
+}
+
+func TestOpenAIWebImages_MarkFailDailyDurable(t *testing.T) {
+	repo := &webImgAccountRepo{accounts: map[int64]*Account{
+		2: {ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{
+			"openai_web_images": map[string]any{"enabled": true},
+		}},
+	}}
+	svc := NewOpenAIWebImagesService(webImgTestCfg("memory"), nil, repo)
+	acc := repo.accounts[2]
+	msg := `You've hit the Free plan limit for image generations requests. resets in 22 hours and 10 minutes.`
+	svc.MarkFail(context.Background(), acc, msg, true)
+	cfg := svc.ParseAccountConfig(repo.accounts[2])
+	require.Equal(t, "quota_daily", cfg.Stats.LastRateLimitReason)
+	require.True(t, repo.accounts[2].IsWebImageRateLimited(), "daily quota must durable-pin via DB fields")
+	require.NotNil(t, repo.accounts[2].WebImageRateLimitResetAt)
+	require.True(t, repo.accounts[2].WebImageRateLimitResetAt.After(time.Now().Add(20*time.Hour)))
 }
