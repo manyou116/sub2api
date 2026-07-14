@@ -1269,6 +1269,44 @@ func (r *accountRepository) ListSchedulableByGroupIDAndPlatforms(ctx context.Con
 	})
 }
 
+// ListActiveAllowingTextRateLimitByGroupIDAndPlatforms returns active/schedulable accounts in a group,
+// including those currently inside text RateLimitResetAt/OverloadUntil windows.
+// Intended for ChatGPT Web image selection only.
+func (r *accountRepository) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]service.Account, error) {
+	if len(platforms) == 0 {
+		return nil, nil
+	}
+	return r.queryAccountsByGroup(ctx, groupID, accountGroupQueryOptions{
+		status:                 service.StatusActive,
+		schedulable:            true,
+		platforms:              platforms,
+		includeTextRateLimited: true,
+	})
+}
+
+// ListActiveAllowingTextRateLimitByPlatforms is the ungrouped/platform-wide variant.
+func (r *accountRepository) ListActiveAllowingTextRateLimitByPlatforms(ctx context.Context, platforms []string) ([]service.Account, error) {
+	if len(platforms) == 0 {
+		return nil, nil
+	}
+	now := time.Now()
+	accounts, err := r.client.Account.Query().
+		Where(
+			dbaccount.PlatformIn(platforms...),
+			dbaccount.StatusEQ(service.StatusActive),
+			dbaccount.SchedulableEQ(true),
+			tempUnschedulablePredicate(),
+			notExpiredPredicate(now),
+			// Intentionally omit RateLimitResetAt/OverloadUntil filters.
+		).
+		Order(dbent.Asc(dbaccount.FieldPriority)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return r.accountsToService(ctx, accounts)
+}
+
 func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
 	now := time.Now()
 	_, err := r.client.Account.Update().
@@ -1767,6 +1805,9 @@ type accountGroupQueryOptions struct {
 	status      string
 	schedulable bool
 	platforms   []string // 允许的多个平台，空切片表示不进行平台过滤
+	// includeTextRateLimited keeps accounts still inside RateLimitResetAt/OverloadUntil.
+	// Used by ChatGPT Web image scheduling so text 429 does not hide image-capable OAuth accounts.
+	includeTextRateLimited bool
 }
 
 func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID int64, opts accountGroupQueryOptions) ([]service.Account, error) {
@@ -1788,9 +1829,13 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 			dbaccount.SchedulableEQ(true),
 			tempUnschedulablePredicate(),
 			notExpiredPredicate(now),
-			dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
-			dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
 		)
+		if !opts.includeTextRateLimited {
+			preds = append(preds,
+				dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
+				dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
+			)
+		}
 	}
 
 	if len(preds) > 0 {

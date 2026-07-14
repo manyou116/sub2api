@@ -151,6 +151,14 @@ func (s *accountRepoStub) ListSchedulableByGroupIDAndPlatforms(ctx context.Conte
 	panic("unexpected ListSchedulableByGroupIDAndPlatforms call")
 }
 
+func (s *accountRepoStub) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
+	panic("unexpected ListActiveAllowingTextRateLimitByGroupIDAndPlatforms call")
+}
+func (s *accountRepoStub) ListActiveAllowingTextRateLimitByPlatforms(context.Context, []string) ([]Account, error) {
+	panic("unexpected ListActiveAllowingTextRateLimitByPlatforms call")
+}
+
+
 func (s *accountRepoStub) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	panic("unexpected ListSchedulableUngroupedByPlatform call")
 }

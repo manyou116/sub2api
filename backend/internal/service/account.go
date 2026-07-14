@@ -192,6 +192,27 @@ func (a *Account) IsCredentialUsableForShadow() bool {
 	return true
 }
 
+// IsSchedulableIgnoringTextRateLimit is used for ChatGPT Web image scheduling.
+// Text/Codex rate-limit windows (RateLimitResetAt/OverloadUntil) do not block web image
+// generation when the account is otherwise healthy and web image path is enabled.
+func (a *Account) IsSchedulableIgnoringTextRateLimit() bool {
+	if a == nil || !a.IsActive() || !a.Schedulable {
+		return false
+	}
+	now := time.Now()
+	if a.AutoPauseOnExpired && a.ExpiresAt != nil && !now.Before(*a.ExpiresAt) {
+		return false
+	}
+	// Keep auth/transport temp blocks; skip text rate-limit and overload windows.
+	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
+		return false
+	}
+	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceeded() {
+		return false
+	}
+	return true
+}
+
 func (a *Account) IsRateLimited() bool {
 	if a.RateLimitResetAt == nil {
 		return false

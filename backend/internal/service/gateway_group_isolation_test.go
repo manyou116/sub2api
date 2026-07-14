@@ -156,6 +156,14 @@ func (m *groupAwareMockAccountRepo) ListSchedulableByGroupIDAndPlatforms(ctx con
 	return result, nil
 }
 
+func (m *groupAwareMockAccountRepo) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
+	return nil, nil
+}
+func (m *groupAwareMockAccountRepo) ListActiveAllowingTextRateLimitByPlatforms(context.Context, []string) ([]Account, error) {
+	return nil, nil
+}
+
+
 // accountBelongsToGroup 检查账号是否属于指定分组
 func accountBelongsToGroup(acc Account, groupID int64) bool {
 	for _, ag := range acc.AccountGroups {

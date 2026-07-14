@@ -135,6 +135,19 @@ func ProvideOpenAIQuotaService(
 	return NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory)
 }
 
+func ProvideOpenAIWebImagesService(
+	cfg *config.Config,
+	rdb *redis.Client,
+	accountRepo AccountRepository,
+	gateway *OpenAIGatewayService,
+) *OpenAIWebImagesService {
+	svc := NewOpenAIWebImagesService(cfg, rdb, accountRepo)
+	if gateway != nil {
+		gateway.SetOpenAIWebImagesService(svc)
+	}
+	return svc
+}
+
 func ProvideGrokQuotaService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
@@ -597,6 +610,7 @@ var ProviderSet = wire.NewSet(
 	ProvideGrokTokenProvider,
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
+	ProvideOpenAIWebImagesService,
 	ProvideGrokQuotaService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,

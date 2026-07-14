@@ -23,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+	"github.com/Wei-Shaw/sub2api/internal/service/openaiimages/webdriver"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -72,6 +73,15 @@ type AccountTestService struct {
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
+	webImages                 *OpenAIWebImagesService
+}
+
+// SetOpenAIWebImagesService injects optional Web picture_v2 path for OAuth image tests.
+func (s *AccountTestService) SetOpenAIWebImagesService(svc *OpenAIWebImagesService) {
+	if s == nil {
+		return
+	}
+	s.webImages = svc
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -582,13 +592,8 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
-	// Create OpenAI Responses API payload. OAuth accounts use ChatGPT Codex
-	// upstream and must apply the same model normalization as real forwarding.
-	upstreamTestModelID := testModelID
-	if isOAuth {
-		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
-	}
-	payload := createOpenAITestPayload(upstreamTestModelID, isOAuth)
+	// Create OpenAI Responses API payload
+	payload := createOpenAITestPayload(testModelID, isOAuth)
 	payloadBytes, _ := json.Marshal(payload)
 
 	// Send test_start event
@@ -1698,7 +1703,9 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 	return nil
 }
 
-// testOpenAIImageOAuth tests OpenAI image generation using an OAuth account via Codex /responses API.
+// testOpenAIImageOAuth tests OpenAI image generation using an OAuth account.
+// Prefer ChatGPT Web picture_v2 when account.extra.openai_web_images.enabled is set;
+// otherwise fall back to Codex /responses image tool.
 func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Context, account *Account, modelID, prompt string) error {
 	authToken := account.GetOpenAIAccessToken()
 	if authToken == "" {
@@ -1713,6 +1720,9 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	c.Writer.Flush()
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
+	if s.webImages != nil && s.webImages.ShouldUseWebPath(account) {
+		return s.testOpenAIImageWeb(c, ctx, account, authToken, modelID, prompt)
+	}
 	s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /responses image tool...\n"})
 
 	parsed := &OpenAIImagesRequest{
@@ -1794,6 +1804,123 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		})
 	}
 
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
+}
+
+// testOpenAIImageWeb exercises ChatGPT Web picture_v2 generation for account tests.
+func (s *AccountTestService) testOpenAIImageWeb(c *gin.Context, ctx context.Context, account *Account, authToken, modelID, prompt string) error {
+	s.sendEvent(c, TestEvent{Type: "content", Text: "Calling ChatGPT Web image path...\n"})
+	if s.webImages == nil {
+		return s.sendErrorAndEnd(c, "web images service not configured")
+	}
+	cfg := s.webImages.ParseAccountConfig(account)
+	requestID := fmt.Sprintf("account-test-%d", account.ID)
+	ok, err := s.webImages.Acquire(ctx, account.ID, cfg.MaxInflight, requestID)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "acquire inflight failed: "+err.Error())
+	}
+	if !ok {
+		return s.sendErrorAndEnd(c, "web image account inflight full")
+	}
+	defer s.webImages.Release(context.Background(), account.ID, requestID)
+
+	if st, err := s.webImages.ProbeAccount(ctx, account.ID, false); err == nil && st != nil {
+		if st.Remaining != nil {
+			s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Web quota remaining=%d max_inflight=%d\n", *st.Remaining, st.MaxInflight)})
+		} else {
+			s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Web quota unknown max_inflight=%d\n", st.MaxInflight)})
+		}
+		if st.RateLimited || st.UnschedulableReason == "cooldown" {
+			msg := "web image rate limited"
+			if st.CooldownUntil != nil {
+				msg = fmt.Sprintf("web image rate limited until %s", st.CooldownUntil.Local().Format("2006-01-02 15:04:05"))
+			}
+			s.webImages.MarkFail(ctx, account, msg, true)
+			return s.sendErrorAndEnd(c, "Web image generation failed: "+msg)
+		}
+		if st.Remaining != nil && *st.Remaining <= 0 {
+			msg := "web image quota remaining=0"
+			s.webImages.MarkFail(ctx, account, msg, true)
+			return s.sendErrorAndEnd(c, "Web image generation failed: "+msg)
+		}
+	}
+
+	proxyURL := ""
+	if account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	sel := s.webImages.ResolveUpstream(account)
+	s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf(
+		"Resolve plan=%s mode=%s upstream=%s effort=%s source=%s\n",
+		sel.PlanType, sel.ModelMode, sel.UpstreamModel, sel.ThinkingEffort, sel.Source,
+	)})
+	// Keep the admin SSE stream alive: Web image gen can take 1–3+ minutes with no bytes.
+	// Without heartbeats, browsers/proxies often show "connection interrupted".
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(8 * time.Second)
+		defer ticker.Stop()
+		elapsed := 0
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				elapsed += 8
+				s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Web image still running... %ds (requirements/SSE/poll/download)\n", elapsed)})
+			}
+		}
+	}()
+	// Bound generation so hung SSE/poll cannot run until proxy idle timeout.
+	// Use a child timeout even if the HTTP client stays open (heartbeats).
+	genCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+	defer cancel()
+	result, err := s.webImages.Driver().Generate(genCtx, webdriver.Auth{
+		AccessToken: authToken,
+		ProxyURL:    proxyURL,
+		UserAgent:   strings.TrimSpace(account.GetOpenAIUserAgent()),
+	}, webdriver.GenerateRequest{
+		Prompt:         prompt,
+		Model:          sel.UpstreamModel,
+		ThinkingEffort: sel.ThinkingEffort,
+		N:              1,
+		ResponseFormat: "b64_json",
+	})
+	close(done)
+	if err != nil {
+		rateLimited := false
+		var we *webdriver.Error
+		if errors.As(err, &we) && we != nil && we.Kind == webdriver.ErrorKindRateLimited {
+			rateLimited = true
+		} else {
+			low := strings.ToLower(err.Error())
+			if strings.Contains(low, "free plan limit") || strings.Contains(low, "plan limit") || strings.Contains(low, "rate_limited") || strings.Contains(low, "rate limit") || strings.Contains(low, "limit resets") {
+				rateLimited = true
+			}
+		}
+		s.webImages.MarkFail(ctx, account, err.Error(), rateLimited)
+		return s.sendErrorAndEnd(c, "Web image generation failed: "+err.Error())
+	}
+	if result == nil || len(result.Data) == 0 {
+		s.webImages.MarkFail(ctx, account, "no images returned", false)
+		return s.sendErrorAndEnd(c, "No images returned from ChatGPT Web image path")
+	}
+	s.webImages.MarkSuccess(ctx, account)
+	for _, item := range result.Data {
+		if item.RevisedPrompt != "" {
+			s.sendEvent(c, TestEvent{Type: "content", Text: item.RevisedPrompt})
+		}
+		b64 := strings.TrimSpace(item.B64JSON)
+		if b64 == "" {
+			continue
+		}
+		s.sendEvent(c, TestEvent{
+			Type:     "image",
+			ImageURL: "data:image/png;base64," + b64,
+			MimeType: "image/png",
+		})
+	}
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
 }

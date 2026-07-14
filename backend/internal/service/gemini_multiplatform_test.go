@@ -141,6 +141,14 @@ func (m *mockAccountRepoForGemini) ListSchedulableByGroupIDAndPlatforms(ctx cont
 	}
 	return m.ListSchedulableByPlatforms(ctx, platforms)
 }
+
+func (m *mockAccountRepoForGemini) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
+	return nil, nil
+}
+func (m *mockAccountRepoForGemini) ListActiveAllowingTextRateLimitByPlatforms(context.Context, []string) ([]Account, error) {
+	return nil, nil
+}
+
 func (m *mockAccountRepoForGemini) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	return m.ListSchedulableByPlatform(ctx, platform)
 }
