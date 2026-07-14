@@ -124,6 +124,16 @@ func (s *helperConcurrencyCacheStub) GetAPIKeyConcurrencyBatch(ctx context.Conte
 	return out, nil
 }
 
+func (s *helperConcurrencyCacheStub) TrackAPIKeyImageSlot(ctx context.Context, apiKeyID int64, requestID string) error {
+	return s.TrackAPIKeySlot(ctx, apiKeyID, "img:"+requestID)
+}
+func (s *helperConcurrencyCacheStub) ReleaseAPIKeyImageSlot(ctx context.Context, apiKeyID int64, requestID string) error {
+	return s.ReleaseAPIKeySlot(ctx, apiKeyID, "img:"+requestID)
+}
+func (s *helperConcurrencyCacheStub) GetAPIKeyImageConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error) {
+	return s.GetAPIKeyConcurrencyBatch(ctx, apiKeyIDs)
+}
+
 func (s *helperConcurrencyCacheStub) IncrementWaitCount(ctx context.Context, userID int64, maxWait int) (bool, error) {
 	s.mu.Lock()
 	s.waitIncrementCalls++

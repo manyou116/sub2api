@@ -121,7 +121,7 @@ func TestPatchGrokResponsesBodyDropsGrok45ReasoningUnsupportedFields(t *testing.
 	require.False(t, gjson.GetBytes(patched, "stop").Exists())
 }
 
-func TestPatchGrokResponsesBodyKeepsPenaltyAndStopFieldsForNon45Models(t *testing.T) {
+func TestPatchGrokResponsesBodyDropsPenaltiesKeepsStopForNon45Models(t *testing.T) {
 	t.Parallel()
 
 	body := []byte(`{
@@ -136,8 +136,10 @@ func TestPatchGrokResponsesBodyKeepsPenaltyAndStopFieldsForNon45Models(t *testin
 	require.NoError(t, err)
 	require.True(t, json.Valid(patched))
 	require.Equal(t, "grok-4.3", gjson.GetBytes(patched, "model").String())
-	require.Equal(t, 0.1, gjson.GetBytes(patched, "presence_penalty").Float())
-	require.Equal(t, 0.2, gjson.GetBytes(patched, "frequency_penalty").Float())
+	// Penalties are rejected by xAI across Grok models; always strip.
+	require.False(t, gjson.GetBytes(patched, "presence_penalty").Exists())
+	require.False(t, gjson.GetBytes(patched, "frequency_penalty").Exists())
+	// stop is only dropped for grok-4.5 family.
 	require.Len(t, gjson.GetBytes(patched, "stop").Array(), 1)
 }
 
@@ -1837,4 +1839,97 @@ func TestPatchGrokResponsesBody_MultipleReasoningContentNull(t *testing.T) {
 
 	require.False(t, items[0].Get("content").Exists())
 	require.False(t, items[2].Get("content").Exists())
+}
+
+func TestReapplyGrokChatRouteSignalsKeepsStopForRouting(t *testing.T) {
+	t.Parallel()
+	original := []byte(`{"model":"grok-4.5","messages":[{"role":"user","content":"hi"}],"stop":"done","presence_penalty":0}`)
+	normalized, err := normalizeGrokOpenAIClientBody(original, "grok-4.5", true)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(normalized, "stop").Exists())
+	require.False(t, gjson.GetBytes(normalized, "presence_penalty").Exists())
+
+	out := reapplyGrokChatRouteSignals(original, normalized)
+	require.Equal(t, "done", gjson.GetBytes(out, "stop").String())
+	require.False(t, gjson.GetBytes(out, "presence_penalty").Exists())
+	eligible, reason := grokChatResponsesBridgeEligibility(out)
+	require.False(t, eligible)
+	require.Equal(t, "unsupported_stop", reason)
+}
+
+func TestNormalizeGrokOpenAIClientBodyForNewAPI(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{
+		"model": "grok-4.5",
+		"messages": [{"role":"user","content":"hello"}],
+		"stream": true,
+		"stream_options": {"include_usage": true},
+		"temperature": 0.7,
+		"top_p": 1,
+		"n": 1,
+		"user": "new-api-user",
+		"seed": 42,
+		"presence_penalty": 0,
+		"frequency_penalty": 0,
+		"max_tokens": 16,
+		"tools": [],
+		"tool_choice": "none"
+	}`)
+	out, err := normalizeGrokOpenAIClientBody(body, "grok-4.5", true)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(out, "presence_penalty").Exists())
+	require.False(t, gjson.GetBytes(out, "frequency_penalty").Exists())
+	require.False(t, gjson.GetBytes(out, "user").Exists())
+	require.False(t, gjson.GetBytes(out, "seed").Exists())
+	require.False(t, gjson.GetBytes(out, "n").Exists())
+	require.False(t, gjson.GetBytes(out, "tools").Exists())
+	require.False(t, gjson.GetBytes(out, "tool_choice").Exists())
+	require.Equal(t, int64(128), gjson.GetBytes(out, "max_tokens").Int())
+	require.True(t, gjson.GetBytes(out, "stream").Bool())
+
+	eligible, reason := grokChatResponsesBridgeEligibility(out)
+	require.True(t, eligible, "reason=%s body=%s", reason, string(out))
+}
+
+func TestNormalizeGrokOpenAIClientBodyDropsPresencePenaltyCamelCase(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"grok-4.5","messages":[{"role":"user","content":"hi"}],"presencePenalty":0.2,"frequencyPenalty":0.1}`)
+	out, err := normalizeGrokOpenAIClientBody(body, "grok-4.5", true)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(out, "presencePenalty").Exists())
+	require.False(t, gjson.GetBytes(out, "frequencyPenalty").Exists())
+}
+
+func TestPatchGrokResponsesBodyStripsResponsesClientNoise(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{
+		"model": "grok-4.5",
+		"input": "hello",
+		"stream": true,
+		"stream_options": {"include_usage": true},
+		"user": "new-api",
+		"metadata": {"src": "new-api"},
+		"store": false,
+		"service_tier": "auto",
+		"previous_response_id": "resp_old",
+		"presence_penalty": 0,
+		"max_output_tokens": 16,
+		"prompt_cache_retention": "24h",
+		"safety_identifier": "x"
+	}`)
+	patched, err := patchGrokResponsesBody(body, "grok-4.5")
+	require.NoError(t, err)
+	require.Equal(t, "grok-4.5", gjson.GetBytes(patched, "model").String())
+	require.False(t, gjson.GetBytes(patched, "stream_options").Exists())
+	require.False(t, gjson.GetBytes(patched, "user").Exists())
+	require.False(t, gjson.GetBytes(patched, "metadata").Exists())
+	require.False(t, gjson.GetBytes(patched, "store").Exists())
+	require.False(t, gjson.GetBytes(patched, "service_tier").Exists())
+	require.False(t, gjson.GetBytes(patched, "previous_response_id").Exists())
+	require.False(t, gjson.GetBytes(patched, "presence_penalty").Exists())
+	require.False(t, gjson.GetBytes(patched, "prompt_cache_retention").Exists())
+	require.False(t, gjson.GetBytes(patched, "safety_identifier").Exists())
+	require.Equal(t, int64(128), gjson.GetBytes(patched, "max_output_tokens").Int())
+	require.True(t, gjson.GetBytes(patched, "stream").Bool())
+	require.Equal(t, "hello", gjson.GetBytes(patched, "input").String())
 }
