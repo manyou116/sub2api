@@ -126,10 +126,17 @@ func (h *OpenAIGatewayHandler) kiroGateway(c *gin.Context, protocol kiroForwardP
 		return
 	}
 
-	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
-	// Prompt-cache identity is computed once per request and reused across account failover.
+	// Sticky + conversation cache share one seed family.
+	// Prefer cacheIdentity for sticky so header/content signals cannot diverge
+	// (otherwise multi-account pools rotate OAuth accounts and cache never hits).
 	mappedModel := service.MapKiroModel(reqModel)
-	conversationID := service.ResolveKiroCacheIdentity(c, body, "", mappedModel)
+	cacheIdentity := service.ResolveKiroCacheIdentity(c, body, "", mappedModel)
+	var sessionHash string
+	if cacheIdentity != "" {
+		sessionHash = service.DeriveSessionHashFromSeed(cacheIdentity)
+	} else {
+		sessionHash = h.gatewayService.GenerateSessionHash(c, body)
+	}
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
@@ -172,6 +179,23 @@ func (h *OpenAIGatewayHandler) kiroGateway(c *gin.Context, protocol kiroForwardP
 		}
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
+
+		// Account-scoped conversationId: same sticky account → same thread across turns.
+		accountModel := service.MapKiroModel(account.GetMappedModel(reqModel))
+		if accountModel == "" {
+			accountModel = mappedModel
+		}
+		conversationID := service.ResolveKiroConversationID(c, body, "", accountModel, account.ID)
+		if conversationID == "" {
+			// Fail closed on identity still allows the request; buildKiroPayload
+			// will mint a one-shot UUID (no cross-turn cache).
+			conversationID = cacheIdentity
+		}
+		reqLog.Debug("kiro_gateway.conversation_cache",
+			zap.Int64("account_id", account.ID),
+			zap.String("conversation_id", conversationID),
+			zap.Bool("sticky", sessionHash != ""),
+		)
 
 		var result *service.KiroChatResult
 		switch protocol {
