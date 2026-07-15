@@ -168,23 +168,10 @@ func patchGrokResponsesBody(body []byte, upstreamModel string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier"} {
-		if gjson.GetBytes(out, unsupportedField).Exists() {
-			out, err = sjson.DeleteBytes(out, unsupportedField)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-	if strings.EqualFold(upstreamModel, "grok-4.5") {
-		for _, unsupportedField := range []string{"presence_penalty", "presencePenalty", "frequency_penalty", "frequencyPenalty", "stop"} {
-			if gjson.GetBytes(out, unsupportedField).Exists() {
-				out, err = sjson.DeleteBytes(out, unsupportedField)
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
+	// Fork: always strip OpenAI-client noise (penalties etc.) before xAI.
+	out, err = normalizeGrokOpenAIClientBody(out, upstreamModel, false)
+	if err != nil {
+		return nil, err
 	}
 	out, err = sanitizeGrokResponsesUnsupportedFields(out)
 	if err != nil {

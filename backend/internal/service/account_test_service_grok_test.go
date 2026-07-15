@@ -27,6 +27,12 @@ func (r *grokAccountTestRateLimitRepo) SetRateLimited(_ context.Context, _ int64
 	r.resetAt = resetAt
 	return nil
 }
+func (r *grokAccountTestRateLimitRepo) SetWebImageRateLimited(context.Context, int64, time.Time) error {
+	return nil
+}
+func (r *grokAccountTestRateLimitRepo) ClearWebImageRateLimit(context.Context, int64) error {
+	return nil
+}
 
 func TestAccountTestService_TestAccountConnection_GrokUsesXAIResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
