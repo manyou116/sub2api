@@ -30,6 +30,19 @@ func ShouldBridgeChatCompletionsToImages(model string) bool {
 	return isOpenAIImageGenerationModel(model)
 }
 
+// ResolveChatImageBridgeEndpoint picks /v1/images/generations or /v1/images/edits for the
+// synthetic images request built from chat.completions. Reference images map to edits.
+func ResolveChatImageBridgeEndpoint(imagesBody []byte) string {
+	images := gjson.GetBytes(imagesBody, "images")
+	if images.Exists() && images.IsArray() && len(images.Array()) > 0 {
+		return openAIImagesEditsEndpoint
+	}
+	if image := strings.TrimSpace(gjson.GetBytes(imagesBody, "image").String()); image != "" {
+		return openAIImagesEditsEndpoint
+	}
+	return openAIImagesGenerationsEndpoint
+}
+
 // BuildOpenAIImagesBodyFromChatCompletions converts a chat.completions body into an
 // images/generations JSON body. Supports string content and multimodal text+image_url parts.
 func BuildOpenAIImagesBodyFromChatCompletions(chatBody []byte, model string) ([]byte, error) {

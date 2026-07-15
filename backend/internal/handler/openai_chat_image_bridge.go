@@ -104,13 +104,17 @@ func (h *OpenAIGatewayHandler) tryChatCompletionsImageBridge(
 		return true
 	}
 
+	imagesEndpoint := service.ResolveChatImageBridgeEndpoint(imagesBody)
 	reqLog.Info("openai_chat_completions.image_bridge_start",
 		zap.String("model", bridgeModel),
 		zap.String("style", h.chatImageBridgeStyle()),
+		zap.String("images_endpoint", imagesEndpoint),
 		zap.Int("images_body_len", len(imagesBody)),
 	)
 
-	// Swap request body to images JSON and capture the images handler response.
+	// Swap request body/path to images JSON and capture the images handler response.
+	// ParseOpenAIImagesRequest keys off URL path (/images/generations|edits); without
+	// rewriting path, chat.completions still looks unsupported and returns 400.
 	origWriter := c.Writer
 	capture := &chatImageCaptureWriter{ResponseWriter: origWriter}
 	c.Writer = capture
@@ -118,9 +122,13 @@ func (h *OpenAIGatewayHandler) tryChatCompletionsImageBridge(
 	origBody := c.Request.Body
 	origCL := c.Request.ContentLength
 	origCT := c.Request.Header.Get("Content-Type")
+	origPath := c.Request.URL.Path
+	origRawPath := c.Request.URL.RawPath
 	c.Request.Body = io.NopCloser(bytes.NewReader(imagesBody))
 	c.Request.ContentLength = int64(len(imagesBody))
 	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.URL.Path = imagesEndpoint
+	c.Request.URL.RawPath = ""
 
 	// Run the full images pipeline (schedule / web / codex images tool).
 	h.Images(c)
@@ -128,6 +136,8 @@ func (h *OpenAIGatewayHandler) tryChatCompletionsImageBridge(
 	// Restore request (best-effort; request is done).
 	c.Request.Body = origBody
 	c.Request.ContentLength = origCL
+	c.Request.URL.Path = origPath
+	c.Request.URL.RawPath = origRawPath
 	if origCT != "" {
 		c.Request.Header.Set("Content-Type", origCT)
 	} else {

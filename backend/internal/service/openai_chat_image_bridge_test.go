@@ -92,3 +92,9 @@ func TestWrapImagesJSONAsChatCompletion_passthroughError(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "nope", gjson.GetBytes(out, "error.message").String())
 }
+
+func TestResolveChatImageBridgeEndpoint(t *testing.T) {
+	require.Equal(t, openAIImagesGenerationsEndpoint, ResolveChatImageBridgeEndpoint([]byte(`{"model":"gpt-image-2","prompt":"x"}`)))
+	require.Equal(t, openAIImagesEditsEndpoint, ResolveChatImageBridgeEndpoint([]byte(`{"model":"gpt-image-2","prompt":"x","images":[{"image_url":"data:image/png;base64,abc"}]}`)))
+	require.Equal(t, openAIImagesEditsEndpoint, ResolveChatImageBridgeEndpoint([]byte(`{"model":"gpt-image-2","prompt":"x","image":"data:image/png;base64,abc"}`)))
+}
