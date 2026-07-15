@@ -241,8 +241,20 @@ func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *
 	}
 }
 
+// grokOAuthRequestAccountEligibilityError rejects accounts that should not supply
+// credentials (deleted/disabled/platform drift/manual pause/temp cooldown/missing proxy).
+// Rate-limit and overload windows are intentionally allowed: Free free-usage 429 sets
+// RateLimitResetAt for up to 24h, and admin "Test Account" still needs a live access
+// token while the account is rate-limited. Scheduler continues to skip those accounts.
 func grokOAuthRequestAccountEligibilityError(account *Account) error {
-	if account == nil || !account.IsGrokOAuth() || !account.IsSchedulable() {
+	if account == nil || !account.IsGrokOAuth() || !account.IsActive() || !account.Schedulable {
+		return errOAuthRefreshAccountStateChanged
+	}
+	now := time.Now()
+	if account.AutoPauseOnExpired && account.ExpiresAt != nil && !now.Before(*account.ExpiresAt) {
+		return errOAuthRefreshAccountStateChanged
+	}
+	if account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil) {
 		return errOAuthRefreshAccountStateChanged
 	}
 	if account.ProxyID != nil && account.Proxy == nil {

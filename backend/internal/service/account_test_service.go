@@ -794,7 +794,18 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	defer func() { _ = resp.Body.Close() }()
 
 	now := time.Now()
+	// Read error bodies before rate-limit reconciliation. Free free-usage-exhausted
+	// returns no Retry-After / x-ratelimit headers; the only signal is the JSON body.
+	// Admin "Test Account" previously rate-limited for 2 minutes (fallback) and never
+	// applied the 24h Free window.
+	var responseBody []byte
+	if resp.StatusCode != http.StatusOK {
+		responseBody, _ = io.ReadAll(resp.Body)
+	}
 	snapshot := parseGrokQuotaSnapshot(resp.Header, resp.StatusCode, now)
+	if resp.StatusCode == http.StatusTooManyRequests && xai.FreeUsageExhausted(responseBody) {
+		snapshot = applyGrokFreeUsageExhaustedCooldown(snapshot, now, responseBody)
+	}
 	if snapshot != nil && s.accountRepo != nil {
 		resetAt, limited := grokRateLimitResetAtForAccount(account, snapshot, now)
 		if limited {
@@ -813,8 +824,7 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(body)))
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(responseBody)))
 	}
 
 	return s.processOpenAIStream(c, resp.Body)

@@ -1017,12 +1017,85 @@ func (s *OpenAIGatewayService) rateLimitGrok(ctx context.Context, account *Accou
 	persistGrokRateLimit(ctx, s.accountRepo, account, resetAt)
 }
 
+// applyGrokFreeUsageExhaustedCooldown rewrites a 429 snapshot for Free rolling
+// 24h budget exhaustion. xAI puts the only reliable signal in the JSON body
+// (no Retry-After / x-ratelimit headers), so short adaptive cooldowns thrash.
+func applyGrokFreeUsageExhaustedCooldown(snapshot *xai.QuotaSnapshot, now time.Time, body []byte) *xai.QuotaSnapshot {
+	if snapshot == nil {
+		snapshot = &xai.QuotaSnapshot{}
+	}
+	secs := int(xai.FreeUsageExhaustedCooldown / time.Second)
+	if snapshot.RetryAfterSeconds == nil || *snapshot.RetryAfterSeconds < secs {
+		snapshot.RetryAfterSeconds = &secs
+	}
+	if snapshot.StatusCode == 0 {
+		snapshot.StatusCode = http.StatusTooManyRequests
+	}
+	if strings.TrimSpace(snapshot.UpdatedAt) == "" {
+		snapshot.UpdatedAt = now.UTC().Format(time.RFC3339)
+	}
+	if strings.TrimSpace(snapshot.ObservationSource) == "" {
+		snapshot.ObservationSource = "free_usage_body"
+	}
+	if strings.TrimSpace(snapshot.SubscriptionTier) == "" {
+		snapshot.SubscriptionTier = "FREE"
+	}
+
+	// Free-usage budget is not the same as short x-ratelimit windows. When the
+	// body reports actual/limit, write that into the token window so the UI and
+	// scheduler see remaining=0 until the rolling window boundary we install.
+	resetAt := now.Add(xai.FreeUsageExhaustedCooldown).UTC()
+	resetUnix := resetAt.Unix()
+	resetRFC := resetAt.Format(time.RFC3339)
+	zero := int64(0)
+	if used, limit, ok := xai.FreeUsageTokenWindow(body); ok {
+		remaining := limit - used
+		if remaining < 0 {
+			remaining = 0
+		}
+		snapshot.Tokens = &xai.QuotaWindow{
+			Limit:     &limit,
+			Remaining: &remaining,
+			ResetUnix: &resetUnix,
+			ResetAt:   resetRFC,
+		}
+	} else if snapshot.Tokens != nil && snapshot.Tokens.Limit != nil {
+		snapshot.Tokens.Remaining = &zero
+		if snapshot.Tokens.ResetUnix == nil {
+			snapshot.Tokens.ResetUnix = &resetUnix
+			snapshot.Tokens.ResetAt = resetRFC
+		}
+	} else {
+		// No headers and no parseable window: still mark tokens exhausted for UI.
+		lim := xai.FreeUsageDefaultTokenLimit
+		snapshot.Tokens = &xai.QuotaWindow{
+			Limit:     &lim,
+			Remaining: &zero,
+			ResetUnix: &resetUnix,
+			ResetAt:   resetRFC,
+		}
+	}
+	// Short request windows often still look "full" while free budget is dead.
+	if snapshot.Requests != nil && snapshot.Requests.Limit != nil {
+		snapshot.Requests.Remaining = &zero
+		if snapshot.Requests.ResetUnix == nil {
+			snapshot.Requests.ResetUnix = &resetUnix
+			snapshot.Requests.ResetAt = resetRFC
+		}
+	}
+	return snapshot
+}
+
 func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte) {
 	if s == nil || account == nil {
 		return
 	}
 	now := time.Now()
-	s.updateGrokUsageSnapshot(ctx, account, parseGrokQuotaSnapshot(headers, statusCode, now))
+	snapshot := parseGrokQuotaSnapshot(headers, statusCode, now)
+	if statusCode == http.StatusTooManyRequests && xai.FreeUsageExhausted(responseBody) {
+		snapshot = applyGrokFreeUsageExhaustedCooldown(snapshot, now, responseBody)
+	}
+	s.updateGrokUsageSnapshot(ctx, account, snapshot)
 	switch statusCode {
 	case http.StatusUnauthorized:
 		s.tempUnscheduleGrok(ctx, account, 10*time.Minute, "grok credentials unauthorized")
@@ -1035,7 +1108,6 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
 	}
-	_ = responseBody
 }
 
 func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *Account, cooldown time.Duration, reason string) {

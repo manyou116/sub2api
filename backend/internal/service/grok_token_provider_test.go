@@ -294,10 +294,10 @@ func TestGrokTokenProviderRejectsIneligibleSelectedAccountBeforeWarmCache(t *tes
 		mutate func(*Account)
 	}{
 		{name: "disabled", mutate: func(account *Account) { account.Status = StatusDisabled }},
-		{name: "not schedulable", mutate: func(account *Account) { account.Schedulable = false }},
-		{name: "temporarily unschedulable", mutate: func(account *Account) { account.TempUnschedulableUntil = &future }},
-		{name: "rate limited", mutate: func(account *Account) { account.RateLimitResetAt = &future }},
-		{name: "overloaded", mutate: func(account *Account) { account.OverloadUntil = &future }},
+		{name: "error status", mutate: func(account *Account) { account.Status = StatusError }},
+		{name: "not grok oauth", mutate: func(account *Account) { account.Type = AccountTypeAPIKey }},
+		{name: "manual unschedulable", mutate: func(account *Account) { account.Schedulable = false }},
+		{name: "temp unschedulable", mutate: func(account *Account) { account.TempUnschedulableUntil = &future }},
 	}
 
 	for index, tt := range tests {
@@ -311,9 +311,37 @@ func TestGrokTokenProviderRejectsIneligibleSelectedAccountBeforeWarmCache(t *tes
 
 			token, err := provider.GetAccessToken(context.Background(), account)
 
-			require.ErrorIs(t, err, errOAuthRefreshAccountStateChanged)
+			require.Error(t, err)
 			require.Empty(t, token)
 			require.Zero(t, cache.getCalls, "an ineligible selected account must be rejected before cache lookup")
+		})
+	}
+}
+
+func TestGrokTokenProviderAllowsRateLimitedAccountWarmToken(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	tests := []struct {
+		name   string
+		mutate func(*Account)
+	}{
+		{name: "rate limited free-usage cooldown", mutate: func(account *Account) { account.RateLimitResetAt = &future }},
+		{name: "overloaded", mutate: func(account *Account) { account.OverloadUntil = &future }},
+	}
+
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := expiredGrokOAuthAccountForCredentialTest(int64(190 + index))
+			account.Credentials["access_token"] = "warm-cache-token"
+			account.Credentials["expires_at"] = time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339)
+			tt.mutate(account)
+			cache := &grokTokenCacheForProviderTest{token: "warm-cache-token"}
+			provider := NewGrokTokenProvider(&tokenRefreshAccountRepo{}, cache)
+
+			token, err := provider.GetAccessToken(context.Background(), account)
+
+			require.NoError(t, err)
+			require.Equal(t, "warm-cache-token", token)
+			require.Equal(t, 1, cache.getCalls)
 		})
 	}
 }

@@ -1681,6 +1681,74 @@ func TestHandleGrokAccountUpstreamError429UsesFallbackReset(t *testing.T) {
 	require.Zero(t, repo.tempUnschedCalls)
 }
 
+func TestHandleGrokAccountUpstreamErrorFreeUsageExhaustedUses24hCooldown(t *testing.T) {
+	// Live Free account body shape (cli-chat-proxy, 2026-07-15): no rate-limit headers.
+	body := []byte(`{"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage for model grok-4.5-build-free for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 2115457/2000000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok"}`)
+	account := &Account{ID: 631, Platform: PlatformGrok, Type: AccountTypeOAuth}
+	repo := &grokQuotaAccountRepo{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	before := time.Now()
+
+	svc.handleGrokAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, nil, body)
+
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	require.Equal(t, 1, repo.rateLimitedCalls)
+	require.WithinDuration(t, before.Add(xai.FreeUsageExhaustedCooldown), repo.lastRateLimitResetAt, 2*time.Second)
+	require.Zero(t, repo.tempUnschedCalls)
+
+	stored, ok := repo.updates[account.ID][grokQuotaSnapshotExtraKey].(*xai.QuotaSnapshot)
+	require.True(t, ok)
+	require.NotNil(t, stored)
+	require.Equal(t, http.StatusTooManyRequests, stored.StatusCode)
+	require.Equal(t, "FREE", stored.SubscriptionTier)
+	require.Equal(t, "free_usage_body", stored.ObservationSource)
+	require.NotNil(t, stored.RetryAfterSeconds)
+	require.Equal(t, int(xai.FreeUsageExhaustedCooldown/time.Second), *stored.RetryAfterSeconds)
+	require.NotNil(t, stored.Tokens)
+	require.NotNil(t, stored.Tokens.Limit)
+	require.EqualValues(t, 2_000_000, *stored.Tokens.Limit)
+	require.NotNil(t, stored.Tokens.Remaining)
+	require.EqualValues(t, 0, *stored.Tokens.Remaining)
+	require.NotNil(t, stored.Tokens.ResetUnix)
+	require.WithinDuration(t, before.Add(xai.FreeUsageExhaustedCooldown), time.Unix(*stored.Tokens.ResetUnix, 0), 2*time.Second)
+}
+
+func TestHandleGrokAccountUpstreamErrorFreeUsageOverridesShortRetryAfter(t *testing.T) {
+	body := []byte(`{"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage. tokens (actual/limit): 100/2000000"}`)
+	account := &Account{ID: 632, Platform: PlatformGrok, Type: AccountTypeOAuth}
+	repo := &grokQuotaAccountRepo{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	before := time.Now()
+
+	svc.handleGrokAccountUpstreamError(
+		context.Background(),
+		account,
+		http.StatusTooManyRequests,
+		http.Header{"Retry-After": []string{"45"}},
+		body,
+	)
+
+	require.Equal(t, 1, repo.rateLimitedCalls)
+	// Free budget wins over short Retry-After so accounts are not rescheduled in minutes.
+	require.WithinDuration(t, before.Add(xai.FreeUsageExhaustedCooldown), repo.lastRateLimitResetAt, 2*time.Second)
+
+	stored := repo.updates[account.ID][grokQuotaSnapshotExtraKey].(*xai.QuotaSnapshot)
+	require.NotNil(t, stored.Tokens)
+	require.EqualValues(t, 2_000_000, *stored.Tokens.Limit)
+	require.EqualValues(t, 1_999_900, *stored.Tokens.Remaining)
+}
+
+func TestApplyGrokFreeUsageExhaustedCooldownWithoutTokenWindow(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	out := applyGrokFreeUsageExhaustedCooldown(nil, now, []byte(`{"code":"subscription:free-usage-exhausted","error":"included free usage"}`))
+	require.NotNil(t, out)
+	require.Equal(t, "FREE", out.SubscriptionTier)
+	require.NotNil(t, out.Tokens)
+	require.EqualValues(t, xai.FreeUsageDefaultTokenLimit, *out.Tokens.Limit)
+	require.EqualValues(t, 0, *out.Tokens.Remaining)
+	require.WithinDuration(t, now.Add(xai.FreeUsageExhaustedCooldown), time.Unix(*out.Tokens.ResetUnix, 0), time.Second)
+}
+
 func TestGrokRateLimitResetAtForAccountEscalatesRepeated429s(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	retryAfter := 45
@@ -2131,7 +2199,6 @@ func TestIsGrokImageGenerationModel(t *testing.T) {
 		})
 	}
 }
-
 
 func TestReapplyGrokChatRouteSignalsKeepsStopForRouting(t *testing.T) {
 	t.Parallel()
