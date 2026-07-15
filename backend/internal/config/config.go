@@ -782,6 +782,16 @@ type OpenAIWebImagesConfig struct {
 	KeepConversationAfter bool `mapstructure:"keep_conversation_after"`
 }
 
+// OpenAIChatImageBridgeConfig maps /v1/chat/completions + gpt-image-* onto the
+// existing images pipeline (fork feature). When disabled, image models on chat
+// return a clear 400 pointing at /v1/images/generations.
+type OpenAIChatImageBridgeConfig struct {
+	// Enabled defaults true so clients that call chat.completions with gpt-image-* work.
+	Enabled bool `mapstructure:"enabled"`
+	// ResponseStyle: markdown_data_url (default) | multimodal_parts
+	ResponseStyle string `mapstructure:"response_style"`
+}
+
 type GatewayConfig struct {
 	// 等待上游响应头的超时时间（秒），0表示无超时
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
@@ -819,6 +829,8 @@ type GatewayConfig struct {
 	OpenAICompactModel string `mapstructure:"openai_compact_model"`
 	// OpenAIWebImages: optional ChatGPT Web image generations path (default off).
 	OpenAIWebImages OpenAIWebImagesConfig `mapstructure:"openai_web_images"`
+	// OpenAIChatImageBridge: bridge chat.completions image models to /v1/images pipeline.
+	OpenAIChatImageBridge OpenAIChatImageBridgeConfig `mapstructure:"openai_chat_image_bridge"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// OpenAIScheduler: OpenAI 高级调度器粘性逃逸配置
@@ -1753,6 +1765,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_web_images.default_upstream_model", "gpt-5-6-thinking")
 	viper.SetDefault("gateway.openai_web_images.default_thinking_effort", "extended")
 	viper.SetDefault("gateway.openai_web_images.keep_conversation_after", false)
+	viper.SetDefault("gateway.openai_chat_image_bridge.enabled", true)
+	viper.SetDefault("gateway.openai_chat_image_bridge.response_style", "markdown_data_url")
 
 	// Billing
 	viper.SetDefault("billing.circuit_breaker.enabled", true)
