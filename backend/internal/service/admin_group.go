@@ -114,6 +114,12 @@ func defaultModelsListCandidateIDs(platform string) []string {
 		return ids
 	case PlatformGrok:
 		return xai.DefaultModelIDs()
+	case PlatformKiro:
+		ids := make([]string, 0, len(KiroDefaultModels))
+		for _, model := range KiroDefaultModels {
+			ids = append(ids, model.ID)
+		}
+		return ids
 	default:
 		ids := make([]string, 0, len(claude.DefaultModels))
 		for _, model := range claude.DefaultModels {

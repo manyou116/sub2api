@@ -72,6 +72,7 @@ func NewTokenRefreshService(
 		grokOAuthService = grokOAuthServices[0]
 	}
 	grokRefresher := NewGrokTokenRefresher(grokOAuthService)
+	kiroRefresher := NewKiroTokenRefresher(NewKiroTokenService())
 
 	// 注册平台特定的刷新器（TokenRefresher 接口）
 	s.refreshers = []TokenRefresher{
@@ -80,6 +81,7 @@ func NewTokenRefreshService(
 		geminiRefresher,
 		agRefresher,
 		grokRefresher,
+		kiroRefresher,
 	}
 
 	// 注册对应的 OAuthRefreshExecutor（带 CacheKey 方法）
@@ -89,6 +91,7 @@ func NewTokenRefreshService(
 		geminiRefresher,
 		agRefresher,
 		grokRefresher,
+		kiroRefresher,
 	}
 
 	return s

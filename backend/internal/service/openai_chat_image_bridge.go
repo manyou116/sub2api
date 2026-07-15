@@ -198,11 +198,11 @@ func WrapImagesJSONAsChatCompletion(imagesJSON []byte, model, style string) ([]b
 				continue
 			}
 			if i > 0 {
-				b.WriteByte('\n')
+				_ = b.WriteByte('\n')
 			}
-			b.WriteString("![image](")
-			b.WriteString(url)
-			b.WriteByte(')')
+			_, _ = b.WriteString("![image](")
+			_, _ = b.WriteString(url)
+			_ = b.WriteByte(')')
 		}
 		if b.Len() == 0 {
 			return nil, fmt.Errorf("images response has no embeddable image data")

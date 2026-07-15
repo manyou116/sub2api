@@ -2358,6 +2358,34 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
+	// Handle Kiro accounts (P5)
+	if account.Platform == service.PlatformKiro {
+		defaults := service.KiroDefaultModels
+		mapping := account.GetModelMapping()
+		if len(mapping) == 0 {
+			response.Success(c, defaults)
+			return
+		}
+		defaultByID := make(map[string]service.KiroAvailableModel, len(defaults))
+		for _, model := range defaults {
+			defaultByID[model.ID] = model
+		}
+		models := make([]service.KiroAvailableModel, 0, len(mapping))
+		for requestedModel := range mapping {
+			if dm, ok := defaultByID[requestedModel]; ok {
+				models = append(models, dm)
+				continue
+			}
+			models = append(models, service.KiroAvailableModel{
+				ID:          requestedModel,
+				Type:        "model",
+				DisplayName: requestedModel,
+			})
+		}
+		response.Success(c, models)
+		return
+	}
+
 	// Handle Grok accounts
 	if account.Platform == service.PlatformGrok {
 		defaultModels := xai.DefaultModels()

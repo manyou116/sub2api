@@ -372,7 +372,7 @@ func TestOpenAIWebImages_PatchInheritOmitsEnabled(t *testing.T) {
 
 	mode := "inherit"
 	require.NoError(t, svc.PatchAccount(context.Background(), 1, OpenAIWebImagesBulkPatch{EnabledMode: &mode}))
-	raw := repo.accounts[1].Extra["openai_web_images"].(map[string]any)
+	raw, _ := repo.accounts[1].Extra["openai_web_images"].(map[string]any)
 	_, hasEnabled := raw["enabled"]
 	require.False(t, hasEnabled, "enabled key must be omitted on inherit: %#v", raw)
 
@@ -389,7 +389,7 @@ func TestOpenAIWebImages_PatchInheritOmitsEnabled(t *testing.T) {
 	// force off override
 	modeOff := "off"
 	require.NoError(t, svc.PatchAccount(context.Background(), 1, OpenAIWebImagesBulkPatch{EnabledMode: &modeOff}))
-	raw = repo.accounts[1].Extra["openai_web_images"].(map[string]any)
+	raw, _ = repo.accounts[1].Extra["openai_web_images"].(map[string]any)
 	require.Equal(t, false, raw["enabled"])
 	st, err = svc.GetStatus(context.Background(), repo.accounts[1])
 	require.NoError(t, err)

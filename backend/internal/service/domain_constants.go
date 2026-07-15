@@ -42,6 +42,15 @@ const (
 	PlatformGemini      = domain.PlatformGemini
 	PlatformAntigravity = domain.PlatformAntigravity
 	PlatformGrok        = domain.PlatformGrok
+	PlatformKiro        = domain.PlatformKiro
+)
+
+// Kiro constants
+const (
+	KiroAuthMethodSocial = domain.KiroAuthMethodSocial
+	KiroAuthMethodIdC    = domain.KiroAuthMethodIdC
+	KiroDefaultRegion    = domain.KiroDefaultRegion
+	KiroIDEUserAgentTmpl = domain.KiroIDEUserAgentTmpl
 )
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
@@ -53,6 +62,7 @@ var AllowedQuotaPlatforms = []string{
 	PlatformGemini,
 	PlatformAntigravity,
 	PlatformGrok,
+	PlatformKiro,
 }
 
 // IsAllowedQuotaPlatform 报告 s 是否为合法的 quota platform 标识。

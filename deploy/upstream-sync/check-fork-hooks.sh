@@ -113,6 +113,39 @@ need_rg "scheduler webimg path check" \
   "UsesOpenAIWebImagesPath" \
   backend/internal/service/openai_account_scheduler_webimg.go
 
+
+# --- P5 kiro ---
+echo "-- P5 kiro --"
+need_file backend/internal/pkg/kiroeventstream/decoder.go
+need_file backend/internal/service/kiro_chat_service.go
+need_file backend/internal/service/kiro_responses_service.go
+need_file backend/internal/service/kiro_prompt_cache.go
+need_file backend/internal/service/kiro_token_provider.go
+need_file backend/internal/service/account_kiro.go
+need_file backend/internal/handler/kiro_gateway_handler.go
+need_file backend/internal/server/routes/kiro_admin.go
+need_rg "PlatformKiro constant" \
+  "PlatformKiro" \
+  backend/internal/domain/constants.go
+need_rg "gateway kiro chat route" \
+  "KiroChatCompletions" \
+  backend/internal/server/routes/gateway.go
+need_rg "gateway kiro responses route" \
+  "KiroResponses" \
+  backend/internal/server/routes/gateway.go
+need_rg "admin kiro routes registered" \
+  "registerKiroAdminRoutes" \
+  backend/internal/server/routes/admin.go
+need_rg "kiro token refresher registered" \
+  "NewKiroTokenRefresher" \
+  backend/internal/service/token_refresh_service.go
+need_rg "kiro cache identity export" \
+  "ResolveKiroCacheIdentity" \
+  backend/internal/service/kiro_prompt_cache.go
+need_rg "wire kiro token provider" \
+  "ProvideKiroTokenProvider" \
+  backend/internal/service/wire.go
+
 # --- P3 docs/tooling ---
 echo "-- P3 docs/tooling --"
 need_file docs/FORK_HOOKS.md

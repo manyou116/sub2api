@@ -70,6 +70,7 @@ type AccountTestService struct {
 	geminiTokenProvider       *GeminiTokenProvider
 	claudeTokenProvider       *ClaudeTokenProvider
 	grokTokenProvider         *GrokTokenProvider
+	kiroTokenProvider         *KiroTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
@@ -85,6 +86,14 @@ func (s *AccountTestService) SetOpenAIWebImagesService(svc *OpenAIWebImagesServi
 		return
 	}
 	s.webImages = svc
+}
+
+// SetKiroTokenProvider injects Kiro OAuth token cache/refresh for account tests (P5).
+func (s *AccountTestService) SetKiroTokenProvider(p *KiroTokenProvider) {
+	if s == nil {
+		return
+	}
+	s.kiroTokenProvider = p
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -211,6 +220,10 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 
 	if account.Platform == PlatformAntigravity {
 		return s.routeAntigravityTest(c, account, modelID, prompt)
+	}
+
+	if account.IsKiro() {
+		return s.testKiroAccountConnection(c, account, modelID)
 	}
 
 	return s.testClaudeAccountConnection(c, account, modelID)
@@ -805,6 +818,59 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	}
 
 	return s.processOpenAIStream(c, resp.Body)
+}
+
+// testKiroAccountConnection probes Kiro CodeWhisperer with real EventStream
+// text deltas (same upstream path as gateway). Without this branch Kiro accounts
+// fall through to Claude and receive Anthropic 401 "Invalid bearer token".
+func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *Account, modelID string) error {
+	ctx := c.Request.Context()
+
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		testModelID = "claude-sonnet-4.5"
+	}
+	internalModel := resolveKiroInternalModel(account, testModelID)
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: internalModel})
+
+	chat := NewKiroChatService()
+	if s.kiroTokenProvider != nil {
+		chat.SetTokenProvider(s.kiroTokenProvider)
+	}
+
+	gotContent := false
+	_, err := chat.ProbeTextStream(ctx, account, testModelID, "hi", func(text string) error {
+		if text == "" {
+			return nil
+		}
+		gotContent = true
+		s.sendEvent(c, TestEvent{Type: "content", Text: text})
+		return nil
+	})
+	if err != nil {
+		var failoverErr *UpstreamFailoverError
+		if errors.As(err, &failoverErr) && failoverErr != nil {
+			msg := strings.TrimSpace(string(failoverErr.ResponseBody))
+			if msg == "" {
+				msg = err.Error()
+			}
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Kiro API returned %d: %s", failoverErr.StatusCode, msg))
+		}
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Kiro test failed: %s", err.Error()))
+	}
+
+	if !gotContent {
+		s.sendEvent(c, TestEvent{Type: "content", Text: "(empty response)"})
+	}
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
 }
 
 // testOpenAIChatCompletionsConnection tests an OpenAI-compatible APIKey account
@@ -1804,10 +1870,10 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	c.Writer.Flush()
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
-		if s.webImages != nil && s.webImages.ShouldUseWebPath(account) {
+	if s.webImages != nil && s.webImages.ShouldUseWebPath(account) {
 		return s.testOpenAIImageWeb(c, ctx, account, authToken, modelID, prompt)
 	}
-s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /responses image tool...\n"})
+	s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /responses image tool...\n"})
 
 	parsed := &OpenAIImagesRequest{
 		Endpoint: openAIImagesGenerationsEndpoint,
@@ -2020,7 +2086,6 @@ func (s *AccountTestService) testOpenAIImageWeb(c *gin.Context, ctx context.Cont
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
 }
-
 
 func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 	eventJSON, _ := json.Marshal(event)

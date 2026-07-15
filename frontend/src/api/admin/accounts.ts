@@ -977,4 +977,31 @@ export const accountsAPI = {
   overviewOpenAIWebImages
 }
 
+
+
+// ============== Kiro (P5) ==============
+
+export interface KiroImportItemResult {
+  index: number
+  id?: string
+  email?: string
+  created: boolean
+  error?: string
+}
+
+export interface KiroImportResponse {
+  results: KiroImportItemResult[]
+  summary: { total: number; succeeded: number; failed: number }
+}
+
+export async function importKiro(payload: {
+  items: Record<string, unknown>[]
+  group_ids?: number[]
+  concurrency?: number
+  skip_mixed_channel_check?: boolean
+}): Promise<KiroImportResponse> {
+  const { data } = await apiClient.post<KiroImportResponse>('/admin/accounts/kiro/import', payload)
+  return data
+}
+
 export default accountsAPI

@@ -160,7 +160,33 @@
             <PlatformIcon platform="grok" size="sm" />
             Grok
           </button>
+          <button
+            type="button"
+            data-testid="platform-kiro"
+            @click="form.platform = 'kiro'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'kiro'
+                ? 'bg-white text-cyan-700 shadow-sm dark:bg-dark-600 dark:text-cyan-300'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="kiro" size="sm" />
+            Kiro
+          </button>
         </div>
+      </div>
+
+      <!-- Kiro: import-only in Phase A (no OAuth surface here) -->
+      <div
+        v-if="form.platform === 'kiro'"
+        class="rounded-lg border border-cyan-200 bg-cyan-50 p-4 text-sm text-cyan-900 dark:border-cyan-800 dark:bg-cyan-950/40 dark:text-cyan-100"
+        data-testid="kiro-import-hint"
+      >
+        <p class="font-medium">Kiro accounts are imported from kiro-account-manager export JSON.</p>
+        <p class="mt-1 text-cyan-800/90 dark:text-cyan-200/90">
+          Close this dialog and use Accounts → Tools → Import Kiro. Bind the new accounts to a group with platform = kiro.
+        </p>
       </div>
 
       <!-- Account Type Selection (Anthropic) -->
@@ -3141,6 +3167,7 @@
           {{ t('common.cancel') }}
         </button>
         <button
+          v-if="form.platform !== 'kiro'"
           type="submit"
           form="create-account-form"
           :disabled="submitting"

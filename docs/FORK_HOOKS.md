@@ -31,6 +31,7 @@ Treat fork work as **replayable patches**, not a pile of drive-by commits.
 | **P2** | grok-compat | OpenAI-client → xAI body scrub (`presencePenalty` etc.), chat bridge routing helpers | `openai_gateway_grok_openai_compat.go` only + short call sites |
 | **P3** | infra | graceful drain, GHCR release defaults, `v99.*-plus.N` tags, upstream-sync | `.github/**`, `deploy/upstream-sync/**`, small `main` drain |
 | **P4** | observ/capacity | text vs image concurrency accounting when webimg enabled | `group_capacity_service.go`, capacity UI cells |
+| **P5** | kiro | Kiro CodeWhisperer platform (chat, token, sticky+conversation cache) | `service/kiro_*.go`, `account_kiro.go`, `pkg/kiroeventstream/`, `handler/kiro_*.go`, `routes/kiro_admin.go` |
 
 **Rules**
 
@@ -76,6 +77,31 @@ string” logic on responses path alone — that regresses chat/completions.
 | Scheduler slot | **`openai_account_scheduler_webimg.go`** | `acquireAccountSlotForSchedule` skips text slots for web path |
 | Hot scheduler | `openai_account_scheduler.go` | `accountBlockedByWebImageCooldown(...)` + text-RL bypass call |
 | Default | `gateway.openai_web_images.default_enabled` + optional account `extra.openai_web_images.enabled` | global default (env `GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED`); account key only when present (inherit / force on / force off) |
+
+
+
+### P5 — Kiro platform
+
+**Why:** Kiro (AWS CodeWhisperer) as a first-class platform with sticky account
+routing and tenant-isolated `conversationId` for prompt-cache affinity.
+
+| Hook | File / area | Must contain / behavior |
+|------|-------------|-------------------------|
+| Platform const | `domain/constants.go`, `service/domain_constants.go` | `PlatformKiro = "kiro"` |
+| Core services | `service/kiro_*.go`, `account_kiro.go` | token/chat/responses-bridge/selector/cache/quarantine |
+| EventStream | `pkg/kiroeventstream/` | frame decoder |
+| Gateway | `routes/gateway.go` | `isKiroGatewayPlatform` + `KiroChatCompletions` + `KiroResponses` |
+| Admin | `routes/kiro_admin.go` + call site in `admin.go` | `registerKiroAdminRoutes` → `/kiro/import` |
+| Token refresh | `token_refresh_service.go` | `KiroTokenRefresher` registered |
+| Wire | `wire.go` / `wire_gen.go` | `ProvideKiroTokenProvider` + `SetKiroTokenProvider` |
+| Cache identity | `kiro_prompt_cache.go` | `ResolveKiroCacheIdentity` (no raw client key upstream) |
+| Conversation id | `kiro_chat_service.go` `buildKiroPayload` | stable id from cache identity, not random UUID only |
+
+**Default:** off when no `platform=kiro` group/account exists.
+
+**Shape:** runtime stays in `package service` (`kiro_*.go` + `account_kiro.go`) to avoid
+Account/gateway import cycles; EventStream decoder is the only isolated package
+(`pkg/kiroeventstream`). Do not reintroduce an empty `service/kiro` ownership stub.
 
 ### P3 — Infra / tags
 

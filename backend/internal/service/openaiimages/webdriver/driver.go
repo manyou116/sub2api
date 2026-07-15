@@ -76,7 +76,11 @@ func withAccountPollLock(key string, fn func() error) error {
 		key = "anon"
 	}
 	v, _ := accountPollLocks.LoadOrStore(key, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
+	mu, _ := v.(*sync.Mutex)
+	if mu == nil {
+		mu = &sync.Mutex{}
+		accountPollLocks.Store(key, mu)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	return fn()
