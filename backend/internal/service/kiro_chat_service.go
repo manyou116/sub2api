@@ -1004,27 +1004,19 @@ func estimateKiroFreshInputTokens(req *kiroOpenAIRequest) int64 {
 	if req == nil || len(req.Messages) == 0 {
 		return 0
 	}
-	// Walk from the end: accumulate trailing tool + final user message.
+	// Walk from the end: accumulate trailing tools, then stop at the final user.
 	var fresh int64
-	sawUser := false
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		m := req.Messages[i]
 		role := strings.ToLower(strings.TrimSpace(m.Role))
 		switch role {
 		case "tool":
-			if sawUser {
-				return fresh
-			}
 			fresh += estimateKiroMessageTokens(m)
 		case "user":
 			fresh += estimateKiroMessageTokens(m)
-			sawUser = true
 			return fresh
 		default:
-			if sawUser {
-				return fresh
-			}
-			// trailing assistant without a following user: count nothing fresh
+			// trailing assistant/system without a following user: nothing fresh
 			return fresh
 		}
 	}
