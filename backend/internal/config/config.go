@@ -1759,7 +1759,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_web_images.inflight_backend", "redis")
 	viper.SetDefault("gateway.openai_web_images.inflight_ttl_seconds", 900)
 	viper.SetDefault("gateway.openai_web_images.redis_key_prefix", "sub2api:webimg:")
-	viper.SetDefault("gateway.openai_web_images.bulk_max_accounts", 500)
+	viper.SetDefault("gateway.openai_web_images.bulk_max_accounts", 5000)
 	viper.SetDefault("gateway.openai_web_images.bulk_probe_concurrency", 5)
 	viper.SetDefault("gateway.openai_web_images.default_model_mode", "auto")
 	viper.SetDefault("gateway.openai_web_images.default_upstream_model", "gpt-5-6-thinking")

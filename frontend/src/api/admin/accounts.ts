@@ -900,8 +900,41 @@ export async function bulkOpenAIWebImages(payload: {
   patch?: OpenAIWebImagesPatch
   actions?: { probe?: boolean }
 }): Promise<OpenAIWebImagesBulkResult> {
-  const { data } = await apiClient.post<OpenAIWebImagesBulkResult>('/admin/accounts/openai-web-images/bulk', payload)
-  return data
+  const ids = payload.account_ids || []
+  // Chunk to keep each request under proxy/client timeouts; backend also raises bulk_max.
+  const chunkSize = 200
+  if (ids.length <= chunkSize) {
+    const { data } = await apiClient.post<OpenAIWebImagesBulkResult>(
+      '/admin/accounts/openai-web-images/bulk',
+      payload,
+      { timeout: 120000 }
+    )
+    return data
+  }
+  const merged: OpenAIWebImagesBulkResult = {
+    matched: 0,
+    updated: 0,
+    failed: 0,
+    errors: []
+  }
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize)
+    const { data } = await apiClient.post<OpenAIWebImagesBulkResult>(
+      '/admin/accounts/openai-web-images/bulk',
+      { ...payload, account_ids: chunk, actions: i === 0 ? payload.actions : { probe: false } },
+      { timeout: 120000 }
+    )
+    merged.matched += data?.matched || chunk.length
+    merged.updated += data?.updated || 0
+    merged.failed += data?.failed || 0
+    if (data?.errors?.length) {
+      merged.errors = (merged.errors || []).concat(data.errors)
+    }
+    if (data?.probe_job_id && !merged.probe_job_id) {
+      merged.probe_job_id = data.probe_job_id
+    }
+  }
+  return merged
 }
 
 

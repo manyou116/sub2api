@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service/openaiimages/webdriver"
 	"github.com/google/uuid"
@@ -209,7 +210,7 @@ func (s *OpenAIWebImagesService) cfgOrDefault() config.OpenAIWebImagesConfig {
 		c.RedisKeyPrefix = "sub2api:webimg:"
 	}
 	if c.BulkMaxAccounts <= 0 {
-		c.BulkMaxAccounts = 500
+		c.BulkMaxAccounts = 5000
 	}
 	if c.BulkProbeConcurrency <= 0 {
 		c.BulkProbeConcurrency = 5
@@ -481,16 +482,61 @@ func (s *OpenAIWebImagesService) saveAccountConfig(ctx context.Context, accountI
 func (s *OpenAIWebImagesService) BulkPatch(ctx context.Context, accountIDs []int64, patch OpenAIWebImagesBulkPatch) (*OpenAIWebImagesBulkResult, error) {
 	c := s.cfgOrDefault()
 	if len(accountIDs) == 0 {
-		return nil, fmt.Errorf("account_ids required")
+		return nil, infraerrors.BadRequest("WEIMG_BULK_EMPTY", "account_ids required")
 	}
 	if len(accountIDs) > c.BulkMaxAccounts {
-		return nil, fmt.Errorf("too many accounts: max %d", c.BulkMaxAccounts)
+		return nil, infraerrors.BadRequest(
+			"WEIMG_BULK_TOO_MANY",
+			fmt.Sprintf("too many accounts: %d (max %d); reduce selection or raise gateway.openai_web_images.bulk_max_accounts", len(accountIDs), c.BulkMaxAccounts),
+		)
 	}
 	result := &OpenAIWebImagesBulkResult{Matched: len(accountIDs)}
+	// Concurrent patches: 500 sequential GetByID+UpdateExtra often exceeds admin client 30s timeout
+	// and previously surfaced as opaque 500 when only the limit path returned fmt.Errorf.
+	workers := c.BulkProbeConcurrency
+	if workers <= 0 {
+		workers = 8
+	}
+	if workers > 32 {
+		workers = 32
+	}
+	if workers > len(accountIDs) {
+		workers = len(accountIDs)
+	}
+	type itemErr struct {
+		id  int64
+		err error
+	}
+	jobs := make(chan int64, workers)
+	errs := make(chan itemErr, len(accountIDs))
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range jobs {
+				if ctx.Err() != nil {
+					errs <- itemErr{id: id, err: ctx.Err()}
+					continue
+				}
+				if err := s.PatchAccount(ctx, id, patch); err != nil {
+					errs <- itemErr{id: id, err: err}
+				} else {
+					errs <- itemErr{id: id, err: nil}
+				}
+			}
+		}()
+	}
 	for _, id := range accountIDs {
-		if err := s.PatchAccount(ctx, id, patch); err != nil {
+		jobs <- id
+	}
+	close(jobs)
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		if e.err != nil {
 			result.Failed++
-			result.Errors = append(result.Errors, OpenAIWebImagesBulkError{AccountID: id, Error: err.Error()})
+			result.Errors = append(result.Errors, OpenAIWebImagesBulkError{AccountID: e.id, Error: e.err.Error()})
 			continue
 		}
 		result.Updated++
@@ -501,10 +547,10 @@ func (s *OpenAIWebImagesService) BulkPatch(ctx context.Context, accountIDs []int
 func (s *OpenAIWebImagesService) StartBulkProbe(ctx context.Context, accountIDs []int64) (*OpenAIWebImagesBulkJob, error) {
 	c := s.cfgOrDefault()
 	if len(accountIDs) == 0 {
-		return nil, fmt.Errorf("account_ids required")
+		return nil, infraerrors.BadRequest("WEIMG_BULK_EMPTY", "account_ids required")
 	}
 	if len(accountIDs) > c.BulkMaxAccounts {
-		return nil, fmt.Errorf("too many accounts: max %d", c.BulkMaxAccounts)
+		return nil, infraerrors.BadRequest("WEIMG_BULK_TOO_MANY", fmt.Sprintf("too many accounts: %d (max %d)", len(accountIDs), c.BulkMaxAccounts))
 	}
 	job := &OpenAIWebImagesBulkJob{ID: uuid.NewString(), Type: "probe", Total: len(accountIDs), Status: "running", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	s.bulkJobs.Store(job.ID, job)
