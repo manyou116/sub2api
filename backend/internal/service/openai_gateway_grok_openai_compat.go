@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -30,7 +31,7 @@ var (
 	grokDropResponsesNoiseFields = []string{
 		"stream_options", "metadata", "user", "service_tier", "store",
 		"previous_response_id", "prompt_cache_retention", "safety_identifier",
-		"truncation", "max_tool_calls", "prompt",
+		"truncation", "max_tool_calls", "prompt", "include",
 	}
 )
 
@@ -156,4 +157,203 @@ func reapplyGrokChatRouteSignals(original, normalized []byte) []byte {
 		out = next
 	}
 	return out
+}
+
+// sanitizeGrokResponsesImages normalizes vision parts for xAI Responses.
+// Target shape: type=input_image with a plain string image_url (+ optional detail).
+// Drops empty base64 data URIs and image-only messages that become empty.
+func sanitizeGrokResponsesImages(body []byte) ([]byte, error) {
+	if len(body) == 0 || (!bytes.Contains(body, []byte("image_url")) && !bytes.Contains(body, []byte("input_image"))) {
+		return body, nil
+	}
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, err
+	}
+	changed := false
+	for _, field := range []string{"input", "messages"} {
+		raw, ok := req[field]
+		if !ok || raw == nil {
+			continue
+		}
+		next, fieldChanged := rewriteGrokImageValue(raw)
+		if fieldChanged {
+			req[field] = next
+			changed = true
+		}
+	}
+	if !changed {
+		return body, nil
+	}
+	return json.Marshal(req)
+}
+
+// rewriteGrokImageValue walks arrays/maps and rewrites image parts in place.
+// Returns (value, changed). Dropped nodes are omitted from arrays.
+func rewriteGrokImageValue(value any) (any, bool) {
+	switch typed := value.(type) {
+	case []any:
+		out := make([]any, 0, len(typed))
+		changed := false
+		for _, item := range typed {
+			next, itemChanged, drop := rewriteGrokImageNode(item)
+			if itemChanged || drop {
+				changed = true
+			}
+			if !drop {
+				out = append(out, next)
+			}
+		}
+		if !changed {
+			return value, false
+		}
+		return out, true
+	default:
+		next, changed, drop := rewriteGrokImageNode(value)
+		if drop {
+			return []any{}, true
+		}
+		return next, changed
+	}
+}
+
+// rewriteGrokImageNode returns (node, changed, drop).
+func rewriteGrokImageNode(value any) (any, bool, bool) {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return value, false, false
+	}
+
+	typeName := strings.ToLower(strings.TrimSpace(fmt.Sprint(m["type"])))
+	if typeName == "input_image" || typeName == "image_url" {
+		url, okURL := extractGrokImageURL(m)
+		if !okURL {
+			return nil, true, true
+		}
+		out := map[string]any{"type": "input_image", "image_url": url}
+		if detail, ok := m["detail"].(string); ok {
+			if detail = strings.TrimSpace(detail); detail != "" {
+				out["detail"] = detail
+			}
+		}
+		// Always rebuild: callers only care that the xAI shape is correct.
+		return out, true, false
+	}
+
+	content, hasContent := m["content"]
+	if !hasContent || content == nil {
+		return m, false, false
+	}
+
+	switch parts := content.(type) {
+	case []any:
+		next, contentChanged := rewriteGrokImageValue(parts)
+		if !contentChanged {
+			return m, false, false
+		}
+		arr, _ := next.([]any)
+		if len(arr) == 0 {
+			return nil, true, true
+		}
+		m["content"] = arr
+		return m, true, false
+	case map[string]any:
+		next, changed, drop := rewriteGrokImageNode(parts)
+		if drop {
+			delete(m, "content")
+			return m, true, false
+		}
+		if changed {
+			m["content"] = next
+			return m, true, false
+		}
+		return m, false, false
+	default:
+		return m, false, false
+	}
+}
+
+func extractGrokImageURL(m map[string]any) (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	if url, ok := normalizeGrokImageURLValue(m["image_url"]); ok {
+		return url, true
+	}
+	if nested, ok := m["image"].(map[string]any); ok {
+		if url, ok := normalizeGrokImageURLValue(nested["image_url"]); ok {
+			return url, true
+		}
+		if url, ok := normalizeGrokImageURLValue(nested["url"]); ok {
+			return url, true
+		}
+	}
+	// Some clients put the URL at the top level of an input_image item.
+	if strings.EqualFold(strings.TrimSpace(fmt.Sprint(m["type"])), "input_image") {
+		return normalizeGrokImageURLValue(m["url"])
+	}
+	return "", false
+}
+
+func normalizeGrokImageURLValue(raw any) (string, bool) {
+	switch typed := raw.(type) {
+	case string:
+		url := strings.TrimSpace(typed)
+		if url == "" || isEmptyBase64DataURI(url) {
+			return "", false
+		}
+		return url, true
+	case map[string]any:
+		for _, key := range []string{"url", "image_url"} {
+			if url, ok := normalizeGrokImageURLValue(typed[key]); ok {
+				return url, true
+			}
+		}
+		return "", false
+	default:
+		return "", false
+	}
+}
+
+// sanitizeGrokMessageNames strips message "name" from non-user roles.
+// xAI rejects: "Only message of role `user` can have a name."
+func sanitizeGrokMessageNames(body []byte) ([]byte, error) {
+	if len(body) == 0 || !bytes.Contains(body, []byte(`"name"`)) {
+		return body, nil
+	}
+	changed := false
+	out := body
+	for _, field := range []string{"input", "messages"} {
+		items := gjson.GetBytes(out, field)
+		if !items.Exists() || !items.IsArray() {
+			continue
+		}
+		for i, item := range items.Array() {
+			if !item.IsObject() || !item.Get("name").Exists() {
+				continue
+			}
+			role := strings.ToLower(strings.TrimSpace(item.Get("role").String()))
+			// Keep user names; drop name on developer/system/assistant/tool/etc.
+			if role == "user" {
+				continue
+			}
+			// Also drop when role is empty but type is not a function_call-like item
+			// that legitimately uses name (function tools use top-level name).
+			itemType := strings.ToLower(strings.TrimSpace(item.Get("type").String()))
+			if role == "" && itemType != "" && itemType != "message" {
+				continue
+			}
+			path := fmt.Sprintf("%s.%d.name", field, i)
+			next, err := sjson.DeleteBytes(out, path)
+			if err != nil {
+				return nil, err
+			}
+			out = next
+			changed = true
+		}
+	}
+	if !changed {
+		return body, nil
+	}
+	return out, nil
 }
