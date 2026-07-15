@@ -72,6 +72,10 @@ gateway:
     quota_cache_ttl_seconds: 600
     unknown_quota_policy: optimistic
     probe_on_schedule: true
+    # Post-SSE poll (aligned with chatgpt2api; live traffic needs initial wait)
+    poll_timeout_seconds: 180
+    poll_initial_wait_seconds: 10   # first GET after SSE ends
+    poll_interval_seconds: 10      # gap between conversation GETs
 ```
 
 ## Admin API

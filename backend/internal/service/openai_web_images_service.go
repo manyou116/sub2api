@@ -156,11 +156,20 @@ func NewOpenAIWebImagesService(cfg *config.Config, rdb *redis.Client, accountRep
 		}
 		return client, nil
 	})
-	if cfg != nil && cfg.Gateway.OpenAIWebImages.PollTimeoutSeconds > 0 {
-		svc.driver.PollTimeout = time.Duration(cfg.Gateway.OpenAIWebImages.PollTimeoutSeconds) * time.Second
-	}
 	if cfg != nil {
-		svc.driver.KeepConversation = cfg.Gateway.OpenAIWebImages.KeepConversationAfter
+		w := cfg.Gateway.OpenAIWebImages
+		if w.PollTimeoutSeconds > 0 {
+			svc.driver.PollTimeout = time.Duration(w.PollTimeoutSeconds) * time.Second
+		}
+		if w.PollIntervalSeconds > 0 {
+			svc.driver.PollInterval = time.Duration(w.PollIntervalSeconds) * time.Second
+		}
+		if w.PollInitialWaitSeconds > 0 {
+			svc.driver.PollInitialWait = time.Duration(w.PollInitialWaitSeconds) * time.Second
+		}
+		// PollInitialWaitSeconds == 0: keep driver default (10s). Operators who need
+		// legacy immediate first GET can set a negative sentinel is not supported; use 1s min.
+		svc.driver.KeepConversation = w.KeepConversationAfter
 	}
 	return svc
 }

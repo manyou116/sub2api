@@ -5,79 +5,79 @@ import (
 	"time"
 )
 
-// Post-SSE conversation poll strategy (anti-429).
+// Post-SSE conversation poll strategy (anti-429 / anti-inaccessible).
 //
 // While SSE is open we never GET /conversation.
-// After SSE ends without asset pointers we use a SPARSE absolute schedule:
-// few GETs over ~3 minutes instead of a fixed 4s ticker (~45 GETs).
+// After SSE ends without asset pointers we wait PollInitialWait (default 10s)
+// before the first GET — live traffic shows offset=0 almost always returns
+// conversation_inaccessible (document not committed yet; same lesson as chatgpt2api).
+// Subsequent GETs use a fixed interval (default 10s) with jitter and hard
+// cool-down after HTTP 429 so we do not hammer the account.
 //
-// On 429 we do NOT keep the same cadence — we jump forward with a hard cool-down
-// so the account can recover; continuous retry-after-429 is what made images
-// "never appear" (upstream keeps refusing while we keep hammering).
+// Soft poll 429 must never durable-pin image quota (handled by the service layer).
 
 const (
-	poll429Base = 25 * time.Second
-	poll429Max  = 90 * time.Second
+	defaultPollMinGap      = 10 * time.Second
+	defaultPollInitialWait = 10 * time.Second
+	poll429Base            = 15 * time.Second
+	poll429Max             = 60 * time.Second
 )
 
-// Default absolute offsets from poll start (first GET is immediate at 0).
-// ~11 attempts max over 3 minutes vs ~45 at 4s interval.
-var defaultPollOffsets = []time.Duration{
-	0,
-	5 * time.Second,
-	12 * time.Second,
-	22 * time.Second,
-	35 * time.Second,
-	50 * time.Second,
-	70 * time.Second,
-	95 * time.Second,
-	120 * time.Second,
-	150 * time.Second,
-	180 * time.Second,
-}
-
-// pollScheduleOffsets returns absolute times to attempt GET, clipped to timeout.
-// minGap is a floor between attempts (from Driver.PollInterval); default schedule
-// already spaces wider than 4s after the first two points.
-func pollScheduleOffsets(timeout, minGap time.Duration) []time.Duration {
+// pollScheduleOffsets returns absolute times (from poll start) for conversation GETs.
+// initialWait: delay before first GET (chatgpt2api image_poll_initial_wait_secs).
+// minGap: interval between subsequent attempts (image_poll_interval_secs).
+func pollScheduleOffsets(timeout, minGap, initialWait time.Duration) []time.Duration {
 	if timeout <= 0 {
 		timeout = 180 * time.Second
 	}
-	if minGap < 0 {
-		minGap = 0
+	if minGap <= 0 {
+		minGap = defaultPollMinGap
 	}
-	out := make([]time.Duration, 0, len(defaultPollOffsets)+4)
-	var last time.Duration = -1
-	for _, at := range defaultPollOffsets {
-		if at > timeout {
-			break
-		}
-		if last >= 0 && minGap > 0 && at-last < minGap {
-			at = last + minGap
-			if at > timeout {
-				break
-			}
-		}
-		out = append(out, at)
-		last = at
+	if initialWait < 0 {
+		initialWait = 0
 	}
-	// Ensure a final attempt near timeout if schedule ended early.
-	if len(out) == 0 || out[len(out)-1] < timeout {
+	if initialWait >= timeout {
+		// Still attempt once near the end of the budget.
 		final := timeout - time.Second
 		if final < 0 {
-			final = timeout
+			final = 0
 		}
-		if last < 0 || final-last >= minGap || minGap == 0 {
-			if final > last {
-				out = append(out, final)
-			}
+		return []time.Duration{final}
+	}
+
+	out := make([]time.Duration, 0, int(timeout/minGap)+3)
+	at := initialWait
+	for at < timeout {
+		out = append(out, at)
+		next := at + minGap
+		if next <= at {
+			break
 		}
+		at = next
+	}
+	// Ensure a final attempt near timeout when the arithmetic grid ended early.
+	if len(out) == 0 {
+		final := timeout - time.Second
+		if final < 0 {
+			final = 0
+		}
+		return []time.Duration{final}
+	}
+	last := out[len(out)-1]
+	final := timeout - time.Second
+	if final < 0 {
+		final = timeout
+	}
+	// Only append a near-timeout shot when it still respects minGap.
+	if final > last && final-last >= minGap {
+		out = append(out, final)
 	}
 	return out
 }
 
-// pollBackoffAfter429 is hard cool-down after conversation GET 429.
-// Starts above typical image finish latency so we stop feeding the rate limiter.
+// pollBackoffAfter429 is cool-down after conversation GET 429.
+// Milder base than the previous 25s×2 so we can keep trying within timeout
+// instead of aborting after three hits.
 func pollBackoffAfter429(consecutive int) time.Duration {
 	if consecutive < 1 {
 		consecutive = 1
@@ -105,7 +105,7 @@ func jitterDuration(d time.Duration) time.Duration {
 	return time.Duration(float64(d) * f)
 }
 
-// waitUntilTarget sleeps until wall target or ctx/deadline, returns false if cancelled.
+// waitUntilTarget sleeps until wall target or ctx/deadline, returns sleep duration.
 func waitUntilTarget(now, target, deadline time.Time) time.Duration {
 	if target.After(deadline) {
 		target = deadline

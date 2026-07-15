@@ -752,7 +752,7 @@ const (
 type OpenAIWebImagesConfig struct {
 	// DefaultEnabled applies when an account has no explicit openai_web_images.enabled.
 	// Default false (opt-in). Set true to enable web images for all OpenAI OAuth accounts.
-	DefaultEnabled bool `mapstructure:"default_enabled"`
+	DefaultEnabled           bool   `mapstructure:"default_enabled"`
 	DefaultMaxInflight       int    `mapstructure:"default_max_inflight"`
 	QuotaCacheTTLSeconds     int    `mapstructure:"quota_cache_ttl_seconds"`
 	ProbeOnSchedule          bool   `mapstructure:"probe_on_schedule"`
@@ -761,11 +761,16 @@ type OpenAIWebImagesConfig struct {
 	RateLimitCooldownSeconds int    `mapstructure:"rate_limit_cooldown_seconds"`
 	TransportMaxRetries      int    `mapstructure:"transport_max_retries"`
 	PollTimeoutSeconds       int    `mapstructure:"poll_timeout_seconds"`
-	InflightBackend          string `mapstructure:"inflight_backend"`
-	InflightTTLSeconds       int    `mapstructure:"inflight_ttl_seconds"`
-	RedisKeyPrefix           string `mapstructure:"redis_key_prefix"`
-	BulkMaxAccounts          int    `mapstructure:"bulk_max_accounts"`
-	BulkProbeConcurrency     int    `mapstructure:"bulk_probe_concurrency"`
+	// PollInitialWaitSeconds: delay before first conversation GET after SSE ends (default 10).
+	// Set 0 to restore legacy immediate first poll (not recommended).
+	PollInitialWaitSeconds int `mapstructure:"poll_initial_wait_seconds"`
+	// PollIntervalSeconds: min gap between post-SSE conversation GETs (default 10).
+	PollIntervalSeconds  int    `mapstructure:"poll_interval_seconds"`
+	InflightBackend      string `mapstructure:"inflight_backend"`
+	InflightTTLSeconds   int    `mapstructure:"inflight_ttl_seconds"`
+	RedisKeyPrefix       string `mapstructure:"redis_key_prefix"`
+	BulkMaxAccounts      int    `mapstructure:"bulk_max_accounts"`
+	BulkProbeConcurrency int    `mapstructure:"bulk_probe_concurrency"`
 	// DefaultModelMode: auto (plan preset) or fixed (use default_upstream_model/thinking_effort).
 	DefaultModelMode string `mapstructure:"default_model_mode"`
 	// DefaultUpstreamModel is the ChatGPT web model slug used for auto fallback / fixed global mode.
@@ -1737,6 +1742,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_web_images.rate_limit_cooldown_seconds", 600)
 	viper.SetDefault("gateway.openai_web_images.transport_max_retries", 1)
 	viper.SetDefault("gateway.openai_web_images.poll_timeout_seconds", 180)
+	viper.SetDefault("gateway.openai_web_images.poll_initial_wait_seconds", 10)
+	viper.SetDefault("gateway.openai_web_images.poll_interval_seconds", 10)
 	viper.SetDefault("gateway.openai_web_images.inflight_backend", "redis")
 	viper.SetDefault("gateway.openai_web_images.inflight_ttl_seconds", 900)
 	viper.SetDefault("gateway.openai_web_images.redis_key_prefix", "sub2api:webimg:")

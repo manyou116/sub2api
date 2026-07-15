@@ -24,12 +24,15 @@ const (
 	baseURL            = "https://chatgpt.com"
 	defaultUA          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 	defaultPollTimeout = 180 * time.Second
-	// Minimum gap floor for sparse post-SSE schedule (see poll_schedule.go).
-	defaultPollEvery = 5 * time.Second
+	// Post-SSE poll interval (chatgpt2api image_poll_interval_secs ≈ 10s).
+	defaultPollEvery = defaultPollMinGap
+	// Delay before first conversation GET after SSE ends (avoids inaccessible/429).
+	// Mirrors chatgpt2api image_poll_initial_wait_secs.
+	defaultPollFirstWait = defaultPollInitialWait
 	// SSE-only while stream is alive. Poll ONLY after SSE ends/idle/disconnect.
 	defaultSSEMaxWait = 120 * time.Second
-	// Prefer SSE longer: early leave forces conversation GETs and 429 risk.
-	defaultSSEIdleWait = 8 * time.Second
+	// Prefer SSE a bit longer so late asset pointers can arrive without GET.
+	defaultSSEIdleWait = 12 * time.Second
 	// No conversation_id yet.
 	defaultSSEIdleWaitNoCID = 5 * time.Second
 	// After [DONE] without assets, drain trailing SSE lines (late pointers) before poll.
@@ -39,12 +42,18 @@ const (
 type Driver struct {
 	ClientFactory    func(proxyURL string) (*req.Client, error)
 	PollTimeout      time.Duration
-	PollInterval     time.Duration
-	KeepConversation bool // when true, skip PATCH is_visible=false cleanup
+	PollInterval     time.Duration // min gap between GETs after first
+	PollInitialWait  time.Duration // delay before first GET after SSE
+	KeepConversation bool          // when true, skip PATCH is_visible=false cleanup
 }
 
 func NewDriver(factory func(proxyURL string) (*req.Client, error)) *Driver {
-	return &Driver{ClientFactory: factory, PollTimeout: defaultPollTimeout, PollInterval: defaultPollEvery}
+	return &Driver{
+		ClientFactory:   factory,
+		PollTimeout:     defaultPollTimeout,
+		PollInterval:    defaultPollEvery,
+		PollInitialWait: defaultPollFirstWait,
+	}
 }
 
 // Serialize conversation GET polls per access-token within this process.
@@ -683,10 +692,15 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 	if minGap <= 0 {
 		minGap = defaultPollEvery
 	}
+	initialWait := d.PollInitialWait
+	if initialWait < 0 {
+		initialWait = defaultPollFirstWait
+	}
+	// Zero is allowed (legacy immediate first GET via config).
 	started := time.Now()
 	deadline := started.Add(timeout)
-	offsets := pollScheduleOffsets(timeout, minGap)
-	stageLog("poll", fmt.Sprintf("sparse_schedule n=%d timeout=%s min_gap=%s", len(offsets), timeout, minGap))
+	offsets := pollScheduleOffsets(timeout, minGap, initialWait)
+	stageLog("poll", fmt.Sprintf("schedule n=%d timeout=%s initial_wait=%s interval=%s", len(offsets), timeout, initialWait, minGap))
 
 	var (
 		fileIDs, sedimentIDs []string
@@ -734,13 +748,9 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 			}
 			if resp.StatusCode == http.StatusTooManyRequests {
 				consecutive429++
+				// Keep retrying within timeout with backoff (do not abort after 3 hits).
 				stageLog("poll", fmt.Sprintf("429 attempt=%d/%d consecutive=%d cool=%s elapsed=%s",
 					attempt+1, len(offsets), consecutive429, pollBackoffAfter429(consecutive429), elapsed.Round(time.Millisecond)))
-				if consecutive429 >= 3 {
-					return NewError(ErrorKindRateLimited, stage,
-						"conversation poll rate limited (too many 429); retry later",
-						http.StatusTooManyRequests, true)
-				}
 				continue
 			}
 			if resp.StatusCode >= 500 {
@@ -753,6 +763,7 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 					strings.Contains(strings.ToLower(bodyText), "conversation_inaccessible") ||
 					strings.Contains(bodyText, "无权访问此对话")
 				if inaccessible && elapsed < 90*time.Second {
+					// Document not ready yet; schedule already spaces GETs, just continue.
 					stageLog("poll", fmt.Sprintf("inaccessible attempt=%d/%d elapsed=%s retry_later", attempt+1, len(offsets), elapsed.Round(time.Millisecond)))
 					continue
 				}
@@ -790,7 +801,12 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 			}
 		}
 		if len(fileIDs) == 0 && len(sedimentIDs) == 0 {
-			return NewError(ErrorKindTimeout, stage, "image poll timeout (sparse schedule exhausted)", 0, true)
+			if consecutive429 > 0 {
+				return NewError(ErrorKindRateLimited, stage,
+					"conversation poll rate limited (too many 429); retry later",
+					http.StatusTooManyRequests, true)
+			}
+			return NewError(ErrorKindTimeout, stage, "image poll timeout (schedule exhausted)", 0, true)
 		}
 		return nil
 	})
