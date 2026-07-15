@@ -195,9 +195,8 @@
           default-sort-key="name"
           default-sort-order="asc"
           :sort-storage-key="ACCOUNT_SORT_STORAGE_KEY"
-          :estimate-row-height="156"
+          :estimate-row-height="72"
           :overscan="5"
-          :virtualize-threshold="50"
         >
           <template #header-select>
             <input
@@ -259,7 +258,7 @@
             </div>
           </template>
           <template #cell-capacity="{ row }">
-            <AccountCapacityCell :account="row" />
+            <AccountCapacityCell :account="row" :web-images-status="webImagesStatusById[String(row.id)] ?? null" @web-images-probe="handleMenuWebImagesProbe" />
           </template>
           <template #cell-status="{ row }">
             <div class="flex items-center gap-1.5">
@@ -293,6 +292,13 @@
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
               :manual-refresh-token="usageManualRefreshToken"
+            />
+          </template>
+          <template #cell-web_images="{ row }">
+            <OpenAIWebImagesCell
+              :account="row"
+              :status="webImagesStatusById[String(row.id)] ?? null"
+              :loading="webImagesLoading"
             />
           </template>
           <template #cell-proxy="{ row }">
@@ -399,7 +405,7 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" :web-images-status="menu.acc ? (webImagesStatusById[String(menu.acc.id)] ?? null) : null" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" @web-images-toggle="handleMenuWebImagesToggle" @web-images-probe="handleMenuWebImagesProbe" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -459,6 +465,8 @@ import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
+import OpenAIWebImagesCell from '@/components/account/OpenAIWebImagesCell.vue'
+import type { OpenAIWebImagesStatus } from '@/api/admin/accounts'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
@@ -549,11 +557,11 @@ const exportingData = ref(false)
 const showAccountToolsDropdown = ref(false)
 const accountToolsDropdownRef = ref<HTMLElement | null>(null)
 const hiddenColumns = reactive<Set<string>>(new Set())
-const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'scheduler_score', 'rate_multiplier']
+const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'scheduler_score', 'rate_multiplier', 'web_images']
 const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
 // One-time migration: hide scheduler score for existing admins too, because showing it opt-ins to heavy backend scoring.
 const HIDDEN_COLUMNS_VERSION_KEY = 'account-hidden-columns-version'
-const HIDDEN_COLUMNS_CURRENT_VERSION = 'scheduler-score-hidden-by-default'
+const HIDDEN_COLUMNS_CURRENT_VERSION = 'web-images-in-capacity-v1'
 
 // Sorting settings
 const ACCOUNT_SORT_STORAGE_KEY = 'account-table-sort'
@@ -608,6 +616,9 @@ const todayStatsByAccountId = ref<Record<string, WindowStats>>({})
 const todayStatsLoading = ref(false)
 const todayStatsError = ref<string | null>(null)
 const todayStatsReqSeq = ref(0)
+const webImagesStatusById = ref<Record<string, OpenAIWebImagesStatus>>({})
+const webImagesLoading = ref(false)
+const webImagesReqSeq = ref(0)
 const pendingTodayStatsRefresh = ref(false)
 const usageManualRefreshToken = ref(0)
 
@@ -663,6 +674,56 @@ const refreshTodayStatsBatch = async () => {
   }
 }
 
+
+const loadWebImagesStatus = async () => {
+  const openaiIds = accounts.value
+    .filter(a => a.platform === 'openai' && (a.type === 'oauth' || a.type === 'setup-token'))
+    .map(a => a.id)
+  const reqSeq = ++webImagesReqSeq.value
+  if (openaiIds.length === 0) {
+    webImagesStatusById.value = {}
+    webImagesLoading.value = false
+    return
+  }
+  // load when capacity (primary) or detailed web_images column is visible
+  if (hiddenColumns.has('capacity') && hiddenColumns.has('web_images')) {
+    return
+  }
+  webImagesLoading.value = true
+  try {
+    // chunk to avoid huge query strings
+    const chunkSize = 80
+    const next: Record<string, OpenAIWebImagesStatus> = { ...webImagesStatusById.value }
+    // Prevent stale cooldown/rate_limit badges from surviving after reset/probe.
+    for (const id of openaiIds) {
+      delete next[String(id)]
+    }
+    for (let i = 0; i < openaiIds.length; i += chunkSize) {
+      const chunk = openaiIds.slice(i, i + chunkSize)
+      const items = await adminAPI.accounts.overviewOpenAIWebImages(chunk)
+      if (reqSeq !== webImagesReqSeq.value) return
+      for (const item of items) {
+        next[String(item.account_id)] = item
+      }
+    }
+    webImagesStatusById.value = next
+  } catch (error) {
+    if (reqSeq !== webImagesReqSeq.value) return
+    console.error('Failed to load openai web images status:', error)
+  } finally {
+    if (reqSeq === webImagesReqSeq.value) {
+      webImagesLoading.value = false
+    }
+  }
+}
+
+const onWebImagesUpdated = (status: OpenAIWebImagesStatus) => {
+  webImagesStatusById.value = {
+    ...webImagesStatusById.value,
+    [String(status.account_id)]: status
+  }
+}
+
 const autoRefreshIntervalLabel = (sec: number) => {
   if (sec === 5) return t('admin.accounts.refreshInterval5s')
   if (sec === 10) return t('admin.accounts.refreshInterval10s')
@@ -712,6 +773,8 @@ const loadSavedColumns = () => {
       // Older saved column layouts may have scheduler_score visible; migrate them to the new safe default once.
       if (localStorage.getItem(HIDDEN_COLUMNS_VERSION_KEY) !== HIDDEN_COLUMNS_CURRENT_VERSION) {
         hiddenColumns.add('scheduler_score')
+        // Web 生图主展示迁到容量列，独立列默认隐藏
+        hiddenColumns.add('web_images')
         localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
         localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
       }
@@ -803,6 +866,11 @@ const toggleColumn = (key: string) => {
   if ((key === 'today_stats' || key === 'usage') && wasHidden) {
     refreshTodayStatsBatch().catch((error) => {
       console.error('Failed to load account today stats after showing column:', error)
+    })
+  }
+  if ((key === 'web_images' || key === 'capacity') && wasHidden) {
+    loadWebImagesStatus().catch((error) => {
+      console.error('Failed to load web images status after showing column:', error)
     })
   }
   if (key === 'scheduler_score') {
@@ -899,6 +967,7 @@ const load = async () => {
     delete requestParams.lite
   }
   await refreshTodayStatsBatch()
+  await loadWebImagesStatus()
 }
 
 const reload = async () => {
@@ -908,6 +977,7 @@ const reload = async () => {
   pendingTodayStatsRefresh.value = false
   await baseReload()
   await refreshTodayStatsBatch()
+  await loadWebImagesStatus()
 }
 
 const debouncedReload = () => {
@@ -1071,6 +1141,7 @@ const refreshAccountsIncrementally = async () => {
     }
 
     await refreshTodayStatsBatch()
+    await loadWebImagesStatus()
   } catch (error) {
     console.error('Auto refresh failed:', error)
   } finally {
@@ -1278,6 +1349,7 @@ const allColumns = computed(() => {
   }
   c.push(
     { key: 'usage', label: t('admin.accounts.columns.usageWindows'), sortable: false },
+    { key: 'web_images', label: t('admin.accounts.columns.webImages'), sortable: false },
     { key: 'proxy', label: t('admin.accounts.columns.proxy'), sortable: false },
     { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
     { key: 'scheduler_score', label: t('admin.accounts.columns.schedulerScore'), sortable: false },
@@ -1363,14 +1435,58 @@ const handleBulkDelete = async () => { if(!confirm(t('common.confirm'))) return;
 const handleBulkResetStatus = async () => {
   if (!confirm(t('common.confirm'))) return
   try {
-    const result = await adminAPI.accounts.batchClearError(selIds.value)
+    const ids = [...selIds.value]
+    // 1) Clear web image cooldown FIRST (most visible), independent of text rate-limit fields.
+    let webCleared = 0
+    try {
+      const webRes = await adminAPI.accounts.bulkClearOpenAIWebImagesCooldown(ids)
+      webCleared = Number(webRes?.cleared || 0)
+    } catch (webErr) {
+      console.error('Failed to bulk clear web image cooldown:', webErr)
+      // Fallback: clear one-by-one so a single failure does not block all.
+      for (const id of ids) {
+        try {
+          await adminAPI.accounts.clearOpenAIWebImagesCooldown(id)
+          webCleared++
+        } catch (e) {
+          console.error('clear web cooldown failed for', id, e)
+        }
+      }
+    }
+    // 2) Clear general account error / text rate-limit status.
+    const result = await adminAPI.accounts.batchClearError(ids)
+    // 3) Optimistic UI: immediately drop rate-limit badges for selected accounts.
+    const next = { ...webImagesStatusById.value }
+    for (const id of ids) {
+      const key = String(id)
+      const prev = next[key]
+      if (prev) {
+        next[key] = {
+          ...prev,
+          rate_limited: false,
+          cooldown_until: null,
+          cooldown_seconds: 0,
+          unschedulable_reason: prev.unschedulable_reason === 'cooldown' ? '' : prev.unschedulable_reason,
+          remaining: prev.remaining != null && prev.remaining <= 0 ? null : prev.remaining,
+          quota_known: prev.remaining != null && prev.remaining <= 0 ? false : prev.quota_known,
+          schedulable: true
+        }
+      } else {
+        delete next[key]
+      }
+    }
+    webImagesStatusById.value = next
     if (result.failed > 0) {
       appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
     } else {
-      appStore.showSuccess(t('admin.accounts.bulkActions.resetStatusSuccess', { count: result.success }))
+      appStore.showSuccess(
+        t('admin.accounts.bulkActions.resetStatusSuccess', { count: result.success }) +
+          (webCleared > 0 ? ` / Web cooldown cleared: ${webCleared}` : '')
+      )
       clearSelection()
     }
     reload()
+    await loadWebImagesStatus()
   } catch (error) {
     console.error('Failed to bulk reset status:', error)
     appStore.showError(String(error))
@@ -1392,6 +1508,40 @@ const handleBulkRefreshToken = async () => {
     appStore.showError(String(error))
   }
 }
+
+
+const handleMenuWebImagesToggle = async (account: Account) => {
+  try {
+    const cached = webImagesStatusById.value[String(account.id)]
+    const extra = (account.extra || {}) as Record<string, any>
+    const enabled = cached
+      ? Boolean(cached.enabled)
+      : !!(extra.openai_web_images && typeof extra.openai_web_images === 'object' && extra.openai_web_images.enabled === true)
+    // Menu toggles force on/off (explicit account override). Use edit modal for inherit.
+    const st = await adminAPI.accounts.patchOpenAIWebImages(account.id, {
+      enabled_mode: enabled ? 'off' : 'on'
+    })
+    onWebImagesUpdated(st)
+    appStore.showSuccess(!enabled ? t('admin.accounts.webImages.on') : t('admin.accounts.webImages.off'))
+  } catch (error) {
+    console.error('toggle web images failed', error)
+    appStore.showError(String(error))
+  }
+}
+
+const handleMenuWebImagesProbe = async (account: Account) => {
+  try {
+    const st = await adminAPI.accounts.probeOpenAIWebImages(account.id)
+    onWebImagesUpdated(st)
+    const rem = st.quota_known && st.remaining != null ? st.remaining : t('admin.accounts.webImages.unknown')
+    appStore.showSuccess(`${t('admin.accounts.webImages.probe')}: ${rem}`)
+  } catch (error) {
+    console.error('probe web images failed', error)
+    appStore.showError(String(error))
+  }
+}
+
+
 const updateSchedulableInList = (accountIds: number[], schedulable: boolean) => {
   if (accountIds.length === 0) return
   const idSet = new Set(accountIds)

@@ -910,6 +910,105 @@
       </div>
 
       <!-- OpenAI API Key WS mode -->
+      <!-- OpenAI Web Images (picture_v2) -->
+      <div v-if="allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-openai-web-images-label"
+              class="input-label mb-0"
+              for="bulk-edit-openai-web-images-enabled"
+            >
+              {{ t('admin.accounts.webImages.title') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.webImages.bulkDesc') }}
+            </p>
+          </div>
+          <input
+            v-model="enableOpenAIWebImages"
+            id="bulk-edit-openai-web-images-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-openai-web-images-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-openai-web-images-body"
+          :class="!enableOpenAIWebImages && 'pointer-events-none opacity-50'"
+          role="group"
+          aria-labelledby="bulk-edit-openai-web-images-label"
+          class="space-y-3"
+        >
+          <div>
+            <label class="input-label" for="bulk-edit-openai-web-images-enable-mode">{{ t('admin.accounts.webImages.enableMode') }}</label>
+            <select
+              id="bulk-edit-openai-web-images-enable-mode"
+              v-model="openAIWebImagesEnableMode"
+              class="input"
+              data-testid="bulk-edit-openai-web-images-enable-mode"
+            >
+              <option value="inherit">{{ t('admin.accounts.webImages.enableModeInherit') }}</option>
+              <option value="on">{{ t('admin.accounts.webImages.enableModeOn') }}</option>
+              <option value="off">{{ t('admin.accounts.webImages.enableModeOff') }}</option>
+            </select>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.webImages.enableModeHint') }}</p>
+          </div>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="input-label" for="bulk-edit-openai-web-images-max-inflight">{{ t('admin.accounts.webImages.maxInflight') }}</label>
+              <input
+                id="bulk-edit-openai-web-images-max-inflight"
+                v-model.number="openAIWebImagesMaxInflight"
+                type="number"
+                min="1"
+                max="20"
+                class="input"
+              />
+            </div>
+            <div>
+              <label class="input-label" for="bulk-edit-openai-web-images-priority">{{ t('admin.accounts.webImages.priority') }}</label>
+              <input
+                id="bulk-edit-openai-web-images-priority"
+                v-model.number="openAIWebImagesPriority"
+                type="number"
+                class="input"
+              />
+            </div>
+          </div>
+          <div>
+            <label class="input-label" for="bulk-edit-openai-web-images-model-mode">{{ t('admin.accounts.webImages.modelMode') }}</label>
+            <select id="bulk-edit-openai-web-images-model-mode" v-model="openAIWebImagesModelMode" class="input">
+              <option value="auto">{{ t('admin.accounts.webImages.modelModeAuto') }}</option>
+              <option value="fixed">{{ t('admin.accounts.webImages.modelModeFixed') }}</option>
+            </select>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.webImages.modelModeHint') }}</p>
+          </div>
+          <div v-if="openAIWebImagesModelMode === 'fixed'" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="input-label" for="bulk-edit-openai-web-images-model">{{ t('admin.accounts.webImages.upstreamModel') }}</label>
+              <select id="bulk-edit-openai-web-images-model" v-model="openAIWebImagesModel" class="input">
+                <option v-for="m in openAIWebImagesModelOptions" :key="m.value" :value="m.value">{{ m.label }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="input-label" for="bulk-edit-openai-web-images-effort">{{ t('admin.accounts.webImages.thinkingEffort') }}</label>
+              <select id="bulk-edit-openai-web-images-effort" v-model="openAIWebImagesThinkingEffort" class="input">
+                <option v-for="e in openAIWebImagesEffortOptions" :key="e.value" :value="e.value">{{ e.label }}</option>
+              </select>
+            </div>
+          </div>
+          <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              v-model="openAIWebImagesProbeAfter"
+              type="checkbox"
+              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            {{ t('admin.accounts.webImages.probeAfterApply') }}
+          </label>
+        </div>
+      </div>
+
       <div v-if="allOpenAIAPIKey" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
@@ -1257,6 +1356,12 @@
 
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
+import {
+  OPENAI_WEB_IMAGES_DEFAULT_EFFORT,
+  OPENAI_WEB_IMAGES_DEFAULT_MODEL,
+  OPENAI_WEB_IMAGES_EFFORT_OPTIONS,
+  OPENAI_WEB_IMAGES_MODEL_OPTIONS
+} from '@/constants/openaiWebImages'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
@@ -1411,6 +1516,7 @@ const enableCodexCLIOnly = ref(false)
 const enableCodexCLIOnlyAppServer = ref(false)
 const enableOpenAICompactMode = ref(false)
 const enableOpenAICompactModelMapping = ref(false)
+const enableOpenAIWebImages = ref(false)
 const enableRpmLimit = ref(false)
 
 // State - field values
@@ -1466,6 +1572,16 @@ const rateMultiplier = ref(1)
 const status = ref<'active' | 'inactive'>('active')
 const groupIds = ref<number[]>([])
 const openaiPassthroughEnabled = ref(false)
+type OpenAIWebImagesEnableMode = 'inherit' | 'on' | 'off'
+const openAIWebImagesEnableMode = ref<OpenAIWebImagesEnableMode>('inherit')
+const openAIWebImagesMaxInflight = ref(1)
+const openAIWebImagesPriority = ref(0)
+const openAIWebImagesModelMode = ref<'auto' | 'fixed'>('auto')
+const openAIWebImagesModel = ref(OPENAI_WEB_IMAGES_DEFAULT_MODEL)
+const openAIWebImagesThinkingEffort = ref(OPENAI_WEB_IMAGES_DEFAULT_EFFORT)
+const openAIWebImagesProbeAfter = ref(false)
+const openAIWebImagesModelOptions = OPENAI_WEB_IMAGES_MODEL_OPTIONS
+const openAIWebImagesEffortOptions = OPENAI_WEB_IMAGES_EFFORT_OPTIONS
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
@@ -1851,6 +1967,7 @@ const handleSubmit = async () => {
     enableCodexCLIOnlyAppServer.value ||
     enableOpenAICompactMode.value ||
     enableOpenAICompactModelMapping.value ||
+    enableOpenAIWebImages.value ||
     enableRpmLimit.value ||
     userMsgQueueMode.value !== null
 
@@ -1874,15 +1991,43 @@ const handleSubmit = async () => {
   }
 
   const built = buildUpdatePayload()
-  if (!built) {
+  // Web images can be applied alone without other bulk fields.
+  if (!built && !enableOpenAIWebImages.value) {
     appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
     return
   }
 
-  const canContinue = await preCheckMixedChannelRisk(built)
-  if (!canContinue) return
+  if (built) {
+    const canContinue = await preCheckMixedChannelRisk(built)
+    if (!canContinue) return
+    await submitBulkUpdate(built)
+  } else {
+    await submitBulkUpdate({})
+  }
+}
 
-  await submitBulkUpdate(built)
+
+const resolveBulkTargetAccountIds = async (): Promise<number[]> => {
+  if (targetMode.value === 'selected') {
+    return [...props.accountIds]
+  }
+  const filters = props.target?.filters || {}
+  const ids: number[] = []
+  let page = 1
+  const pageSize = 100
+  const maxPages = 50
+  while (page <= maxPages) {
+    const res = await adminAPI.accounts.list(page, pageSize, filters as any)
+    for (const item of res.items || []) {
+      if (item.platform === 'openai' && (item.type === 'oauth' || item.type === 'setup-token')) {
+        ids.push(item.id)
+      }
+    }
+    const pages = res.pages || 1
+    if (page >= pages) break
+    page += 1
+  }
+  return ids
 }
 
 const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
@@ -1894,24 +2039,54 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
   submitting.value = true
 
   try {
-    const res = targetMode.value === 'filtered' && props.target?.filters
-      ? await adminAPI.accounts.bulkUpdate({
-        filters: props.target.filters,
-        ...updates
-      })
-      : await adminAPI.accounts.bulkUpdate(props.accountIds, updates)
-    const success = res.success || 0
-    const failed = res.failed || 0
+    const hasBulkPayload = Object.keys(baseUpdates || {}).length > 0
+    let success = 0
+    let failed = 0
+    if (hasBulkPayload) {
+      const res = targetMode.value === 'filtered' && props.target?.filters
+        ? await adminAPI.accounts.bulkUpdate({
+          filters: props.target.filters,
+          ...updates
+        })
+        : await adminAPI.accounts.bulkUpdate(props.accountIds, updates)
+      success = res.success || 0
+      failed = res.failed || 0
+    }
 
-    if (success > 0 && failed === 0) {
-      appStore.showSuccess(t('admin.accounts.bulkEdit.success', { count: success }))
-    } else if (success > 0) {
-      appStore.showError(t('admin.accounts.bulkEdit.partialSuccess', { success, failed }))
+    // Web images uses dedicated control-plane API (account.extra.openai_web_images + runtime).
+    let webUpdated = 0
+    let webFailed = 0
+    if (enableOpenAIWebImages.value) {
+      const ids = await resolveBulkTargetAccountIds()
+      if (ids.length > 0) {
+        const webRes = await adminAPI.accounts.bulkOpenAIWebImages({
+          account_ids: ids,
+          patch: {
+            enabled_mode: openAIWebImagesEnableMode.value,
+            max_inflight: Number(openAIWebImagesMaxInflight.value) || 1,
+            priority: Number(openAIWebImagesPriority.value) || 0,
+            model_mode: openAIWebImagesModelMode.value,
+            model: openAIWebImagesModelMode.value === 'fixed' ? openAIWebImagesModel.value : '',
+            thinking_effort: openAIWebImagesModelMode.value === 'fixed' ? openAIWebImagesThinkingEffort.value : ''
+          },
+          actions: { probe: openAIWebImagesProbeAfter.value }
+        })
+        webUpdated = webRes.updated || 0
+        webFailed = webRes.failed || 0
+      }
+    }
+
+    const totalSuccess = Math.max(success, webUpdated)
+    const totalFailed = failed + webFailed
+    if (totalSuccess > 0 && totalFailed === 0) {
+      appStore.showSuccess(t('admin.accounts.bulkEdit.success', { count: totalSuccess }))
+    } else if (totalSuccess > 0) {
+      appStore.showError(t('admin.accounts.bulkEdit.partialSuccess', { success: totalSuccess, failed: totalFailed }))
     } else {
       appStore.showError(t('admin.accounts.bulkEdit.failed'))
     }
 
-    if (success > 0) {
+    if (totalSuccess > 0) {
       pendingUpdatesForConfirm.value = null
       emit('updated')
       handleClose()
@@ -1969,6 +2144,14 @@ watch(
       enableCodexCLIOnlyAppServer.value = false
       enableOpenAICompactMode.value = false
       enableOpenAICompactModelMapping.value = false
+      enableOpenAIWebImages.value = false
+      openAIWebImagesEnableMode.value = 'inherit'
+      openAIWebImagesMaxInflight.value = 1
+      openAIWebImagesPriority.value = 0
+      openAIWebImagesModelMode.value = 'auto'
+      openAIWebImagesModel.value = OPENAI_WEB_IMAGES_DEFAULT_MODEL
+      openAIWebImagesThinkingEffort.value = OPENAI_WEB_IMAGES_DEFAULT_EFFORT
+      openAIWebImagesProbeAfter.value = false
       enableRpmLimit.value = false
 
       // Reset all values

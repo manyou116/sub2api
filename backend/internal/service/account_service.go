@@ -61,6 +61,10 @@ type AccountRepository interface {
 	ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]Account, error)
 	ListSchedulableByPlatforms(ctx context.Context, platforms []string) ([]Account, error)
 	ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]Account, error)
+	// ListActiveAllowingTextRateLimit* includes accounts still inside text RateLimitResetAt/OverloadUntil.
+	// Used only by ChatGPT Web image scheduling.
+	ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]Account, error)
+	ListActiveAllowingTextRateLimitByPlatforms(ctx context.Context, platforms []string) ([]Account, error)
 	ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error)
 	ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]Account, error)
 
@@ -70,6 +74,9 @@ type AccountRepository interface {
 	SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error
 	ClearTempUnschedulable(ctx context.Context, id int64) error
 	ClearRateLimit(ctx context.Context, id int64) error
+	// Web image path cooldown (durable). Independent of text SetRateLimited/ClearRateLimit.
+	SetWebImageRateLimited(ctx context.Context, id int64, resetAt time.Time) error
+	ClearWebImageRateLimit(ctx context.Context, id int64) error
 	ClearAntigravityQuotaScopes(ctx context.Context, id int64) error
 	ClearModelRateLimits(ctx context.Context, id int64) error
 	UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error

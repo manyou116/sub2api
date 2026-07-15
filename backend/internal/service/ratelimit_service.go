@@ -1739,6 +1739,10 @@ func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) 
 			slog.Warn("temp_unsched_cache_delete_failed", "account_id", accountID, "error", err)
 		}
 	}
+	// Also clear durable web-image cooldown so bulk "reset status" unblocks image scheduling.
+	if err := s.accountRepo.ClearWebImageRateLimit(ctx, accountID); err != nil {
+		return err
+	}
 	s.ResetOpenAI403Counter(ctx, accountID)
 	s.notifyAccountSchedulingBlockCleared(accountID)
 	return nil

@@ -46,6 +46,8 @@ type APIKey struct {
 	User                *User
 	Group               *Group
 	CurrentConcurrency  int
+	// CurrentImageConcurrency is active image-generation requests for this key.
+	CurrentImageConcurrency int
 
 	// Quota fields
 	Quota     float64    // Quota limit in USD (0 = unlimited)

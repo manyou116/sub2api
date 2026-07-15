@@ -115,6 +115,7 @@ export default {
         todayStats: '今日统计',
         groups: '分组',
         usageWindows: '用量窗口',
+        webImages: 'Web 生图',
         proxy: '代理',
         lastUsed: '最近使用',
         createdAt: '创建时间',
@@ -140,6 +141,10 @@ export default {
       subscriptionExpires: '到期',
       // 容量状态提示
       capacity: {
+        webImages: {
+          disabled: 'Web 生图未开启',
+          tooltip: 'Web 生图 剩余 {remaining} · 在途 {inflight}/{max} · 成功 {success} / 失败 {fail}'
+        },
         windowCost: {
           blocked: '5h窗口费用超限，账号暂停调度',
           stickyOnly: '5h窗口费用达阈值，仅允许粘性会话',
@@ -408,6 +413,14 @@ export default {
       bulkSchedulablePartial: '部分调度更新成功：成功 {success} 个，失败 {failed} 个',
       bulkSchedulableResultUnknown: '批量调度结果不完整，请稍后重试或刷新列表',
       bulkActions: {
+        webImagesEnableShort: '开 Web 生图',
+        webImagesDisableShort: '关 Web 生图',
+        webImagesProbeShort: '探 Web 额度',
+        webImagesEnable: '批量开启 Web 生图',
+        webImagesDisable: '批量关闭 Web 生图',
+        webImagesProbe: '批量探测 Web 额度',
+        webImagesSuccess: 'Web images updated: {count}',
+        webImagesPartial: 'Web images partial: {success} ok, {failed} failed',
         selected: '已选择 {count} 个账号',
         selectCurrentPage: '本页全选',
         clear: '清除选择',
@@ -501,6 +514,58 @@ export default {
       apiKeyPlaceholder: 'sk-ant-api03-...',
       apiKeyHint: '您的 Claude Console API Key',
       // OpenAI specific hints
+      
+      webImages: {
+        title: 'ChatGPT Web 生图',
+        bulkDesc: '批量设置选中/筛选账号的 ChatGPT Web 生图开关、并发与优先级。',
+        enableSwitch: '启用 Web 生图路径',
+        enableMode: '启用方式',
+        enableModeInherit: '跟随全局',
+        enableModeOn: '强制开启',
+        enableModeOff: '强制关闭',
+        enableModeHint: '跟随全局时使用 gateway.openai_web_images.default_enabled（环境变量 GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED）。仅在需要例外账号时强制开/关。',
+        inheritShort: '全局',
+
+        probeAfterApply: '应用后立即探测 Web 额度',
+
+        modelMode: '模型策略',
+        modelModeAuto: '自动（按套餐预设）',
+        modelModeFixed: '自定义固定',
+                modelModeHint: '默认按 plan_type 自动选择已验证组合；自定义后强制使用指定模型与思考深度。Pro 模型/深度通常需要 Pro 订阅。',
+        upstreamModel: '上游模型',
+        thinkingEffort: '思考深度',
+        resolvedPreview: '实际生效：{model} / {effort}（{source}）',
+        desc: '使用官网 Web 额度 (picture_v2)。全局默认 + 账号继承/覆盖；有效开启时 /v1/images 走 Web 路径。',
+        on: '已开启',
+        off: '未开启',
+        remaining: '剩余额度',
+        inflight: '在途',
+        success: '成功',
+        fail: '失败',
+        offShort: '关',
+        unknownShort: '?',
+        unknown: '未知',
+        maxInflight: '最大并发',
+
+        rateLimitedShort: '限流',
+        rateLimited: 'Web 生图限流中',
+        rateLimitedCountdown: '限流倒计时 {time}',        priority: '优先级',
+        enable: '开启',
+        disable: '关闭',
+        probe: '探测额度',
+        refresh: '刷新状态',
+        apply: '应用配置',
+        unschedulable: '暂不可调度',
+        reason: {
+          disabled: '未开启',
+          quotaUnknown: '额度未知',
+          noQuota: '额度用尽',
+          inflightFull: '并发已满',
+          cooldown: '冷却中',
+          inactive: '账号未激活'
+        }
+      },
+
       openai: {
         baseUrlHint: '留空使用官方 OpenAI API',
         apiKeyHint: '您的 OpenAI API Key',
@@ -550,9 +615,6 @@ export default {
         responsesStatusAutoUnknown: '自动探测：未探测',
         responsesStatusForcedResponses: '已强制 Responses',
         responsesStatusForcedChatCompletions: '已强制 Chat Completions',
-        planType: '订阅档位（手动覆盖）',
-        planTypeDesc: '手动纠正本账号的 ChatGPT 订阅档位（Plus / Pro / Free）。注意：令牌临期刷新或命中 429 限流时，会用真实档位自动覆盖此处设置。',
-        planTypeClear: '清空（自动识别）',
         codexCLIOnly: '仅允许 Codex 官方客户端',
         codexCLIOnlyDesc: '仅对 OpenAI OAuth 生效。开启后仅允许 Codex 官方客户端家族访问；关闭后完全绕过并保持原逻辑。',
         codexCLIOnlyAppServer: '允许 Codex app-server 客户端',

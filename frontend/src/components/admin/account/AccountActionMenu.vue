@@ -46,6 +46,17 @@
               <Icon name="sync" size="sm" />
               {{ t('admin.accounts.recoverState') }}
             </button>
+            <template v-if="isOpenAIWebImagesCapable">
+              <div class="my-1 border-t border-gray-100 dark:border-dark-700"></div>
+              <button @click="$emit('web-images-toggle', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700">
+                <Icon name="sparkles" size="sm" class="text-violet-500" />
+                {{ webImagesToggleLabel }}
+              </button>
+              <button @click="$emit('web-images-probe', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-dark-700">
+                <Icon name="refresh" size="sm" class="text-cyan-500" />
+                {{ t('admin.accounts.webImages.probe') }}
+              </button>
+            </template>
             <button v-if="hasQuotaLimit" @click="$emit('reset-quota', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-teal-600 hover:bg-gray-100 dark:hover:bg-dark-700">
               <Icon name="refresh" size="sm" />
               {{ t('admin.accounts.resetQuota') }}
@@ -62,9 +73,10 @@ import { computed, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
+import type { OpenAIWebImagesStatus } from '@/api/admin/accounts'
 
-const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
-const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow'])
+const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null; webImagesStatus?: OpenAIWebImagesStatus | null }>()
+const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow', 'web-images-toggle', 'web-images-probe'])
 const { t } = useI18n()
 const isRateLimited = computed(() => {
   if (props.account?.rate_limit_reset_at && new Date(props.account.rate_limit_reset_at) > new Date()) {
@@ -86,6 +98,20 @@ const hasRecoverableState = computed(() => {
 })
 const isAntigravityOAuth = computed(() => props.account?.platform === 'antigravity' && props.account?.type === 'oauth')
 const isOpenAIOAuth = computed(() => props.account?.platform === 'openai' && props.account?.type === 'oauth')
+const isOpenAIWebImagesCapable = computed(() => {
+  const acc = props.account
+  return !!acc && acc.platform === 'openai' && (acc.type === 'oauth' || acc.type === 'setup-token')
+})
+const webImagesEnabled = computed(() => {
+  if (props.webImagesStatus) return Boolean(props.webImagesStatus.enabled)
+  const extra = (props.account?.extra || {}) as Record<string, any>
+  const cfg = extra.openai_web_images
+  // Without status, only explicit account override is known (global inherit may still be on).
+  return !!(cfg && typeof cfg === 'object' && cfg.enabled === true)
+})
+const webImagesToggleLabel = computed(() =>
+  webImagesEnabled.value ? t('admin.accounts.webImages.disable') : t('admin.accounts.webImages.enable')
+)
 // 影子账号(链接型,持 parent_account_id)不持凭据、type 不可变,凭据/隐私类操作对其无效。
 const isShadow = computed(() => props.account?.parent_account_id != null)
 // A "parent" OpenAI OAuth account is one that is NOT itself a shadow (parent_account_id == null)

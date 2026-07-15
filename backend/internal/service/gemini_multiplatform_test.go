@@ -141,6 +141,14 @@ func (m *mockAccountRepoForGemini) ListSchedulableByGroupIDAndPlatforms(ctx cont
 	}
 	return m.ListSchedulableByPlatforms(ctx, platforms)
 }
+
+func (m *mockAccountRepoForGemini) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
+	return nil, nil
+}
+func (m *mockAccountRepoForGemini) ListActiveAllowingTextRateLimitByPlatforms(context.Context, []string) ([]Account, error) {
+	return nil, nil
+}
+
 func (m *mockAccountRepoForGemini) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	return m.ListSchedulableByPlatform(ctx, platform)
 }
@@ -163,6 +171,11 @@ func (m *mockAccountRepoForGemini) ClearTempUnschedulable(ctx context.Context, i
 	return nil
 }
 func (m *mockAccountRepoForGemini) ClearRateLimit(ctx context.Context, id int64) error { return nil }
+func (m *mockAccountRepoForGemini) SetWebImageRateLimited(context.Context, int64, time.Time) error {
+	return nil
+}
+func (m *mockAccountRepoForGemini) ClearWebImageRateLimit(context.Context, int64) error { return nil }
+
 func (m *mockAccountRepoForGemini) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
 	return nil
 }

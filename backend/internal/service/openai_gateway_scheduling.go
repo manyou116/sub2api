@@ -204,10 +204,21 @@ func openAICompactSupportTier(account *Account) int {
 // 检查母账号凭据可用性；该检查未内置于本函数，以避免注入 DB 依赖。
 func isOpenAICompatibleAccountEligibleForRequest(ctx context.Context, account *Account, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
 	platform = normalizeOpenAICompatiblePlatform(platform)
-	if account == nil || account.Platform != platform || !account.IsOpenAICompatible() || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
+	if account == nil || account.Platform != platform || !account.IsOpenAICompatible() {
 		return false
 	}
-	if account.IsOpenAI() {
+	// Image models: do not inherit text/Codex RateLimitResetAt. Web image path has its own quota.
+	if isOpenAIImageGenerationModel(requestedModel) {
+		if !account.IsSchedulableIgnoringTextRateLimit() {
+			return false
+		}
+		if account.isModelRateLimitedWithContext(ctx, requestedModel) {
+			return false
+		}
+	} else if !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
+		return false
+	}
+	if account.IsOpenAI() && !isOpenAIImageGenerationModel(requestedModel) {
 		if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
 			// Debug level: this fires per-candidate on the scheduling hot path, so Info
 			// would amplify into log spam once several accounts cross the threshold.
@@ -659,7 +670,7 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
-	if s.isOpenAIAccountRuntimeBlocked(account) {
+	if s.isOpenAIAccountRuntimeBlockedForRequest(account, "", requestedModel) {
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
@@ -809,7 +820,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		if err != nil {
 			return nil, err
 		}
-		result, err := s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
+		result, err := s.tryAcquireAccountSlotForOpenAIRequest(ctx, account, requestedModel, "")
 		if err == nil && result != nil && result.Acquired {
 			return s.newAcquiredSelectionResult(ctx, account, result.ReleaseFunc)
 		}
@@ -835,6 +846,11 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
 	if err != nil {
 		return nil, err
+	}
+	if isOpenAIImageGenerationModel(requestedModel) {
+		if extra, e2 := s.listAccountsAllowingTextRateLimit(ctx, groupID, platform); e2 == nil && len(extra) > 0 {
+			accounts = mergeAccountsByID(accounts, extra)
+		}
 	}
 	if len(accounts) == 0 {
 		return nil, ErrNoAvailableAccounts
@@ -864,7 +880,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if !openAIStickyAccountMatchesGroup(account, groupID) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
-					} else if s.isOpenAIAccountRuntimeBlocked(account) {
+					} else if s.isOpenAIAccountRuntimeBlockedForRequest(account, "", requestedModel) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
@@ -927,7 +943,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		if !parentHealthyForShadow(acc, parentLookupL2) {
 			continue
 		}
-		if s.isOpenAIAccountRuntimeBlocked(acc) {
+		if s.isOpenAIAccountRuntimeBlockedForRequest(acc, "", requestedModel) {
 			continue
 		}
 		if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, acc, requestedModel, requireCompact) {
@@ -1020,7 +1036,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, fresh, requestedModel, requireCompact) {
 				continue
 			}
-			result, err := s.tryAcquireAccountSlot(ctx, fresh.ID, fresh.Concurrency)
+			result, err := s.tryAcquireAccountSlotForOpenAIRequest(ctx, fresh, requestedModel, "")
 			if err == nil && result != nil && result.Acquired {
 				selection, selectErr := s.newAcquiredSelectionResult(ctx, fresh, result.ReleaseFunc)
 				if selectErr != nil {
@@ -1054,7 +1070,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, fresh, requestedModel, requireCompact) {
 				continue
 			}
-			result, err := s.tryAcquireAccountSlot(ctx, fresh.ID, fresh.Concurrency)
+			result, err := s.tryAcquireAccountSlotForOpenAIRequest(ctx, fresh, requestedModel, "")
 			if err == nil && result != nil && result.Acquired {
 				selection, selectErr := s.newAcquiredSelectionResult(ctx, fresh, result.ReleaseFunc)
 				if selectErr != nil {
@@ -1134,6 +1150,28 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 	return accounts, nil
 }
 
+// listAccountsAllowingTextRateLimit loads active accounts including those currently text-rate-limited.
+// Used to supplement image scheduling so Web-image OAuth accounts are not hidden by Codex/text 429.
+func (s *OpenAIGatewayService) listAccountsAllowingTextRateLimit(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
+	if s == nil || s.accountRepo == nil {
+		return nil, nil
+	}
+	platform = normalizeOpenAICompatiblePlatform(platform)
+	var (
+		accounts []Account
+		err      error
+	)
+	if groupID != nil {
+		accounts, err = s.accountRepo.ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(ctx, *groupID, []string{platform})
+	} else {
+		accounts, err = s.accountRepo.ListActiveAllowingTextRateLimitByPlatforms(ctx, []string{platform})
+	}
+	if err != nil {
+		return nil, err
+	}
+	return accounts, nil
+}
+
 func (s *OpenAIGatewayService) tryAcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int) (*AcquireResult, error) {
 	if s.concurrencyService == nil {
 		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
@@ -1162,7 +1200,7 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAIAccount(ctx context.
 	if !parentHealthyForShadow(fresh, s.parentAccountLookup(ctx)) {
 		return nil
 	}
-	if s.isOpenAIAccountRuntimeBlocked(fresh) {
+	if s.isOpenAIAccountRuntimeBlockedForRequest(fresh, "", requestedModel) {
 		return nil
 	}
 	return fresh
@@ -1207,7 +1245,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDB(ctx context.Co
 	if !parentHealthyForShadow(latest, s.parentAccountLookup(ctx)) {
 		return nil
 	}
-	if s.isOpenAIAccountRuntimeBlocked(latest) {
+	if s.isOpenAIAccountRuntimeBlockedForRequest(latest, "", requestedModel) {
 		return nil
 	}
 	return latest

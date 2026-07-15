@@ -30,6 +30,10 @@ func (r *accountUsageCodexProbeRepo) SetRateLimited(_ context.Context, _ int64, 
 	}
 	return nil
 }
+func (r *accountUsageCodexProbeRepo) SetWebImageRateLimited(context.Context, int64, time.Time) error {
+	return nil
+}
+func (r *accountUsageCodexProbeRepo) ClearWebImageRateLimit(context.Context, int64) error { return nil }
 
 func TestShouldRefreshOpenAICodexSnapshot(t *testing.T) {
 	t.Parallel()

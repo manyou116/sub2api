@@ -159,6 +159,7 @@ export default {
         todayStats: 'Today Stats',
         groups: 'Groups',
         usageWindows: 'Usage Windows',
+        webImages: 'Web Images',
         proxy: 'Proxy',
         lastUsed: 'Last Used',
         createdAt: 'Created',
@@ -184,6 +185,10 @@ export default {
       subscriptionExpires: 'Expires',
       // Capacity status tooltips
       capacity: {
+        webImages: {
+          disabled: 'Web images disabled',
+          tooltip: 'Web images remaining {remaining} · inflight {inflight}/{max} · success {success} / fail {fail}'
+        },
         windowCost: {
           blocked: '5h window cost exceeded, account scheduling paused',
           stickyOnly: '5h window cost at threshold, only sticky sessions allowed',
@@ -304,6 +309,14 @@ export default {
       bulkSchedulablePartial: 'Scheduling updated partially: {success} succeeded, {failed} failed',
       bulkSchedulableResultUnknown: 'Bulk scheduling result incomplete. Please retry or refresh.',
       bulkActions: {
+        webImagesEnableShort: 'Web On',
+        webImagesDisableShort: 'Web Off',
+        webImagesProbeShort: 'Web Probe',
+        webImagesEnable: 'Enable Web Images',
+        webImagesDisable: 'Disable Web Images',
+        webImagesProbe: 'Probe Web Quota',
+        webImagesSuccess: 'Web images updated: {count}',
+        webImagesPartial: 'Web images partial: {success} ok, {failed} failed',
         selected: '{count} account(s) selected',
         selectCurrentPage: 'Select this page',
         clear: 'Clear selection',
@@ -396,6 +409,58 @@ export default {
       apiKeyPlaceholder: 'sk-ant-api03-...',
       apiKeyHint: 'Your Claude Console API Key',
       // OpenAI specific hints
+      
+      webImages: {
+        title: 'ChatGPT Web Images',
+        bulkDesc: 'Batch set ChatGPT Web image switch, concurrency and priority for selected/filtered accounts.',
+        enableSwitch: 'Enable Web image path',
+        enableMode: 'Enable mode',
+        enableModeInherit: 'Inherit global',
+        enableModeOn: 'Force on',
+        enableModeOff: 'Force off',
+        enableModeHint: 'Inherit uses gateway.openai_web_images.default_enabled (env GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED). Force on/off only for account exceptions.',
+        inheritShort: 'global',
+
+        probeAfterApply: 'Probe Web quota after apply',
+
+        modelMode: 'Model Strategy',
+        modelModeAuto: 'Auto (plan preset)',
+        modelModeFixed: 'Custom fixed',
+                modelModeHint: 'Default uses verified presets by plan_type. Fixed mode forces model and thinking effort. Pro model/depth usually requires a Pro plan.',
+        upstreamModel: 'Upstream Model',
+        thinkingEffort: 'Thinking Effort',
+        resolvedPreview: 'Resolved: {model} / {effort} ({source})',
+        desc: 'Use official Web image quota (picture_v2). Global default + per-account inherit/override; when effective, /v1/images uses Web path.',
+        on: 'On',
+        off: 'Off',
+        remaining: 'Remaining',
+        inflight: 'Inflight',
+        success: 'Success',
+        fail: 'Fail',
+        offShort: 'off',
+        unknownShort: '?',
+        unknown: 'Unknown',
+        maxInflight: 'Max Inflight',
+
+        rateLimitedShort: 'RL',
+        rateLimited: 'Web image rate limited',
+        rateLimitedCountdown: 'Rate limited: {time}',        priority: 'Priority',
+        enable: 'Enable',
+        disable: 'Disable',
+        probe: 'Probe Quota',
+        refresh: 'Refresh',
+        apply: 'Apply',
+        unschedulable: 'Unschedulable',
+        reason: {
+          disabled: 'Disabled',
+          quotaUnknown: 'Quota unknown',
+          noQuota: 'No quota',
+          inflightFull: 'Inflight full',
+          cooldown: 'Cooldown',
+          inactive: 'Inactive'
+        }
+      },
+
       openai: {
         baseUrlHint: 'Leave default for official OpenAI API',
         apiKeyHint: 'Your OpenAI API Key',
@@ -449,10 +514,6 @@ export default {
         responsesStatusAutoUnknown: 'Auto probe: unknown',
         responsesStatusForcedResponses: 'Forced Responses',
         responsesStatusForcedChatCompletions: 'Forced Chat Completions',
-        planType: 'Plan tier (manual override)',
-        planTypeDesc:
-          "Manually correct this account's ChatGPT plan tier (Plus / Pro / Free). Note: a token refresh near expiry or a 429 rate-limit response will auto-overwrite this with the real tier.",
-        planTypeClear: 'Clear (auto-detect)',
         codexCLIOnly: 'Codex official clients only',
         codexCLIOnlyDesc:
           'Only applies to OpenAI OAuth. When enabled, only Codex official client families are allowed; when disabled, the gateway bypasses this restriction and keeps existing behavior.',

@@ -109,6 +109,7 @@ export interface AdminUser extends User {
   group_rates?: Record<number, number>
   // 当前并发数（仅管理员列表接口返回）
   current_concurrency?: number
+  current_image_concurrency?: number
 }
 
 export interface LoginRequest {
@@ -888,6 +889,7 @@ export interface Account {
   concurrency: number
   load_factor?: number | null
   current_concurrency?: number // Real-time concurrency count from Redis
+  current_image_concurrency?: number // Real-time image generation concurrency
   scheduler_score?: {
     base_score: number
     sticky_score?: number

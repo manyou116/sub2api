@@ -146,6 +146,16 @@ func (c *stubConcurrencyCacheForTest) GetAPIKeyConcurrencyBatch(_ context.Contex
 	}
 	return result, nil
 }
+func (c *stubConcurrencyCacheForTest) TrackAPIKeyImageSlot(_ context.Context, apiKeyID int64, requestID string) error {
+	return c.TrackAPIKeySlot(context.Background(), apiKeyID, "img:"+requestID)
+}
+func (c *stubConcurrencyCacheForTest) ReleaseAPIKeyImageSlot(_ context.Context, apiKeyID int64, requestID string) error {
+	return c.ReleaseAPIKeySlot(context.Background(), apiKeyID, "img:"+requestID)
+}
+func (c *stubConcurrencyCacheForTest) GetAPIKeyImageConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error) {
+	return c.GetAPIKeyConcurrencyBatch(ctx, apiKeyIDs)
+}
+
 func (c *stubConcurrencyCacheForTest) IncrementWaitCount(_ context.Context, _ int64, _ int) (bool, error) {
 	return c.waitAllowed, c.waitErr
 }

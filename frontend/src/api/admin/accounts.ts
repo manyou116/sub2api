@@ -804,6 +804,123 @@ export async function createSparkShadow(parentId: number, payload: SparkShadowCr
   return data
 }
 
+
+export type OpenAIWebImagesModelMode = 'auto' | 'fixed'
+export type OpenAIWebImagesEnabledMode = 'inherit' | 'on' | 'off'
+
+export interface OpenAIWebImagesPatch {
+  enabled?: boolean
+  /** inherit = remove per-account override (use GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED) */
+  enabled_mode?: OpenAIWebImagesEnabledMode
+  max_inflight?: number
+  priority?: number
+  model_mode?: OpenAIWebImagesModelMode
+  model?: string
+  thinking_effort?: string
+}
+
+export interface OpenAIWebImagesStatus {
+  account_id: number
+  email?: string
+  enabled: boolean
+  /** global = inherits default_enabled; account = explicit override */
+  enabled_source?: 'global' | 'account' | string
+  default_enabled?: boolean
+  max_inflight: number
+  priority: number
+  model_mode?: OpenAIWebImagesModelMode | string
+  model?: string
+  thinking_effort?: string
+  plan_type?: string
+  resolved_model?: string
+  resolved_thinking_effort?: string
+  resolve_source?: string
+  current_inflight: number
+  available_slots: number
+  remaining?: number | null
+  reset_at?: string | null
+  probed_at?: string | null
+  quota_known: boolean
+  schedulable: boolean
+  unschedulable_reason?: string
+  rate_limited?: boolean
+  cooldown_until?: string | null
+  cooldown_seconds?: number
+  stats?: {
+    success: number
+    fail: number
+    last_success_at?: string
+    last_fail_at?: string
+    last_error?: string
+    last_used_at?: string
+  }
+}
+
+export interface OpenAIWebImagesBulkResult {
+  matched: number
+  updated: number
+  failed: number
+  probe_job_id?: string
+  errors?: Array<{ account_id: number; error: string }>
+}
+
+export async function patchOpenAIWebImages(
+  id: number,
+  patch: OpenAIWebImagesPatch
+): Promise<OpenAIWebImagesStatus> {
+  const { data } = await apiClient.patch<OpenAIWebImagesStatus>(`/admin/accounts/${id}/openai-web-images`, patch)
+  return data
+}
+
+export async function getOpenAIWebImagesStatus(id: number): Promise<OpenAIWebImagesStatus> {
+  const { data } = await apiClient.get<OpenAIWebImagesStatus>(`/admin/accounts/${id}/openai-web-images/status`)
+  return data
+}
+
+export async function probeOpenAIWebImages(id: number): Promise<OpenAIWebImagesStatus> {
+  const { data } = await apiClient.post<OpenAIWebImagesStatus>(`/admin/accounts/${id}/openai-web-images/probe`)
+  return data
+}
+
+export async function clearOpenAIWebImagesCooldown(id: number): Promise<OpenAIWebImagesStatus> {
+  const { data } = await apiClient.post<OpenAIWebImagesStatus>(`/admin/accounts/${id}/openai-web-images/clear-cooldown`)
+  return data
+}
+
+export async function bulkClearOpenAIWebImagesCooldown(account_ids: number[]): Promise<{ matched: number; cleared: number }> {
+  const { data } = await apiClient.post<{ matched: number; cleared: number }>(
+    '/admin/accounts/openai-web-images/bulk-clear-cooldown',
+    { account_ids }
+  )
+  return data
+}
+
+export async function bulkOpenAIWebImages(payload: {
+  account_ids: number[]
+  patch?: OpenAIWebImagesPatch
+  actions?: { probe?: boolean }
+}): Promise<OpenAIWebImagesBulkResult> {
+  const { data } = await apiClient.post<OpenAIWebImagesBulkResult>('/admin/accounts/openai-web-images/bulk', payload)
+  return data
+}
+
+
+export async function overviewOpenAIWebImages(ids: number[]): Promise<OpenAIWebImagesStatus[]> {
+  if (!ids.length) return []
+  const { data } = await apiClient.get<{ items: OpenAIWebImagesStatus[] }>(
+    '/admin/accounts/openai-web-images/overview',
+    { params: { ids: ids.join(',') } }
+  )
+  return data?.items ?? []
+}
+
+export async function bulkProbeOpenAIWebImages(account_ids: number[]): Promise<{ id: string; status: string }> {
+  const { data } = await apiClient.post<{ id: string; status: string }>('/admin/accounts/openai-web-images/bulk-probe', {
+    account_ids
+  })
+  return data
+}
+
 export const accountsAPI = {
   list,
   listWithEtag,
@@ -849,7 +966,15 @@ export const accountsAPI = {
   revertProxyFallback,
   queryOpenAIQuota,
   resetOpenAIQuota,
-  createSparkShadow
+  createSparkShadow,
+  patchOpenAIWebImages,
+  getOpenAIWebImagesStatus,
+  probeOpenAIWebImages,
+  clearOpenAIWebImagesCooldown,
+  bulkClearOpenAIWebImagesCooldown,
+  bulkOpenAIWebImages,
+  bulkProbeOpenAIWebImages,
+  overviewOpenAIWebImages
 }
 
 export default accountsAPI

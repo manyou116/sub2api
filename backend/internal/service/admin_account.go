@@ -307,6 +307,15 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				normalizedExtra[key] = v
 			}
 		}
+		// Fork webimg: preserve openai_web_images unless the caller explicitly sent the key.
+		// Generic UpdateAccount replaces the whole extra object; partial extra patches must not wipe web image config/stats.
+		if _, provided := input.Extra["openai_web_images"]; !provided {
+			if account.Extra != nil {
+				if v, ok := account.Extra["openai_web_images"]; ok {
+					normalizedExtra["openai_web_images"] = v
+				}
+			}
+		}
 		account.Extra = normalizedExtra
 		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
 			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态

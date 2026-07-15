@@ -151,6 +151,13 @@ func (s *accountRepoStub) ListSchedulableByGroupIDAndPlatforms(ctx context.Conte
 	panic("unexpected ListSchedulableByGroupIDAndPlatforms call")
 }
 
+func (s *accountRepoStub) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
+	panic("unexpected ListActiveAllowingTextRateLimitByGroupIDAndPlatforms call")
+}
+func (s *accountRepoStub) ListActiveAllowingTextRateLimitByPlatforms(context.Context, []string) ([]Account, error) {
+	panic("unexpected ListActiveAllowingTextRateLimitByPlatforms call")
+}
+
 func (s *accountRepoStub) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	panic("unexpected ListSchedulableUngroupedByPlatform call")
 }
@@ -182,6 +189,8 @@ func (s *accountRepoStub) ClearTempUnschedulable(ctx context.Context, id int64) 
 func (s *accountRepoStub) ClearRateLimit(ctx context.Context, id int64) error {
 	panic("unexpected ClearRateLimit call")
 }
+func (s *accountRepoStub) SetWebImageRateLimited(context.Context, int64, time.Time) error { return nil }
+func (s *accountRepoStub) ClearWebImageRateLimit(context.Context, int64) error            { return nil }
 
 func (s *accountRepoStub) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
 	panic("unexpected ClearAntigravityQuotaScopes call")

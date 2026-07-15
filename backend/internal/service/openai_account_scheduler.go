@@ -409,7 +409,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		return nil, false, nil
 	}
-	if shouldClearStickySession(account, req.RequestedModel) || account.Platform != normalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() || !account.IsSchedulable() {
+	if shouldClearStickySession(account, req.RequestedModel) || account.Platform != normalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() || !s.service.isAccountSchedulableForOpenAIRequest(ctx, account, req.RequiredImageCapability) {
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		return nil, false, nil
 	}
@@ -435,14 +435,10 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		)
 		return nil, true, nil
 	}
-	result, acquireErr := s.service.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
+	result, acquireErr := s.acquireAccountSlotForSchedule(ctx, account, req)
 	if acquireErr == nil && result != nil && result.Acquired {
 		_ = s.service.refreshStickySessionTTL(ctx, req.GroupID, sessionHash, s.service.openAIWSSessionStickyTTL())
-		return &AccountSelectionResult{
-			Account:     account,
-			Acquired:    true,
-			ReleaseFunc: result.ReleaseFunc,
-		}, false, nil
+		return result, false, nil
 	}
 
 	cfg := s.service.schedulingConfig()
@@ -992,7 +988,7 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrder(
 			compactBlocked = true
 			continue
 		}
-		result, acquireErr := s.service.tryAcquireAccountSlot(ctx, fresh.ID, fresh.Concurrency)
+		result, acquireErr := s.acquireAccountSlotForSchedule(ctx, fresh, req)
 		if acquireErr != nil {
 			return nil, compactBlocked, acquireErr
 		}
@@ -1000,11 +996,7 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrder(
 			if req.SessionHash != "" && !req.PreserveStickyBinding {
 				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, fresh.ID)
 			}
-			return &AccountSelectionResult{
-				Account:     fresh,
-				Acquired:    true,
-				ReleaseFunc: result.ReleaseFunc,
-			}, compactBlocked, nil
+			return result, compactBlocked, nil
 		}
 	}
 	return nil, compactBlocked, nil
@@ -1048,7 +1040,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 		if req.RequireCompact && openAICompactSupportTier(account) == 0 {
 			continue
 		}
-		result, acquireErr := s.service.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
+		result, acquireErr := s.acquireAccountSlotForSchedule(ctx, account, req)
 		if acquireErr != nil {
 			return nil, acquireErr
 		}
@@ -1056,11 +1048,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			if req.SessionHash != "" && !req.PreserveStickyBinding {
 				_ = s.service.BindStickySession(ctx, req.GroupID, req.SessionHash, account.ID)
 			}
-			return &AccountSelectionResult{
-				Account:     account,
-				Acquired:    true,
-				ReleaseFunc: result.ReleaseFunc,
-			}, nil
+			return result, nil
 		}
 		if s.service.concurrencyService != nil {
 			cfg := s.service.schedulingConfig()
@@ -1086,6 +1074,13 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	if err != nil {
 		return nil, 0, 0, 0, err
 	}
+	// Image path: also pull text-rate-limited OAuth accounts that can still serve Web images.
+	// Snapshot/DB ListSchedulable* excludes RateLimitResetAt windows, which hid account 74-like cases.
+	if req.RequiredImageCapability != "" || isOpenAIImageGenerationModel(req.RequestedModel) {
+		if extra, e2 := s.service.listAccountsAllowingTextRateLimit(ctx, req.GroupID, req.Platform); e2 == nil && len(extra) > 0 {
+			accounts = mergeAccountsByID(accounts, extra)
+		}
+	}
 	if len(accounts) == 0 {
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false)
 	}
@@ -1105,10 +1100,13 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 				continue
 			}
 		}
-		if !account.IsSchedulable() || account.Platform != normalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() {
+		if account.Platform != normalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() {
 			continue
 		}
-		if s.service.isOpenAIAccountRuntimeBlocked(account) {
+		if !s.service.isAccountSchedulableForOpenAIRequest(ctx, account, req.RequiredImageCapability) {
+			continue
+		}
+		if s.service.isOpenAIAccountRuntimeBlockedForRequest(account, req.RequiredImageCapability, req.RequestedModel) {
 			continue
 		}
 		// require_privacy_set: 跳过 privacy 未设置的账号并标记异常
@@ -1366,15 +1364,19 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(ctx context.C
 	if account == nil {
 		return false
 	}
-	if s != nil && s.service != nil && s.service.isOpenAIAccountRuntimeBlocked(account) {
+	// Durable web-image cooldown (Postgres) — filter before attempt to avoid burning switches.
+	if accountBlockedByWebImageCooldown(account, req) {
 		return false
 	}
-	// Quota auto-pause must be evaluated during the initial filter too. Without it the
-	// TopK candidate pool can be filled with paused accounts and the later fresh/DB
-	// rechecks won't reach healthy accounts that fell outside TopK — manifesting as
-	// "no available accounts" even though healthy ones exist.
-	if paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+	if s != nil && s.service != nil && s.service.isOpenAIAccountRuntimeBlockedForRequest(account, req.RequiredImageCapability, req.RequestedModel) {
 		return false
+	}
+	// Codex 5h/7d auto-pause is a text-channel signal. Web image path has independent quota
+	// and must not be blocked when only Codex windows are exhausted.
+	if s == nil || s.service == nil || !s.service.shouldBypassTextRateLimitForWebImages(account, req.RequiredImageCapability, req.RequestedModel) {
+		if paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+			return false
+		}
 	}
 	// 母账号健康联动：影子账号的凭据来自母账号，母账号不可调度时影子也不应被选中。
 	// Parent-health gate: shadow borrows the parent's credentials; an unschedulable
@@ -2206,4 +2208,29 @@ func calcLoadSkewByMoments(sum float64, sumSquares float64, count int) float64 {
 		variance = 0
 	}
 	return math.Sqrt(variance)
+}
+
+func mergeAccountsByID(base []Account, extra []Account) []Account {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[int64]struct{}, len(base)+len(extra))
+	out := make([]Account, 0, len(base)+len(extra))
+	for i := range base {
+		id := base[i].ID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, base[i])
+	}
+	for i := range extra {
+		id := extra[i].ID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, extra[i])
+	}
+	return out
 }
