@@ -825,6 +825,11 @@ func (s *KiroChatService) ChatCompletions(
 		result.Duration = time.Since(startedAt)
 	}()
 
+	// Estimate cache_read before writing the client body so both the OpenAI
+	// usage payload and RecordUsage see the same split. Upstream frames may
+	// still overwrite with real cache tokens via applyKiroFrameUsage (>0 only).
+	applyKiroEstimatedCacheUsage(result, &req, conversationID)
+
 	if req.Stream {
 		if err := s.streamToOpenAISSE(c, resp.Body, req.Model, startedAt, result); err != nil {
 			return result, err
@@ -835,10 +840,12 @@ func (s *KiroChatService) ChatCompletions(
 		}
 	}
 
-	// 输出 token 估算
+	// 输出 token 估算（流式路径可能已从帧里写入）
 	if result.OutputTokens == 0 {
 		result.OutputTokens = approxTokensFromText(result.AssembledContent)
 	}
+	// Re-apply if upstream left cache at 0 (stream frames never set it).
+	applyKiroEstimatedCacheUsage(result, &req, conversationID)
 
 	return result, nil
 }
@@ -932,6 +939,110 @@ func (s *KiroChatService) ProbeTextStream(
 		return result, err
 	}
 	return result, nil
+}
+
+// applyKiroEstimatedCacheUsage fills cache_read when upstream omitted it but we
+// have multi-turn history under a stable conversation id (prompt affinity).
+// OpenAI-style InputTokens stay as the full prompt estimate; billing subtracts
+// cache_read via actualInputTokens = input - cache_read - cache_creation.
+func applyKiroEstimatedCacheUsage(result *KiroChatResult, req *kiroOpenAIRequest, conversationID string) {
+	if result == nil || req == nil {
+		return
+	}
+	if strings.TrimSpace(conversationID) == "" {
+		return
+	}
+	if result.CacheReadInputTokens > 0 || result.CacheCreationInputTokens > 0 {
+		return
+	}
+	if !kiroRequestHasPriorTurns(req) {
+		return
+	}
+	total := result.InputTokens
+	if total <= 0 {
+		total = estimateKiroTokens(*req)
+		result.InputTokens = total
+	}
+	fresh := estimateKiroFreshInputTokens(req)
+	if fresh < 0 {
+		fresh = 0
+	}
+	if fresh >= total {
+		return
+	}
+	result.CacheReadInputTokens = total - fresh
+}
+
+// kiroRequestHasPriorTurns is true when the client already carries assistant/tool
+// history (multi-turn), so conversation cache can apply to the prefix.
+func kiroRequestHasPriorTurns(req *kiroOpenAIRequest) bool {
+	if req == nil || len(req.Messages) < 2 {
+		return false
+	}
+	for _, m := range req.Messages {
+		switch strings.ToLower(strings.TrimSpace(m.Role)) {
+		case "assistant", "tool":
+			return true
+		}
+	}
+	// Two+ user turns without assistant (rare) still share a long prefix.
+	users := 0
+	for _, m := range req.Messages {
+		if strings.EqualFold(strings.TrimSpace(m.Role), "user") {
+			users++
+			if users >= 2 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// estimateKiroFreshInputTokens estimates tokens that are new this turn
+// (last user message + trailing tool results), i.e. not reusable prefix.
+func estimateKiroFreshInputTokens(req *kiroOpenAIRequest) int64 {
+	if req == nil || len(req.Messages) == 0 {
+		return 0
+	}
+	// Walk from the end: accumulate trailing tool + final user message.
+	var fresh int64
+	sawUser := false
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		m := req.Messages[i]
+		role := strings.ToLower(strings.TrimSpace(m.Role))
+		switch role {
+		case "tool":
+			if sawUser {
+				return fresh
+			}
+			fresh += estimateKiroMessageTokens(m)
+		case "user":
+			fresh += estimateKiroMessageTokens(m)
+			sawUser = true
+			return fresh
+		default:
+			if sawUser {
+				return fresh
+			}
+			// trailing assistant without a following user: count nothing fresh
+			return fresh
+		}
+	}
+	return fresh
+}
+
+func estimateKiroMessageTokens(m kiroOpenAIMessage) int64 {
+	var total int64
+	if len(m.Content) > 0 {
+		var s string
+		if err := json.Unmarshal(m.Content, &s); err == nil {
+			total += approxTokensFromText(s)
+		} else {
+			total += approxTokensFromText(string(m.Content))
+		}
+	}
+	total += 4
+	return total
 }
 
 // estimateKiroTokens 估算入参 messages 的总 token 数（粗略）。

@@ -107,6 +107,9 @@ func (s *KiroChatService) Responses(
 	}
 	defer func() { result.Duration = time.Since(startedAt) }()
 
+	// Same as ChatCompletions: estimate before emitting usage to the client.
+	applyKiroEstimatedCacheUsage(result, &openaiReq, conversationID)
+
 	if clientStream {
 		if err := s.streamKiroAsResponses(c, resp.Body, originalModel, startedAt, result, customTools, toolSearch, namespaceTools); err != nil {
 			return result, err
@@ -119,6 +122,8 @@ func (s *KiroChatService) Responses(
 	if result.OutputTokens == 0 {
 		result.OutputTokens = approxTokensFromText(result.AssembledContent)
 	}
+	applyKiroEstimatedCacheUsage(result, &openaiReq, conversationID)
+
 	return result, nil
 }
 

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -478,4 +479,72 @@ func TestExtractKiroDelta_InvalidJSON(t *testing.T) {
 	if ev.Text != "" || ev.ToolUseID != "" {
 		t.Fatalf("expected zero ev, got %+v", ev)
 	}
+}
+
+func TestApplyKiroEstimatedCacheUsage_MultiTurnSetsCacheRead(t *testing.T) {
+	req := kiroOpenAIRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []kiroOpenAIMessage{
+			{Role: "system", Content: mustKiroRawJSON(`long system prompt for cache prefix testing ` + strings.Repeat("rules ", 40))},
+			{Role: "user", Content: mustKiroRawJSON("hello")},
+			{Role: "assistant", Content: mustKiroRawJSON("hi there")},
+			{Role: "user", Content: mustKiroRawJSON("follow up")},
+		},
+	}
+	total := estimateKiroTokens(req)
+	result := &KiroChatResult{InputTokens: total}
+	applyKiroEstimatedCacheUsage(result, &req, "stable-conversation-id")
+	require.Greater(t, result.CacheReadInputTokens, int64(0))
+	require.Less(t, result.CacheReadInputTokens, total)
+	fresh := estimateKiroFreshInputTokens(&req)
+	require.Equal(t, total-fresh, result.CacheReadInputTokens)
+}
+
+func TestApplyKiroEstimatedCacheUsage_FirstTurnNoCache(t *testing.T) {
+	req := kiroOpenAIRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []kiroOpenAIMessage{
+			{Role: "user", Content: mustKiroRawJSON("hello only")},
+		},
+	}
+	result := &KiroChatResult{InputTokens: estimateKiroTokens(req)}
+	applyKiroEstimatedCacheUsage(result, &req, "stable-conversation-id")
+	require.Zero(t, result.CacheReadInputTokens)
+	require.Zero(t, result.CacheCreationInputTokens)
+}
+
+func TestApplyKiroEstimatedCacheUsage_NoConversationID(t *testing.T) {
+	req := kiroOpenAIRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []kiroOpenAIMessage{
+			{Role: "user", Content: mustKiroRawJSON("hello")},
+			{Role: "assistant", Content: mustKiroRawJSON("hi")},
+			{Role: "user", Content: mustKiroRawJSON("again")},
+		},
+	}
+	result := &KiroChatResult{InputTokens: estimateKiroTokens(req)}
+	applyKiroEstimatedCacheUsage(result, &req, "")
+	require.Zero(t, result.CacheReadInputTokens)
+}
+
+func TestApplyKiroEstimatedCacheUsage_DoesNotOverrideUpstream(t *testing.T) {
+	req := kiroOpenAIRequest{
+		Model: "claude-sonnet-4.5",
+		Messages: []kiroOpenAIMessage{
+			{Role: "user", Content: mustKiroRawJSON("hello")},
+			{Role: "assistant", Content: mustKiroRawJSON("hi")},
+			{Role: "user", Content: mustKiroRawJSON("again")},
+		},
+	}
+	result := &KiroChatResult{InputTokens: 100, CacheReadInputTokens: 42}
+	applyKiroEstimatedCacheUsage(result, &req, "stable")
+	require.Equal(t, int64(42), result.CacheReadInputTokens)
+}
+
+func mustKiroRawJSON(s string) json.RawMessage {
+	b, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
