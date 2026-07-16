@@ -734,7 +734,8 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 			return s.sendErrorAndEnd(c, "Grok token provider not configured")
 		}
 		var err error
-		authToken, err = s.grokTokenProvider.GetAccessToken(ctx, account)
+		// Probe path must work for StatusError / temp-unsched / unschedulable accounts.
+		authToken, err = s.grokTokenProvider.GetAccessTokenForProbe(ctx, account)
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to get Grok access token: %s", err.Error()))
 		}
@@ -824,10 +825,45 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(responseBody)))
+		errMsg := fmt.Sprintf("Grok Responses API returned %d: %s", resp.StatusCode, string(responseBody))
+		// Match production: CLI Access denied / spending-limit are durable account errors.
+		if reason, durable := classifyGrokDurableAccountError(resp.StatusCode, responseBody); durable && s.accountRepo != nil {
+			_ = s.accountRepo.SetError(ctx, account.ID, reason)
+			account.Status = StatusError
+			account.ErrorMessage = reason
+			account.Schedulable = false
+		}
+		return s.sendErrorAndEnd(c, errMsg)
 	}
 
+	s.recoverGrokAccountAfterSuccessfulProbe(ctx, account)
 	return s.processOpenAIStream(c, resp.Body)
+}
+
+// recoverGrokAccountAfterSuccessfulProbe clears durable denials after a live 200.
+// Admin test is the recovery path for StatusError / temp-unsched accounts.
+func (s *AccountTestService) recoverGrokAccountAfterSuccessfulProbe(ctx context.Context, account *Account) {
+	if s == nil || s.accountRepo == nil || account == nil {
+		return
+	}
+	if account.Status == StatusError {
+		if err := s.accountRepo.ClearError(ctx, account.ID); err == nil {
+			account.Status = StatusActive
+			account.ErrorMessage = ""
+		}
+	}
+	if account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
+		if err := s.accountRepo.ClearTempUnschedulable(ctx, account.ID); err == nil {
+			account.TempUnschedulableUntil = nil
+			account.TempUnschedulableReason = ""
+		}
+	}
+	// SetError persists schedulable=false; restore it after a successful probe.
+	if !account.Schedulable {
+		if err := s.accountRepo.SetSchedulable(ctx, account.ID, true); err == nil {
+			account.Schedulable = true
+		}
+	}
 }
 
 // testKiroAccountConnection probes Kiro CodeWhisperer with real EventStream

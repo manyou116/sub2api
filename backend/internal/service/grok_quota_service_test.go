@@ -32,6 +32,9 @@ type grokQuotaAccountRepo struct {
 	lastTempUnschedID     int64
 	lastTempUnschedUntil  time.Time
 	lastTempUnschedReason string
+	setErrorCalls         int
+	lastSetErrorID        int64
+	lastSetErrorMsg       string
 	recoveryClearCalls    int
 	recoveryObservedAt    time.Time
 	recoveryObservedReset time.Time
@@ -70,6 +73,20 @@ func (r *grokQuotaAccountRepo) SetTempUnschedulable(_ context.Context, id int64,
 	r.lastTempUnschedID = id
 	r.lastTempUnschedUntil = until
 	r.lastTempUnschedReason = reason
+	return nil
+}
+
+func (r *grokQuotaAccountRepo) SetError(_ context.Context, id int64, errorMsg string) error {
+	r.setErrorCalls++
+	r.lastSetErrorID = id
+	r.lastSetErrorMsg = errorMsg
+	if r.mockAccountRepoForPlatform != nil && r.accountsByID != nil {
+		if acc, ok := r.accountsByID[id]; ok && acc != nil {
+			acc.Status = StatusError
+			acc.ErrorMessage = errorMsg
+			acc.Schedulable = false
+		}
+	}
 	return nil
 }
 

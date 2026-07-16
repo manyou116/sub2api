@@ -1104,17 +1104,95 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		snapshot = applyGrokFreeUsageExhaustedCooldown(snapshot, now, responseBody)
 	}
 	s.updateGrokUsageSnapshot(ctx, account, snapshot)
+	if reason, durable := classifyGrokDurableAccountError(statusCode, responseBody); durable {
+		// Live cli-chat-proxy 403 Access denied + api.x.ai 402 spending-limit are
+		// account/team business denials, not short cooldowns. Mark error until
+		// admin clears or a successful probe recovers the account.
+		s.markGrokAccountError(ctx, account, reason)
+		return
+	}
 	switch statusCode {
 	case http.StatusUnauthorized:
 		s.tempUnscheduleGrok(ctx, account, 10*time.Minute, "grok credentials unauthorized")
-	case http.StatusForbidden:
-		s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "grok access or entitlement denied")
 	case http.StatusTooManyRequests:
 		// updateGrokUsageSnapshot installs both runtime and durable rate-limit state.
 	default:
 		if statusCode >= 500 {
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
+	}
+}
+
+// classifyGrokDurableAccountError maps upstream denials that should hard-stop
+// scheduling (StatusError) rather than temp-unschedulable cooldowns.
+//
+// Confirmed live shapes:
+//   - cli-chat-proxy 403 {"error":"Access denied"} with valid OAuth token
+//   - api.x.ai 402 {"code":"personal-team-blocked:spending-limit",...}
+func classifyGrokDurableAccountError(statusCode int, responseBody []byte) (string, bool) {
+	switch statusCode {
+	case http.StatusForbidden:
+		msg := grokUpstreamErrorMessage(responseBody)
+		lower := strings.ToLower(msg)
+		switch {
+		case msg == "" || strings.Contains(lower, "access denied"):
+			return "grok access denied", true
+		case strings.Contains(lower, "entitlement"),
+			strings.Contains(lower, "subscription required"),
+			strings.Contains(lower, "no active grok subscription"):
+			return "grok entitlement denied", true
+		default:
+			return "grok access denied: " + truncateGrokAccountErrorReason(msg), true
+		}
+	case http.StatusPaymentRequired:
+		if code := strings.TrimSpace(gjson.GetBytes(responseBody, "code").String()); code != "" {
+			return "grok " + code, true
+		}
+		if msg := grokUpstreamErrorMessage(responseBody); msg != "" {
+			return "grok payment required: " + truncateGrokAccountErrorReason(msg), true
+		}
+		return "grok payment required", true
+	default:
+		return "", false
+	}
+}
+
+func grokUpstreamErrorMessage(responseBody []byte) string {
+	msg := strings.TrimSpace(sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(responseBody)))
+	if msg != "" {
+		return msg
+	}
+	return strings.TrimSpace(string(bytes.TrimSpace(responseBody)))
+}
+
+func truncateGrokAccountErrorReason(msg string) string {
+	const maxLen = 180
+	if len(msg) <= maxLen {
+		return msg
+	}
+	return msg[:maxLen]
+}
+
+func (s *OpenAIGatewayService) markGrokAccountError(ctx context.Context, account *Account, reason string) {
+	if s == nil || account == nil {
+		return
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "grok access denied"
+	}
+	account.Status = StatusError
+	account.ErrorMessage = reason
+	account.Schedulable = false
+	// Zero until uses the short runtime bridge window; durable stop is StatusError.
+	s.BlockAccountScheduling(account, time.Time{}, reason)
+	if s.accountRepo == nil {
+		return
+	}
+	stateCtx, cancel := openAIAccountStateContext(ctx)
+	defer cancel()
+	if err := s.accountRepo.SetError(stateCtx, account.ID, reason); err != nil {
+		slog.Warn("grok_account_set_error_failed", "account_id", account.ID, "reason", reason, "error", err)
 	}
 }
 

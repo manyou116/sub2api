@@ -1595,13 +1595,6 @@ func TestHandleGrokAccountUpstreamErrorTempUnschedulesNonRateLimitStates(t *test
 			wantMaxCooldown: 10*time.Minute + time.Second,
 		},
 		{
-			name:            "forbidden entitlement",
-			status:          http.StatusForbidden,
-			wantReason:      "grok access or entitlement denied",
-			wantMinCooldown: 30*time.Minute - time.Second,
-			wantMaxCooldown: 30*time.Minute + time.Second,
-		},
-		{
 			name:            "upstream temporary error",
 			status:          http.StatusInternalServerError,
 			wantReason:      "grok upstream temporary error",
@@ -1612,7 +1605,7 @@ func TestHandleGrokAccountUpstreamErrorTempUnschedulesNonRateLimitStates(t *test
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			account := &Account{ID: 61, Platform: PlatformGrok, Type: AccountTypeOAuth}
+			account := &Account{ID: 61, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}
 			repo := &grokQuotaAccountRepo{}
 			svc := &OpenAIGatewayService{accountRepo: repo}
 			before := time.Now()
@@ -1621,11 +1614,61 @@ func TestHandleGrokAccountUpstreamErrorTempUnschedulesNonRateLimitStates(t *test
 
 			require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 			require.Equal(t, 1, repo.tempUnschedCalls)
+			require.Zero(t, repo.setErrorCalls)
 			require.Zero(t, repo.rateLimitedCalls)
 			require.Equal(t, account.ID, repo.lastTempUnschedID)
 			require.Equal(t, tt.wantReason, repo.lastTempUnschedReason)
 			require.True(t, repo.lastTempUnschedUntil.After(before.Add(tt.wantMinCooldown)))
 			require.True(t, repo.lastTempUnschedUntil.Before(before.Add(tt.wantMaxCooldown)))
+			require.Equal(t, StatusActive, account.Status)
+		})
+	}
+}
+
+func TestHandleGrokAccountUpstreamErrorMarksAccessDeniedAsAccountError(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		body       []byte
+		wantReason string
+	}{
+		{
+			name:       "cli access denied",
+			status:     http.StatusForbidden,
+			body:       []byte(`{"error":"Access denied"}`),
+			wantReason: "grok access denied",
+		},
+		{
+			name:       "api spending limit",
+			status:     http.StatusPaymentRequired,
+			body:       []byte(`{"code":"personal-team-blocked:spending-limit","error":"You have run out of credits or need a Grok subscription."}`),
+			wantReason: "grok personal-team-blocked:spending-limit",
+		},
+		{
+			name:       "explicit entitlement text",
+			status:     http.StatusForbidden,
+			body:       []byte(`{"error":"subscription required"}`),
+			wantReason: "grok entitlement denied",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &Account{ID: 71, Platform: PlatformGrok, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true}
+			repo := &grokQuotaAccountRepo{}
+			svc := &OpenAIGatewayService{accountRepo: repo}
+
+			svc.handleGrokAccountUpstreamError(context.Background(), account, tt.status, nil, tt.body)
+
+			require.Equal(t, StatusError, account.Status)
+			require.False(t, account.Schedulable)
+			require.Equal(t, tt.wantReason, account.ErrorMessage)
+			require.Equal(t, 1, repo.setErrorCalls)
+			require.Equal(t, account.ID, repo.lastSetErrorID)
+			require.Equal(t, tt.wantReason, repo.lastSetErrorMsg)
+			require.Zero(t, repo.tempUnschedCalls)
+			require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+			require.False(t, account.IsSchedulable())
 		})
 	}
 }

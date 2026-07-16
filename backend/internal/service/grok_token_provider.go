@@ -60,6 +60,18 @@ func (p *GrokTokenProvider) SetTempUnschedCache(cache TempUnschedCache) {
 }
 
 func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account) (string, error) {
+	return p.getAccessToken(ctx, account, false)
+}
+
+// GetAccessTokenForProbe is the admin/test path. It still requires a Grok OAuth
+// account and a resolvable proxy, but intentionally ignores scheduling denials
+// (StatusError, Schedulable=false, TempUnschedulable, rate-limit, overload) so
+// operators can diagnose hard-stopped accounts.
+func (p *GrokTokenProvider) GetAccessTokenForProbe(ctx context.Context, account *Account) (string, error) {
+	return p.getAccessToken(ctx, account, true)
+}
+
+func (p *GrokTokenProvider) getAccessToken(ctx context.Context, account *Account, forProbe bool) (string, error) {
 	if account == nil {
 		return "", errors.New("account is nil")
 	}
@@ -67,7 +79,7 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 		return "", errors.New("not a grok oauth account")
 	}
 	selectedProxyID := cloneGrokProxyID(account.ProxyID)
-	if eligibilityErr := grokOAuthRequestAccountEligibilityError(account); eligibilityErr != nil {
+	if eligibilityErr := grokOAuthAccountEligibilityError(account, forProbe); eligibilityErr != nil {
 		return "", withGrokCredentialFailureSnapshot(eligibilityErr, account)
 	}
 
@@ -104,14 +116,14 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 			}
 		} else if result != nil && result.LockHeld {
 			if p.refreshPolicy.OnLockHeld == ProviderLockHeldWaitForCache {
-				token, waitErr := p.waitForRefreshedToken(refreshCtx, account, cacheKey)
+				token, waitErr := p.waitForRefreshedToken(refreshCtx, account, cacheKey, forProbe)
 				return token, withGrokCredentialFailureSnapshot(waitErr, account)
 			}
 			if expiresAt == nil || !time.Now().Before(*expiresAt) {
 				return "", withGrokCredentialFailureSnapshot(errGrokOAuthAccessTokenExpired, account)
 			}
 		} else if result != nil && result.Account != nil {
-			if eligibilityErr := grokOAuthRequestAccountEligibilityError(result.Account); eligibilityErr != nil {
+			if eligibilityErr := grokOAuthAccountEligibilityError(result.Account, forProbe); eligibilityErr != nil {
 				return "", withGrokCredentialFailureSnapshot(eligibilityErr, result.Account)
 			}
 			if !grokCredentialProxyIDsEqual(result.Account.ProxyID, selectedProxyID) {
@@ -133,7 +145,7 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	if p.tokenCache != nil {
 		latestAccount, isStale := CheckTokenVersion(ctx, account, p.accountRepo)
 		if isStale && latestAccount != nil {
-			if eligibilityErr := grokOAuthRequestAccountEligibilityError(latestAccount); eligibilityErr != nil {
+			if eligibilityErr := grokOAuthAccountEligibilityError(latestAccount, forProbe); eligibilityErr != nil {
 				return "", withGrokCredentialFailureSnapshot(eligibilityErr, latestAccount)
 			}
 			if !grokCredentialProxyIDsEqual(latestAccount.ProxyID, selectedProxyID) {
@@ -167,7 +179,7 @@ func (p *GrokTokenProvider) GetAccessToken(ctx context.Context, account *Account
 	return accessToken, nil
 }
 
-func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *Account, cacheKey string) (string, error) {
+func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *Account, cacheKey string, forProbe bool) (string, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, grokRefreshLockWaitTimeout)
 	defer cancel()
 
@@ -195,7 +207,7 @@ func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *
 				return "", errOAuthRefreshAccountStateChanged
 			} else {
 				sawAuthoritativeState = true
-				if eligibilityErr := grokOAuthRequestAccountEligibilityError(latest); eligibilityErr != nil {
+				if eligibilityErr := grokOAuthAccountEligibilityError(latest, forProbe); eligibilityErr != nil {
 					return "", withGrokCredentialFailureSnapshot(eligibilityErr, latest)
 				}
 				if !grokCredentialProxyIDsEqual(latest.ProxyID, selectedProxyID) {
@@ -242,12 +254,25 @@ func (p *GrokTokenProvider) waitForRefreshedToken(ctx context.Context, account *
 }
 
 // grokOAuthRequestAccountEligibilityError rejects accounts that should not supply
-// credentials (deleted/disabled/platform drift/manual pause/temp cooldown/missing proxy).
-// Rate-limit and overload windows are intentionally allowed: Free free-usage 429 sets
-// RateLimitResetAt for up to 24h, and admin "Test Account" still needs a live access
-// token while the account is rate-limited. Scheduler continues to skip those accounts.
+// credentials on the production request path (deleted/disabled/platform drift/
+// manual pause/temp cooldown/missing proxy). Rate-limit and overload windows are
+// intentionally allowed so Free free-usage 429 accounts can still refresh tokens.
 func grokOAuthRequestAccountEligibilityError(account *Account) error {
-	if account == nil || !account.IsGrokOAuth() || !account.IsActive() || !account.Schedulable {
+	return grokOAuthAccountEligibilityError(account, false)
+}
+
+func grokOAuthAccountEligibilityError(account *Account, forProbe bool) error {
+	if account == nil || !account.IsGrokOAuth() {
+		return errOAuthRefreshAccountStateChanged
+	}
+	if account.ProxyID != nil && account.Proxy == nil {
+		return errGrokOAuthConfiguredProxyMiss
+	}
+	if forProbe {
+		// Admin probe may diagnose StatusError / unschedulable / temp-cooldown accounts.
+		return nil
+	}
+	if !account.IsActive() || !account.Schedulable {
 		return errOAuthRefreshAccountStateChanged
 	}
 	now := time.Now()
@@ -256,9 +281,6 @@ func grokOAuthRequestAccountEligibilityError(account *Account) error {
 	}
 	if account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil) {
 		return errOAuthRefreshAccountStateChanged
-	}
-	if account.ProxyID != nil && account.Proxy == nil {
-		return errGrokOAuthConfiguredProxyMiss
 	}
 	return nil
 }

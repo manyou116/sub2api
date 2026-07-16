@@ -345,3 +345,46 @@ func TestGrokTokenProviderAllowsRateLimitedAccountWarmToken(t *testing.T) {
 		})
 	}
 }
+
+func TestGrokTokenProviderProbeAllowsSchedulingDeniedAccounts(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	tests := []struct {
+		name              string
+		mutate            func(*Account)
+		wantProductionErr bool
+	}{
+		{name: "error status", wantProductionErr: true, mutate: func(account *Account) {
+			account.Status = StatusError
+			account.ErrorMessage = "grok access denied"
+			account.Schedulable = false
+		}},
+		{name: "manual unschedulable", wantProductionErr: true, mutate: func(account *Account) { account.Schedulable = false }},
+		{name: "temp unschedulable", wantProductionErr: true, mutate: func(account *Account) { account.TempUnschedulableUntil = &future }},
+		// Rate-limit remains allowed on the production token path (scheduler still skips).
+		{name: "rate limited", wantProductionErr: false, mutate: func(account *Account) { account.RateLimitResetAt = &future }},
+	}
+
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := expiredGrokOAuthAccountForCredentialTest(int64(290 + index))
+			account.Credentials["access_token"] = "warm-cache-token"
+			account.Credentials["expires_at"] = time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339)
+			tt.mutate(account)
+			cache := &grokTokenCacheForProviderTest{token: "warm-cache-token"}
+			provider := NewGrokTokenProvider(&tokenRefreshAccountRepo{}, cache)
+
+			token, err := provider.GetAccessToken(context.Background(), account)
+			if tt.wantProductionErr {
+				require.Error(t, err)
+				require.Empty(t, token)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, "warm-cache-token", token)
+			}
+
+			token, err = provider.GetAccessTokenForProbe(context.Background(), account)
+			require.NoError(t, err)
+			require.Equal(t, "warm-cache-token", token)
+		})
+	}
+}
