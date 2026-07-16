@@ -37,6 +37,24 @@ func accountBlockedByWebImageCooldown(account *Account, req OpenAIAccountSchedul
 	return account.IsWebImageRateLimited()
 }
 
+// isWebImageInflightFullForRequest reports whether a ChatGPT Web image account
+// should be skipped at schedule time because its inflight slots are full.
+// Chat/text traffic is never gated by web inflight.
+func (s *OpenAIGatewayService) isWebImageInflightFullForRequest(
+	ctx context.Context,
+	account *Account,
+	imageCap OpenAIImagesCapability,
+	requestedModel string,
+) bool {
+	if s == nil || s.webImages == nil || account == nil {
+		return false
+	}
+	if imageCap == "" && !isOpenAIImageGenerationModel(requestedModel) && !OpenAIImageGenerationIntentFromContext(ctx) {
+		return false
+	}
+	return s.webImages.IsInflightFull(ctx, account)
+}
+
 // shouldSkipAccountTextSlotForWebImages reports whether account text concurrency
 // must stay free for a ChatGPT Web image request.
 func shouldSkipAccountTextSlotForWebImages(

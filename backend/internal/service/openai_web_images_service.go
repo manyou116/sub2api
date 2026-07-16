@@ -807,6 +807,23 @@ func (s *OpenAIWebImagesService) getInflight(ctx context.Context, accountID int6
 	return s.memInflight[accountID], nil
 }
 
+// IsInflightFull reports whether a web-image account currently has no free inflight slots.
+// Fail-open on backend read errors so a Redis blip does not hard-block scheduling.
+func (s *OpenAIWebImagesService) IsInflightFull(ctx context.Context, account *Account) bool {
+	if s == nil || account == nil || !s.ShouldUseWebPath(account) {
+		return false
+	}
+	max := s.ParseAccountConfig(account).MaxInflight
+	if max <= 0 {
+		max = 1
+	}
+	inflight, err := s.getInflight(ctx, account.ID)
+	if err != nil {
+		return false
+	}
+	return inflight >= max
+}
+
 func (s *OpenAIWebImagesService) getQuotaCache(ctx context.Context, accountID int64) (webImageQuotaCache, bool) {
 	ttl := time.Duration(s.cfgOrDefault().QuotaCacheTTLSeconds) * time.Second
 	if s.useRedis() {

@@ -38,7 +38,8 @@ func (s *OpenAIGatewayService) isAccountSchedulableForOpenAIRequest(ctx context.
 		if s.webImages != nil && s.webImages.IsWebRateLimited(ctx, account.ID) {
 			return false
 		}
-		return true
+		// Skip saturated web-image accounts before scoring/failover.
+		return !s.isWebImageInflightFullForRequest(ctx, account, imageCap, "")
 	}
 	return account.IsSchedulable()
 }

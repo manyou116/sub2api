@@ -120,3 +120,51 @@ func TestReleaseAccountTextSlotIfWebImages(t *testing.T) {
 	require.False(t, sel.Acquired)
 	require.Nil(t, sel.ReleaseFunc)
 }
+
+func TestIsWebImageInflightFullForRequest_SkipsSaturatedWebAccount(t *testing.T) {
+	t.Parallel()
+	webSvc := NewOpenAIWebImagesService(&config.Config{Gateway: config.GatewayConfig{OpenAIWebImages: config.OpenAIWebImagesConfig{
+		InflightBackend: "memory", DefaultMaxInflight: 1, UnknownQuotaPolicy: "optimistic",
+	}}}, nil, nil)
+	svc := &OpenAIGatewayService{webImages: webSvc}
+	acc := &Account{
+		ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
+		Extra: map[string]any{"openai_web_images": map[string]any{"enabled": true, "max_inflight": 1}},
+	}
+	scheduler := &defaultOpenAIAccountScheduler{service: svc}
+	req := OpenAIAccountScheduleRequest{
+		RequestedModel:          "gpt-image-2",
+		RequiredImageCapability: OpenAIImagesCapabilityBasic,
+	}
+
+	require.True(t, svc.isAccountSchedulableForOpenAIRequest(context.Background(), acc, OpenAIImagesCapabilityBasic))
+	require.True(t, scheduler.isAccountRequestCompatible(context.Background(), acc, req))
+
+	ok, err := webSvc.Acquire(context.Background(), acc.ID, 1, "busy")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	require.True(t, webSvc.IsInflightFull(context.Background(), acc))
+	require.False(t, svc.isAccountSchedulableForOpenAIRequest(context.Background(), acc, OpenAIImagesCapabilityBasic))
+	require.False(t, scheduler.isAccountRequestCompatible(context.Background(), acc, req))
+	// Chat/text must not be blocked by web inflight saturation.
+	require.False(t, svc.isWebImageInflightFullForRequest(context.Background(), acc, "", "gpt-5.4"))
+
+	webSvc.Release(context.Background(), acc.ID, "busy")
+	require.True(t, svc.isAccountSchedulableForOpenAIRequest(context.Background(), acc, OpenAIImagesCapabilityBasic))
+	require.True(t, scheduler.isAccountRequestCompatible(context.Background(), acc, req))
+}
+
+func TestIsWebImageInflightFullForRequest_IgnoresNonWebAccounts(t *testing.T) {
+	t.Parallel()
+	webSvc := NewOpenAIWebImagesService(&config.Config{Gateway: config.GatewayConfig{OpenAIWebImages: config.OpenAIWebImagesConfig{
+		InflightBackend: "memory", DefaultMaxInflight: 1,
+	}}}, nil, nil)
+	svc := &OpenAIGatewayService{webImages: webSvc}
+	plain := &Account{
+		ID: 12, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
+	}
+	_, _ = webSvc.Acquire(context.Background(), plain.ID, 1, "x")
+	require.False(t, webSvc.IsInflightFull(context.Background(), plain))
+	require.False(t, svc.isWebImageInflightFullForRequest(context.Background(), plain, OpenAIImagesCapabilityBasic, "gpt-image-2"))
+}

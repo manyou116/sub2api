@@ -1368,6 +1368,11 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatible(ctx context.C
 	if accountBlockedByWebImageCooldown(account, req) {
 		return false
 	}
+	// Web inflight saturation — skip busy accounts at schedule/acquire recheck time.
+	if s != nil && s.service != nil &&
+		s.service.isWebImageInflightFullForRequest(ctx, account, req.RequiredImageCapability, req.RequestedModel) {
+		return false
+	}
 	if s != nil && s.service != nil && s.service.isOpenAIAccountRuntimeBlockedForRequest(account, req.RequiredImageCapability, req.RequestedModel) {
 		return false
 	}
@@ -1721,7 +1726,8 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 				if selection == nil || selection.Account == nil {
 					return selection, decision, nil
 				}
-				if accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) {
+				if accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) &&
+					!s.isWebImageInflightFullForRequest(ctx, selection.Account, requiredImageCapability, requestedModel) {
 					return selection, decision, nil
 				}
 				if selection.ReleaseFunc != nil {
@@ -1747,7 +1753,8 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 				return selection, decision, nil
 			}
 			if s.isOpenAIAccountTransportCompatible(selection.Account, requiredTransport) &&
-				accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) {
+				accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) &&
+				!s.isWebImageInflightFullForRequest(ctx, selection.Account, requiredImageCapability, requestedModel) {
 				return selection, decision, nil
 			}
 			if selection.ReleaseFunc != nil {
