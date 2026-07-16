@@ -81,15 +81,20 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		// Keep stop/reasoning_effort for routing; raw path re-normalizes for upstream.
 		body = reapplyGrokChatRouteSignals(body, normalizedBody)
 
+		eligible, reason := grokChatResponsesBridgeEligibility(body)
+		hasImageInput := openAIJSONValueMayContainImageInput(gjson.GetBytes(body, "messages"))
+		// OAuth normally uses the Responses bridge for cache-capable shapes.
+		// Vision (image_url) also needs the bridge on API-key accounts: raw CC
+		// drops image parts for non-composer models.
+		if eligible && (account.IsGrokOAuth() || hasImageInput) {
+			return s.forwardGrokChatCompletionsViaResponses(ctx, c, account, body, promptCacheKey, defaultMappedModel)
+		}
 		if account.IsGrokOAuth() {
-			eligible, reason := grokChatResponsesBridgeEligibility(body)
-			if eligible {
-				return s.forwardGrokChatCompletionsViaResponses(ctx, c, account, body, promptCacheKey, defaultMappedModel)
-			}
 			logger.L().Debug("grok chat_completions: using raw fallback",
 				zap.Int64("account_id", account.ID),
 				zap.String("reason", reason),
 				zap.String("upstream_model", upstreamModel),
+				zap.Bool("has_image_input", hasImageInput),
 			)
 		}
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)

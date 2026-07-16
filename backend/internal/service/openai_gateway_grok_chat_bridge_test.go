@@ -270,6 +270,119 @@ func TestForwardGrokChatRuntimeGateFallsBackToRaw(t *testing.T) {
 	}
 }
 
+func TestForwardGrokChatVisionBridgesAnyModelToResponses(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name         string
+		mappedModel  string
+		wantUpstream string
+	}{
+		{name: "default maps to grok-4.5", wantUpstream: "grok-4.5"},
+		{name: "explicit grok-4.3", mappedModel: "grok-4.3", wantUpstream: "grok-4.3"},
+		{name: "explicit grok-4.20 non-reasoning", mappedModel: "grok-4.20-0309-non-reasoning", wantUpstream: "grok-4.20-0309-non-reasoning"},
+	}
+
+	imageBody := `{"model":"grok","messages":[{"role":"user","content":[{"type":"text","text":"what is this"},{"type":"image_url","image_url":{"url":"data:image/png;base64,QQ=="}}]}],"stream":false}`
+
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(imageBody)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
+			c.Set("api_key", &APIKey{ID: int64(7601 + index)})
+
+			account := grokChatBridgeTestAccount(int64(76 + index))
+			if tt.mappedModel != "" {
+				account.Credentials["model_mapping"] = map[string]any{"grok": tt.mappedModel}
+			}
+			repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+				accountsByID: map[int64]*Account{account.ID: account},
+			}}
+			upstream := &httpUpstreamRecorder{resp: grokChatBridgeCompletedResponse("resp_grok_vision_"+strconv.Itoa(index), 128)}
+			svc := &OpenAIGatewayService{
+				httpUpstream:      upstream,
+				grokTokenProvider: NewGrokTokenProvider(repo, nil),
+				accountRepo:       repo,
+			}
+
+			result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, xai.DefaultCLIBaseURL+"/responses", upstream.lastReq.URL.String())
+			require.Equal(t, grokChatResponsesEndpoint, result.UpstreamEndpoint)
+			require.Equal(t, tt.wantUpstream, result.UpstreamModel)
+
+			// Vision parts must survive conversion to Responses input_image.
+			input := gjson.GetBytes(upstream.lastBody, "input")
+			require.True(t, input.Exists())
+			foundImage := false
+			input.ForEach(func(_, item gjson.Result) bool {
+				content := item.Get("content")
+				if !content.IsArray() {
+					return true
+				}
+				content.ForEach(func(_, part gjson.Result) bool {
+					if part.Get("type").String() == "input_image" {
+						foundImage = true
+						require.Equal(t, "data:image/png;base64,QQ==", part.Get("image_url").String())
+						return false
+					}
+					return true
+				})
+				return !foundImage
+			})
+			require.True(t, foundImage, "upstream responses body must contain input_image")
+			require.Equal(t, "cached ok", gjson.Get(recorder.Body.String(), "choices.0.message.content").String())
+		})
+	}
+}
+
+func TestForwardGrokChatVisionAPIKeyBridgesToResponses(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"grok-4.3","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"data:image/png;base64,QQ=="}}]}],"stream":false}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, grokChatRawEndpoint, bytes.NewReader(body))
+	c.Set("api_key", &APIKey{ID: 7701})
+
+	account := &Account{
+		ID:          77,
+		Name:        "grok-apikey-vision",
+		Platform:    PlatformGrok,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "xai-test-key",
+			"base_url": xai.DefaultBaseURL,
+		},
+	}
+	repo := &grokQuotaAccountRepo{mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
+		accountsByID: map[int64]*Account{account.ID: account},
+	}}
+	upstream := &httpUpstreamRecorder{resp: grokChatBridgeCompletedResponse("resp_grok_apikey_vision", 64)}
+	svc := &OpenAIGatewayService{
+		httpUpstream:      upstream,
+		grokTokenProvider: NewGrokTokenProvider(repo, nil),
+		accountRepo:       repo,
+	}
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, strings.TrimRight(xai.DefaultBaseURL, "/")+"/responses", upstream.lastReq.URL.String())
+	require.Equal(t, grokChatResponsesEndpoint, result.UpstreamEndpoint)
+	require.Equal(t, "grok-4.3", result.UpstreamModel)
+	require.Equal(t, "input_image", gjson.GetBytes(upstream.lastBody, "input.0.content.1.type").String())
+	// API-key path must not inject Free-tier native search tools for cache routing.
+	require.False(t, gjson.GetBytes(upstream.lastBody, "tools").Exists())
+	require.Equal(t, "cached ok", gjson.Get(recorder.Body.String(), "choices.0.message.content").String())
+}
+
 func TestForwardGrokChatViaResponses429UsesGrokRateLimitPolicy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
