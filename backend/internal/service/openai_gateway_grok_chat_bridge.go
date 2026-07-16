@@ -255,11 +255,13 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 	cacheIdentity := resolveGrokCacheIdentity(c, body, promptCacheKey, upstreamModel)
 	// Image inputs must go through the Responses bridge: the raw Chat
 	// Completions path cannot forward image_url parts to Grok's native vision
-	// for non-composer models, so they would be silently dropped. Route any
-	// bridge-eligible vision request to Responses, regardless of model or
-	// prompt-cache identity (previously only grok-4.5 was forced).
+	// for non-composer models, so they would be silently dropped. Force any
+	// bridge-eligible non-composer vision request to Responses, regardless of
+	// model or prompt-cache identity (previously only grok-4.5 was forced).
+	// Composer models intentionally stay on raw CC for the describe-bridge.
 	hasImageInput := openAIJSONValueMayContainImageInput(gjson.GetBytes(body, "messages"))
-	if !hasImageInput && !grokChatResponsesRuntimeEligible(upstreamModel, cacheIdentity) {
+	needsVisionResponsesBridge := hasImageInput && !isGrokComposerModel(upstreamModel) && !isGrokComposerModel(originalModel)
+	if !needsVisionResponsesBridge && !grokChatResponsesRuntimeEligible(upstreamModel, cacheIdentity) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 

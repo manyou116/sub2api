@@ -83,10 +83,13 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 		eligible, reason := grokChatResponsesBridgeEligibility(body)
 		hasImageInput := openAIJSONValueMayContainImageInput(gjson.GetBytes(body, "messages"))
+		// Composer models keep image_url on raw CC so the describe-bridge can rewrite
+		// images to text before the coding model runs. Other models need the
+		// Responses bridge or image_url parts are silently dropped.
+		needsVisionResponsesBridge := hasImageInput && !isGrokComposerModel(upstreamModel) && !isGrokComposerModel(gjson.GetBytes(body, "model").String())
 		// OAuth normally uses the Responses bridge for cache-capable shapes.
-		// Vision (image_url) also needs the bridge on API-key accounts: raw CC
-		// drops image parts for non-composer models.
-		if eligible && (account.IsGrokOAuth() || hasImageInput) {
+		// Non-composer vision also needs the bridge on API-key accounts.
+		if eligible && (account.IsGrokOAuth() || needsVisionResponsesBridge) {
 			return s.forwardGrokChatCompletionsViaResponses(ctx, c, account, body, promptCacheKey, defaultMappedModel)
 		}
 		if account.IsGrokOAuth() {
