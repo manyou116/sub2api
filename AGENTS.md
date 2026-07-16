@@ -70,6 +70,60 @@ For every change:
 - run typecheck/build for the touched area when applicable
 - report exactly what passed and what was not run
 
+### Local tests before push / tag (mandatory)
+
+**Do not `git push` or create a release tag until local unit tests for the
+touched risk surface have passed.** CI is a backstop, not the first test run.
+
+1. **Always (any backend Go change)** — at least the packages you touched:
+
+```bash
+cd backend
+GOCACHE=/tmp/sub2api-go-build go test -tags=unit ./path/to/touched/... -count=1
+```
+
+2. **Shared gateway / routing / protocol bridges** (Grok, OpenAI CC↔Responses,
+   Messages, media, scheduler, webimg entry points) — broaden beyond `-run`
+   of only the new tests. Prefer package-level or keyword suites that include
+   **old opposing contracts** in other `*_test.go` files:
+
+```bash
+cd backend
+# Grok chat/vision/composer/media routing (example)
+GOCACHE=/tmp/sub2api-go-build go test -tags=unit ./internal/service/ \
+  -count=1 -timeout 180s \
+  -run 'Grok|ChatCompletions|Composer|Vision|Bridge|Responses'
+# Safer when editing entry gates (ForwardAs*, schedule, body sanitize):
+GOCACHE=/tmp/sub2api-go-build go test -tags=unit ./internal/service/ -count=1 -timeout 300s
+```
+
+3. **Before `git push origin` and before any `v99.*-plus.N` tag** — if the
+   change touches backend production code, run the same command CI uses for
+   unit tests (or the full touched-package set above if full `./...` is too
+   slow and the user explicitly accepts package-scoped risk):
+
+```bash
+cd backend
+make test-unit
+# equivalent: go test -tags=unit ./...
+```
+
+4. **Frontend** — if `frontend/` changed: typecheck/build for the touched app
+   (e.g. `npm run build` / project typecheck script) before push.
+
+5. **Commit body `Tests:`** — list exact commands that passed. If something was
+   **not** run (e.g. skipped full `make test-unit`), say so explicitly; do not
+   imply green CI from a narrow `-run`.
+
+6. **Tag only after green local gate** — preferred order:
+
+```text
+code → local tests → commit → push branch/main → (optional) wait CI → VERSION + tag
+```
+
+Do not bind “logic fix + release tag” in one step when local suite was only a
+few `TestFoo` names. That is a recurring CI footgun on Grok/OpenAI routing.
+
 ### API JSON contract fixtures (mandatory)
 
 CI runs `TestAPIContracts` (`//go:build unit`) against golden JSON in

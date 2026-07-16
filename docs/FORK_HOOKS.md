@@ -131,8 +131,10 @@ Account/gateway import cycles; EventStream decoder is the only isolated package
    - NEVER drop P2 call sites or delete openai_gateway_grok_openai_compat.go
    - NEVER drop P1 openaiimages/ or migration 177 without explicit user order
 4. ./deploy/upstream-sync/check-fork-hooks.sh
-5. go test -tags unit (touched packages) + frontend typecheck if UI touched
-6. Bump VERSION → tag v99.{X.Y.Z}-plus.N (do not tag [skip ci] only commits)
+5. Local unit gate BEFORE push (AGENTS.md): touched packages minimum; for
+   gateway/routing changes run broader service suite or `make test-unit`
+6. Bump VERSION → tag v99.{X.Y.Z}-plus.N only after local tests pass
+   (do not tag [skip ci] only commits; prefer push → CI green → tag)
 7. Optional squash: only post-sync fixup commits into P1/P2/P3 — keep sync commit
 ```
 
@@ -183,7 +185,9 @@ chore(fork): hooks docs + VERSION  # P3 docs/tooling
 [ ] P1: migration 177 columns still attached on account load
 [ ] P3: VERSION / tag is v99.*-plus.*
 [ ] No second full rewrite of upstream Grok gateway
-[ ] Tests: unit tags for touched service tests
+[ ] Tests: local unit gate BEFORE push/tag (see AGENTS.md Testing Rules)
+[ ] Tests: not only new -run names — include opposing contracts in other files
+[ ] Tests: commit body lists exact commands; note what was skipped
 ```
 
 ---
