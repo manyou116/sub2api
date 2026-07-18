@@ -355,7 +355,15 @@ func (u *grokCredentialHandlerUpstream) Do(req *http.Request, _ string, accountI
 	}
 	if accountID == failAccountID {
 		if cancelRequest != nil {
+			// Post-mapping cancel probes pure client disconnect: cancel the
+			// request context and surface cancellation to the gateway. Do not
+			// also return a durable 402 — that would legitimately SetError the
+			// account and defeat the assertion that cancel skips mutation.
 			cancelRequest()
+			if err := req.Context().Err(); err != nil {
+				return nil, err
+			}
+			return nil, context.Canceled
 		}
 		return &http.Response{
 			StatusCode: http.StatusPaymentRequired,

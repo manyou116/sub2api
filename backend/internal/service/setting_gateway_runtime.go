@@ -598,14 +598,14 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 	if cached, ok := gatewayForwardingCache.Load().(*cachedGatewayForwardingSettings); ok && cached != nil {
 		if time.Now().UnixNano() < cached.expiresAt {
 			return gatewayForwardingSettingsResult{
-				fp:                               cached.fingerprintUnification,
-				mp:                               cached.metadataPassthrough,
-				cch:                              cached.cchSigning,
-				claudeOAuthSystemPromptInjection: cached.claudeOAuthSystemPromptInjection,
-				claudeOAuthSystemPrompt:          cached.claudeOAuthSystemPrompt,
-				claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
-				cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
-				rewriteMessageCacheControl:       cached.rewriteMessageCacheControl,
+				fp:                                      cached.fingerprintUnification,
+				mp:                                      cached.metadataPassthrough,
+				cch:                                     cached.cchSigning,
+				claudeOAuthSystemPromptInjection:        cached.claudeOAuthSystemPromptInjection,
+				claudeOAuthSystemPrompt:                 cached.claudeOAuthSystemPrompt,
+				claudeOAuthSystemPromptBlocks:           cached.claudeOAuthSystemPromptBlocks,
+				cacheTTL1h:                              cached.anthropicCacheTTL1hInjection,
+				rewriteMessageCacheControl:              cached.rewriteMessageCacheControl,
 				grokResponsesFreeFunctionToolCacheRoute: cached.grokResponsesFreeFunctionToolCacheRoute,
 				clientDatelineNormalization:             cached.clientDatelineNormalization,
 			}
@@ -615,14 +615,14 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		if cached, ok := gatewayForwardingCache.Load().(*cachedGatewayForwardingSettings); ok && cached != nil {
 			if time.Now().UnixNano() < cached.expiresAt {
 				return gatewayForwardingSettingsResult{
-					fp:                               cached.fingerprintUnification,
-					mp:                               cached.metadataPassthrough,
-					cch:                              cached.cchSigning,
-					claudeOAuthSystemPromptInjection: cached.claudeOAuthSystemPromptInjection,
-					claudeOAuthSystemPrompt:          cached.claudeOAuthSystemPrompt,
-					claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
-					cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
-					rewriteMessageCacheControl:       cached.rewriteMessageCacheControl,
+					fp:                                      cached.fingerprintUnification,
+					mp:                                      cached.metadataPassthrough,
+					cch:                                     cached.cchSigning,
+					claudeOAuthSystemPromptInjection:        cached.claudeOAuthSystemPromptInjection,
+					claudeOAuthSystemPrompt:                 cached.claudeOAuthSystemPrompt,
+					claudeOAuthSystemPromptBlocks:           cached.claudeOAuthSystemPromptBlocks,
+					cacheTTL1h:                              cached.anthropicCacheTTL1hInjection,
+					rewriteMessageCacheControl:              cached.rewriteMessageCacheControl,
 					grokResponsesFreeFunctionToolCacheRoute: cached.grokResponsesFreeFunctionToolCacheRoute,
 					clientDatelineNormalization:             cached.clientDatelineNormalization,
 				}, nil
@@ -656,9 +656,9 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				expiresAt:                               time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
 			})
 			return gatewayForwardingSettingsResult{
-				fp:                               true,
-				claudeOAuthSystemPromptInjection: true,
-				rewriteMessageCacheControl:       s.defaultRewriteMessageCacheControl(),
+				fp:                                      true,
+				claudeOAuthSystemPromptInjection:        true,
+				rewriteMessageCacheControl:              s.defaultRewriteMessageCacheControl(),
 				grokResponsesFreeFunctionToolCacheRoute: s.defaultGrokResponsesFreeFunctionToolCacheRoute(),
 				clientDatelineNormalization:             true,
 			}, nil
@@ -702,14 +702,14 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			expiresAt:                               time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 		})
 		return gatewayForwardingSettingsResult{
-			fp:                               fp,
-			mp:                               mp,
-			cch:                              cch,
-			claudeOAuthSystemPromptInjection: systemPromptInjection,
-			claudeOAuthSystemPrompt:          systemPrompt,
-			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
-			cacheTTL1h:                       cacheTTL1h,
-			rewriteMessageCacheControl:       rewriteMessageCacheControl,
+			fp:                                      fp,
+			mp:                                      mp,
+			cch:                                     cch,
+			claudeOAuthSystemPromptInjection:        systemPromptInjection,
+			claudeOAuthSystemPrompt:                 systemPrompt,
+			claudeOAuthSystemPromptBlocks:           systemPromptBlocks,
+			cacheTTL1h:                              cacheTTL1h,
+			rewriteMessageCacheControl:              rewriteMessageCacheControl,
 			grokResponsesFreeFunctionToolCacheRoute: grokResponsesFreeFunctionToolCacheRoute,
 			clientDatelineNormalization:             clientDatelineNormalization,
 		}, nil
@@ -718,8 +718,8 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		return r
 	}
 	return gatewayForwardingSettingsResult{
-		fp:                               true,
-		claudeOAuthSystemPromptInjection: true,
+		fp:                                      true,
+		claudeOAuthSystemPromptInjection:        true,
 		grokResponsesFreeFunctionToolCacheRoute: s.defaultGrokResponsesFreeFunctionToolCacheRoute(),
 		clientDatelineNormalization:             true,
 	}
@@ -744,7 +744,7 @@ func (s *SettingService) IsRewriteMessageCacheControlEnabled(ctx context.Context
 }
 
 // IsGrokResponsesFreeFunctionToolCacheRouteEnabled 检查是否在 Grok Responses
-//（Codex HTTP/WS/chat bridge）路径对 Free 账号启用 function-tool 缓存抬档。
+// （Codex HTTP/WS/chat bridge）路径对 Free 账号启用 function-tool 缓存抬档。
 // 默认开启；关闭后与旧版仅 Messages 桥抬档行为一致。
 func (s *SettingService) IsGrokResponsesFreeFunctionToolCacheRouteEnabled(ctx context.Context) bool {
 	if s == nil {

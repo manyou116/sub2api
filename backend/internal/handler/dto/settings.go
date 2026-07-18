@@ -178,18 +178,18 @@ type SystemSettings struct {
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
 	// Gateway forwarding behavior
-	EnableFingerprintUnification           bool   `json:"enable_fingerprint_unification"`
-	EnableMetadataPassthrough              bool   `json:"enable_metadata_passthrough"`
-	EnableCCHSigning                       bool   `json:"enable_cch_signing"`
-	EnableClaudeOAuthSystemPromptInjection bool   `json:"enable_claude_oauth_system_prompt_injection"`
-	ClaudeOAuthSystemPrompt                string `json:"claude_oauth_system_prompt"`
-	ClaudeOAuthSystemPromptBlocks          string `json:"claude_oauth_system_prompt_blocks"`
-	EnableAnthropicCacheTTL1hInjection     bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
-	RewriteMessageCacheControl                        bool   `json:"rewrite_message_cache_control"`
-	EnableGrokResponsesFreeFunctionToolCacheRoute     bool   `json:"enable_grok_responses_free_function_tool_cache_route"`
-	EnableClientDatelineNormalization                 bool   `json:"enable_client_dateline_normalization"`
-	AntigravityUserAgentVersion            string `json:"antigravity_user_agent_version"`
-	OpenAICodexUserAgent                   string `json:"openai_codex_user_agent"`
+	EnableFingerprintUnification                  bool   `json:"enable_fingerprint_unification"`
+	EnableMetadataPassthrough                     bool   `json:"enable_metadata_passthrough"`
+	EnableCCHSigning                              bool   `json:"enable_cch_signing"`
+	EnableClaudeOAuthSystemPromptInjection        bool   `json:"enable_claude_oauth_system_prompt_injection"`
+	ClaudeOAuthSystemPrompt                       string `json:"claude_oauth_system_prompt"`
+	ClaudeOAuthSystemPromptBlocks                 string `json:"claude_oauth_system_prompt_blocks"`
+	EnableAnthropicCacheTTL1hInjection            bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
+	RewriteMessageCacheControl                    bool   `json:"rewrite_message_cache_control"`
+	EnableGrokResponsesFreeFunctionToolCacheRoute bool   `json:"enable_grok_responses_free_function_tool_cache_route"`
+	EnableClientDatelineNormalization             bool   `json:"enable_client_dateline_normalization"`
+	AntigravityUserAgentVersion                   string `json:"antigravity_user_agent_version"`
+	OpenAICodexUserAgent                          string `json:"openai_codex_user_agent"`
 
 	// codex_cli_only 加固
 	MinCodexVersion                      string `json:"min_codex_version"`
