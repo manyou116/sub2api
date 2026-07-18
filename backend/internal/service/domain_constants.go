@@ -485,6 +485,10 @@ const (
 	SettingKeyEnableClientDatelineNormalization = "enable_client_dateline_normalization"
 	// SettingKeyRewriteMessageCacheControl 是否改写 messages[*].content[*].cache_control（默认 false）
 	SettingKeyRewriteMessageCacheControl = "rewrite_message_cache_control"
+	// SettingKeyEnableGrokResponsesFreeFunctionToolCacheRoute 是否在 Grok Responses
+	// 路径（Codex HTTP/WS/chat bridge）对已知 Free 账号应用 function-tool 混合缓存抬档
+	// （追加 web_search/x_search）。默认 true，与 Messages→Grok 桥对齐；关闭可回退旧行为。
+	SettingKeyEnableGrokResponsesFreeFunctionToolCacheRoute = "enable_grok_responses_free_function_tool_cache_route"
 	// SettingKeyAntigravityUserAgentVersion Antigravity 上游 User-Agent 版本号（空值使用环境变量/默认值）
 	SettingKeyAntigravityUserAgentVersion = "antigravity_user_agent_version"
 	// SettingKeyOpenAICodexUserAgent OpenAI Codex 完整 User-Agent（空值使用内置默认）

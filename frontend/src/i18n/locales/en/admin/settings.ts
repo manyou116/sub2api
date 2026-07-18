@@ -341,6 +341,9 @@ export default {
         anthropicCacheTTL1hInjectionHint: 'When enabled, existing ephemeral cache_control blocks in Anthropic OAuth/Setup Token request bodies are forced to 1h; response usage is billed back as 5m by default, with account-level TTL billing override taking priority.',
         rewriteMessageCacheControl: 'Rewrite Message Cache Breakpoints',
         rewriteMessageCacheControlHint: 'Default off: preserve client cache_control on message content blocks. When enabled, client breakpoints are stripped and proxy breakpoints are injected for clients that do not manage caching themselves.',
+        grokResponsesFreeFunctionToolCacheRoute: 'Grok Responses Free Tool Cache Route',
+        grokResponsesFreeFunctionToolCacheRouteHint:
+          'Default on. For Codex and other /v1/responses traffic: when the selected Grok account is known Free and the request already has function tools, append web_search/x_search so xAI can use the cache-capable mixed-tools route (aligned with the Claude Messages→Grok bridge). Turn off to restore the previous behavior (skip elevation when client tools are present). Does not affect paid accounts or the existing Messages bridge.',
         clientDatelineNormalization: 'Client Dateline Normalization',
         clientDatelineNormalizationHint: 'Default on. Rewrites the "Today\'s date is …" sentence in Anthropic OAuth/Setup Token requests back to a canonical ASCII apostrophe and hyphen date format, erasing steganographic fingerprint bits some clients inject when they detect a non-official base URL. Applies to system prompts and <system-reminder> blocks only; API-Key accounts are unaffected.',
         antigravityUserAgentVersion: 'Antigravity UA Version',

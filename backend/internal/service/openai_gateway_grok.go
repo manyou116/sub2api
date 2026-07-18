@@ -70,10 +70,13 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	// can take xAI's cache-capable mixed-tools route. Without this, Codex
 	// /v1/responses always carries client tools so applyGrokResponsesCacheIdentity
 	// skips native-tool injection and Free traffic stays on the non-cacheable
-	// build-free routing bucket.
-	patchedBody, err = applyGrokFreeMessagesFunctionToolCacheRoute(patchedBody, freeRouteIntentBody, account, cacheIdentity)
-	if err != nil {
-		return nil, fmt.Errorf("apply grok Free function-tool cache route: %w", err)
+	// build-free routing bucket. Admin can disable via system setting
+	// enable_grok_responses_free_function_tool_cache_route.
+	if s.isGrokResponsesFreeFunctionToolCacheRouteEnabled(ctx) {
+		patchedBody, err = applyGrokFreeMessagesFunctionToolCacheRoute(patchedBody, freeRouteIntentBody, account, cacheIdentity)
+		if err != nil {
+			return nil, fmt.Errorf("apply grok Free function-tool cache route: %w", err)
+		}
 	}
 
 	token, _, err := s.getRequestCredential(ctx, c, account)

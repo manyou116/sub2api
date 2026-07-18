@@ -293,9 +293,11 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 		return nil, fmt.Errorf("apply grok responses bridge cache identity: %w", err)
 	}
 	// Same Free mixed-tools cache route as forwardGrokResponses / Messages bridge.
-	responsesBody, err = applyGrokFreeMessagesFunctionToolCacheRoute(responsesBody, intentBody, account, cacheIdentity)
-	if err != nil {
-		return nil, fmt.Errorf("apply grok Free function-tool cache route: %w", err)
+	if s.isGrokResponsesFreeFunctionToolCacheRouteEnabled(ctx) {
+		responsesBody, err = applyGrokFreeMessagesFunctionToolCacheRoute(responsesBody, intentBody, account, cacheIdentity)
+		if err != nil {
+			return nil, fmt.Errorf("apply grok Free function-tool cache route: %w", err)
+		}
 	}
 
 	updatedBody, policyErr := s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, responsesBody)

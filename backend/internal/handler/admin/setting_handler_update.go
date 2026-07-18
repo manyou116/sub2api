@@ -222,8 +222,9 @@ type UpdateSettingsRequest struct {
 	ClaudeOAuthSystemPrompt                *string `json:"claude_oauth_system_prompt"`
 	ClaudeOAuthSystemPromptBlocks          *string `json:"claude_oauth_system_prompt_blocks"`
 	EnableAnthropicCacheTTL1hInjection     *bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
-	RewriteMessageCacheControl             *bool   `json:"rewrite_message_cache_control"`
-	EnableClientDatelineNormalization      *bool   `json:"enable_client_dateline_normalization"`
+	RewriteMessageCacheControl                        *bool   `json:"rewrite_message_cache_control"`
+	EnableGrokResponsesFreeFunctionToolCacheRoute     *bool   `json:"enable_grok_responses_free_function_tool_cache_route"`
+	EnableClientDatelineNormalization                 *bool   `json:"enable_client_dateline_normalization"`
 	AntigravityUserAgentVersion            *string `json:"antigravity_user_agent_version"`
 	OpenAICodexUserAgent                   *string `json:"openai_codex_user_agent"`
 
@@ -1370,6 +1371,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.RewriteMessageCacheControl
 		}(),
+		EnableGrokResponsesFreeFunctionToolCacheRoute: func() bool {
+			if req.EnableGrokResponsesFreeFunctionToolCacheRoute != nil {
+				return *req.EnableGrokResponsesFreeFunctionToolCacheRoute
+			}
+			return previousSettings.EnableGrokResponsesFreeFunctionToolCacheRoute
+		}(),
 		EnableClientDatelineNormalization: func() bool {
 			if req.EnableClientDatelineNormalization != nil {
 				return *req.EnableClientDatelineNormalization
@@ -1811,6 +1818,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ClaudeOAuthSystemPromptBlocks:                          updatedSettings.ClaudeOAuthSystemPromptBlocks,
 		EnableAnthropicCacheTTL1hInjection:                     updatedSettings.EnableAnthropicCacheTTL1hInjection,
 		RewriteMessageCacheControl:                             updatedSettings.RewriteMessageCacheControl,
+		EnableGrokResponsesFreeFunctionToolCacheRoute:          updatedSettings.EnableGrokResponsesFreeFunctionToolCacheRoute,
 		EnableClientDatelineNormalization:                      updatedSettings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:                            updatedSettings.AntigravityUserAgentVersion,
 		OpenAICodexUserAgent:                                   updatedSettings.OpenAICodexUserAgent,

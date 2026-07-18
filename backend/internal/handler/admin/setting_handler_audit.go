@@ -416,6 +416,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.RewriteMessageCacheControl != after.RewriteMessageCacheControl {
 		changed = append(changed, "rewrite_message_cache_control")
 	}
+	if before.EnableGrokResponsesFreeFunctionToolCacheRoute != after.EnableGrokResponsesFreeFunctionToolCacheRoute {
+		changed = append(changed, "enable_grok_responses_free_function_tool_cache_route")
+	}
 	if before.EnableClientDatelineNormalization != after.EnableClientDatelineNormalization {
 		changed = append(changed, "enable_client_dateline_normalization")
 	}

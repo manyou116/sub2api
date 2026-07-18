@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -132,6 +133,16 @@ func applyGrokResponsesCacheIdentity(body, intentSourceBody []byte, identity str
 	return sjson.SetBytes(out, "tool_choice", grokFreeCacheDisabledToolChoice)
 }
 
+// isGrokResponsesFreeFunctionToolCacheRouteEnabled reports whether Codex /
+// Responses→Grok Free mixed-tools cache routing is enabled in system settings.
+// Defaults to true when the setting service is unavailable (safe for tests).
+func (s *OpenAIGatewayService) isGrokResponsesFreeFunctionToolCacheRouteEnabled(ctx context.Context) bool {
+	if s == nil || s.settingService == nil {
+		return true
+	}
+	return s.settingService.IsGrokResponsesFreeFunctionToolCacheRouteEnabled(ctx)
+}
+
 // applyGrokFreeMessagesFunctionToolCacheRoute enables xAI's cache-capable
 // mixed-tools route when the selected account is known to be Free and the
 // request already declares Responses-shaped function tools (tool_choice auto
@@ -139,8 +150,9 @@ func applyGrokResponsesCacheIdentity(body, intentSourceBody []byte, identity str
 // stuck on the non-cacheable build-free routing bucket.
 //
 // Call sites:
-//   - Anthropic Messages → Grok bridge (ForwardAsAnthropic)
+//   - Anthropic Messages → Grok bridge (ForwardAsAnthropic) — always, not gated
 //   - Codex / OpenAI Responses → Grok (forwardGrokResponses, WS bridge, chat bridge)
+//     gated by enable_grok_responses_free_function_tool_cache_route (default true)
 //
 // Native tools become eligible under auto selection, so callers must not apply
 // this policy to paid accounts. intentSourceBody should reflect the tool intent

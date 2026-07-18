@@ -53,16 +53,17 @@ const backendModeDBTimeout = 5 * time.Second
 
 // cachedGatewayForwardingSettings 缓存网关转发行为设置（进程内缓存，60s TTL）
 type cachedGatewayForwardingSettings struct {
-	fingerprintUnification           bool
-	metadataPassthrough              bool
-	cchSigning                       bool
-	claudeOAuthSystemPromptInjection bool
-	claudeOAuthSystemPrompt          string
-	claudeOAuthSystemPromptBlocks    string
-	anthropicCacheTTL1hInjection     bool
-	rewriteMessageCacheControl       bool
-	clientDatelineNormalization      bool
-	expiresAt                        int64 // unix nano
+	fingerprintUnification                  bool
+	metadataPassthrough                     bool
+	cchSigning                              bool
+	claudeOAuthSystemPromptInjection        bool
+	claudeOAuthSystemPrompt                 string
+	claudeOAuthSystemPromptBlocks           string
+	anthropicCacheTTL1hInjection            bool
+	rewriteMessageCacheControl              bool
+	grokResponsesFreeFunctionToolCacheRoute bool
+	clientDatelineNormalization             bool
+	expiresAt                               int64 // unix nano
 }
 
 var gatewayForwardingCache atomic.Value // *cachedGatewayForwardingSettings
@@ -588,6 +589,7 @@ func (s *SettingService) IsBackendModeEnabled(ctx context.Context) bool {
 
 type gatewayForwardingSettingsResult struct {
 	fp, mp, cch, claudeOAuthSystemPromptInjection, cacheTTL1h, rewriteMessageCacheControl bool
+	grokResponsesFreeFunctionToolCacheRoute                                               bool
 	clientDatelineNormalization                                                           bool
 	claudeOAuthSystemPrompt, claudeOAuthSystemPromptBlocks                                string
 }
@@ -604,7 +606,8 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
 				cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
 				rewriteMessageCacheControl:       cached.rewriteMessageCacheControl,
-				clientDatelineNormalization:      cached.clientDatelineNormalization,
+				grokResponsesFreeFunctionToolCacheRoute: cached.grokResponsesFreeFunctionToolCacheRoute,
+				clientDatelineNormalization:             cached.clientDatelineNormalization,
 			}
 		}
 	}
@@ -620,7 +623,8 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 					claudeOAuthSystemPromptBlocks:    cached.claudeOAuthSystemPromptBlocks,
 					cacheTTL1h:                       cached.anthropicCacheTTL1hInjection,
 					rewriteMessageCacheControl:       cached.rewriteMessageCacheControl,
-					clientDatelineNormalization:      cached.clientDatelineNormalization,
+					grokResponsesFreeFunctionToolCacheRoute: cached.grokResponsesFreeFunctionToolCacheRoute,
+					clientDatelineNormalization:             cached.clientDatelineNormalization,
 				}, nil
 			}
 		}
@@ -635,21 +639,29 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			SettingKeyClaudeOAuthSystemPromptBlocks,
 			SettingKeyEnableAnthropicCacheTTL1hInjection,
 			SettingKeyRewriteMessageCacheControl,
+			SettingKeyEnableGrokResponsesFreeFunctionToolCacheRoute,
 			SettingKeyEnableClientDatelineNormalization,
 		})
 		if err != nil {
 			slog.Warn("failed to get gateway forwarding settings", "error", err)
 			gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
-				fingerprintUnification:           true,
-				metadataPassthrough:              false,
-				cchSigning:                       false,
-				claudeOAuthSystemPromptInjection: true,
-				anthropicCacheTTL1hInjection:     false,
-				rewriteMessageCacheControl:       s.defaultRewriteMessageCacheControl(),
-				clientDatelineNormalization:      true,
-				expiresAt:                        time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
+				fingerprintUnification:                  true,
+				metadataPassthrough:                     false,
+				cchSigning:                              false,
+				claudeOAuthSystemPromptInjection:        true,
+				anthropicCacheTTL1hInjection:            false,
+				rewriteMessageCacheControl:              s.defaultRewriteMessageCacheControl(),
+				grokResponsesFreeFunctionToolCacheRoute: s.defaultGrokResponsesFreeFunctionToolCacheRoute(),
+				clientDatelineNormalization:             true,
+				expiresAt:                               time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
 			})
-			return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, rewriteMessageCacheControl: s.defaultRewriteMessageCacheControl(), clientDatelineNormalization: true}, nil
+			return gatewayForwardingSettingsResult{
+				fp:                               true,
+				claudeOAuthSystemPromptInjection: true,
+				rewriteMessageCacheControl:       s.defaultRewriteMessageCacheControl(),
+				grokResponsesFreeFunctionToolCacheRoute: s.defaultGrokResponsesFreeFunctionToolCacheRoute(),
+				clientDatelineNormalization:             true,
+			}, nil
 		}
 		fp := true
 		if v, ok := values[SettingKeyEnableFingerprintUnification]; ok && v != "" {
@@ -668,21 +680,26 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		if v, ok := values[SettingKeyRewriteMessageCacheControl]; ok && v != "" {
 			rewriteMessageCacheControl = v == "true"
 		}
+		grokResponsesFreeFunctionToolCacheRoute := s.defaultGrokResponsesFreeFunctionToolCacheRoute()
+		if v, ok := values[SettingKeyEnableGrokResponsesFreeFunctionToolCacheRoute]; ok && v != "" {
+			grokResponsesFreeFunctionToolCacheRoute = v == "true"
+		}
 		clientDatelineNormalization := true
 		if v, ok := values[SettingKeyEnableClientDatelineNormalization]; ok && v != "" {
 			clientDatelineNormalization = v == "true"
 		}
 		gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
-			fingerprintUnification:           fp,
-			metadataPassthrough:              mp,
-			cchSigning:                       cch,
-			claudeOAuthSystemPromptInjection: systemPromptInjection,
-			claudeOAuthSystemPrompt:          systemPrompt,
-			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
-			anthropicCacheTTL1hInjection:     cacheTTL1h,
-			rewriteMessageCacheControl:       rewriteMessageCacheControl,
-			clientDatelineNormalization:      clientDatelineNormalization,
-			expiresAt:                        time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
+			fingerprintUnification:                  fp,
+			metadataPassthrough:                     mp,
+			cchSigning:                              cch,
+			claudeOAuthSystemPromptInjection:        systemPromptInjection,
+			claudeOAuthSystemPrompt:                 systemPrompt,
+			claudeOAuthSystemPromptBlocks:           systemPromptBlocks,
+			anthropicCacheTTL1hInjection:            cacheTTL1h,
+			rewriteMessageCacheControl:              rewriteMessageCacheControl,
+			grokResponsesFreeFunctionToolCacheRoute: grokResponsesFreeFunctionToolCacheRoute,
+			clientDatelineNormalization:             clientDatelineNormalization,
+			expiresAt:                               time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 		})
 		return gatewayForwardingSettingsResult{
 			fp:                               fp,
@@ -693,13 +710,19 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			claudeOAuthSystemPromptBlocks:    systemPromptBlocks,
 			cacheTTL1h:                       cacheTTL1h,
 			rewriteMessageCacheControl:       rewriteMessageCacheControl,
-			clientDatelineNormalization:      clientDatelineNormalization,
+			grokResponsesFreeFunctionToolCacheRoute: grokResponsesFreeFunctionToolCacheRoute,
+			clientDatelineNormalization:             clientDatelineNormalization,
 		}, nil
 	})
 	if r, ok := val.(gatewayForwardingSettingsResult); ok {
 		return r
 	}
-	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, clientDatelineNormalization: true}
+	return gatewayForwardingSettingsResult{
+		fp:                               true,
+		claudeOAuthSystemPromptInjection: true,
+		grokResponsesFreeFunctionToolCacheRoute: s.defaultGrokResponsesFreeFunctionToolCacheRoute(),
+		clientDatelineNormalization:             true,
+	}
 }
 
 // GetGatewayForwardingSettings returns cached gateway forwarding settings.
@@ -718,6 +741,16 @@ func (s *SettingService) IsAnthropicCacheTTL1hInjectionEnabled(ctx context.Conte
 // IsRewriteMessageCacheControlEnabled 检查是否启用 messages cache_control 改写。
 func (s *SettingService) IsRewriteMessageCacheControlEnabled(ctx context.Context) bool {
 	return s.getGatewayForwardingSettingsCached(ctx).rewriteMessageCacheControl
+}
+
+// IsGrokResponsesFreeFunctionToolCacheRouteEnabled 检查是否在 Grok Responses
+//（Codex HTTP/WS/chat bridge）路径对 Free 账号启用 function-tool 缓存抬档。
+// 默认开启；关闭后与旧版仅 Messages 桥抬档行为一致。
+func (s *SettingService) IsGrokResponsesFreeFunctionToolCacheRouteEnabled(ctx context.Context) bool {
+	if s == nil {
+		return true
+	}
+	return s.getGatewayForwardingSettingsCached(ctx).grokResponsesFreeFunctionToolCacheRoute
 }
 
 // IsClientDatelineNormalizationEnabled 检查是否启用 Anthropic OAuth/SetupToken 请求体

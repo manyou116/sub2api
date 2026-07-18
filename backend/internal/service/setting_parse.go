@@ -206,6 +206,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAllowUngroupedKeyScheduling:                        "false",
 		SettingKeyEnableAnthropicCacheTTL1hInjection:                 "false",
 		SettingKeyRewriteMessageCacheControl:                         strconv.FormatBool(s.defaultRewriteMessageCacheControl()),
+		SettingKeyEnableGrokResponsesFreeFunctionToolCacheRoute:      strconv.FormatBool(s.defaultGrokResponsesFreeFunctionToolCacheRoute()),
 		SettingKeyEnableClientDatelineNormalization:                  "true",
 		SettingKeyAntigravityUserAgentVersion:                        "",
 		SettingKeyOpenAICodexUserAgent:                               "",
@@ -756,6 +757,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.RewriteMessageCacheControl = v == "true"
 	} else {
 		result.RewriteMessageCacheControl = s.defaultRewriteMessageCacheControl()
+	}
+	if v, ok := settings[SettingKeyEnableGrokResponsesFreeFunctionToolCacheRoute]; ok && v != "" {
+		result.EnableGrokResponsesFreeFunctionToolCacheRoute = v == "true"
+	} else {
+		result.EnableGrokResponsesFreeFunctionToolCacheRoute = s.defaultGrokResponsesFreeFunctionToolCacheRoute()
 	}
 	if v, ok := settings[SettingKeyEnableClientDatelineNormalization]; ok && v != "" {
 		result.EnableClientDatelineNormalization = v == "true"
