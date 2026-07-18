@@ -399,6 +399,56 @@ func TestGrokFreeMessagesFunctionToolCacheRouteRequiresIdentity(t *testing.T) {
 	require.Len(t, gjson.GetBytes(patched, "tools").Array(), 1)
 }
 
+// Codex /v1/responses always carries client tools, so applyGrokResponsesCacheIdentity
+// alone never injects native tools. The Free function-tool route (now also used by
+// forwardGrokResponses) must append web_search/x_search after sanitize, matching
+// the Messages→Grok bridge.
+func TestGrokResponsesFreeCodexToolsPipelineAppendsNativeCacheTools(t *testing.T) {
+	account := healthyGrokOAuthGatewayTestAccount(916, "access-token")
+	account.Credentials["subscription_tier"] = "free"
+
+	// Mix a supported function tool with an unsupported namespace carrier that
+	// patchGrokResponsesBody drops (same shape Codex multi_agent tools use).
+	rawBody := []byte(`{
+		"model":"grok-4.5",
+		"prompt_cache_key":"client-raw-session",
+		"tool_choice":"auto",
+		"tools":[
+			{"type":"function","name":"view_image","parameters":{"type":"object"}},
+			{"type":"function","name":"exec_command","parameters":{"type":"object"}},
+			{"type":"namespace","name":"multi_agent_v1","tools":[]}
+		],
+		"input":[{"type":"message","role":"user","content":[
+			{"type":"input_text","text":"[Image #1] look"},
+			{"type":"input_image","image_url":"data:image/png;base64,AAAA","detail":"high"}
+		]}]
+	}`)
+
+	patched, err := patchGrokResponsesBody(rawBody, "grok-4.5")
+	require.NoError(t, err)
+	// namespace dropped; functions kept
+	require.Equal(t, 2, len(gjson.GetBytes(patched, "tools").Array()))
+
+	identity := "isolated-codex-session"
+	freeRouteIntent := patched
+	patched, err = applyGrokResponsesCacheIdentity(patched, rawBody, identity, account.IsGrokOAuth())
+	require.NoError(t, err)
+	require.Equal(t, identity, gjson.GetBytes(patched, "prompt_cache_key").String())
+	// Client tools present on intent → no tool_choice=none native-only injection
+	require.Equal(t, 2, len(gjson.GetBytes(patched, "tools").Array()))
+
+	patched, err = applyGrokFreeMessagesFunctionToolCacheRoute(patched, freeRouteIntent, account, identity)
+	require.NoError(t, err)
+	tools := gjson.GetBytes(patched, "tools").Array()
+	require.Len(t, tools, 4)
+	require.Equal(t, "function", tools[0].Get("type").String())
+	require.Equal(t, "view_image", tools[0].Get("name").String())
+	require.Equal(t, "web_search", tools[2].Get("type").String())
+	require.Equal(t, "x_search", tools[3].Get("type").String())
+	// Image part still present after patch + cache routing
+	require.Contains(t, gjson.GetBytes(patched, "input").Raw, "input_image")
+}
+
 func TestApplyGrokCacheIdentityPreservesIneligibleClientToolFields(t *testing.T) {
 	tests := []struct {
 		name string

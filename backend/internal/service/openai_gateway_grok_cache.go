@@ -133,10 +133,18 @@ func applyGrokResponsesCacheIdentity(body, intentSourceBody []byte, identity str
 }
 
 // applyGrokFreeMessagesFunctionToolCacheRoute enables xAI's cache-capable
-// mixed-tools route only for the Anthropic Messages bridge and only when the
-// selected account is known to be Free. Native tools become eligible under
-// auto selection, so callers must not apply this policy to paid accounts or
-// other ingress protocols implicitly.
+// mixed-tools route when the selected account is known to be Free and the
+// request already declares Responses-shaped function tools (tool_choice auto
+// or omitted). Native web_search/x_search are appended so Free OAuth is not
+// stuck on the non-cacheable build-free routing bucket.
+//
+// Call sites:
+//   - Anthropic Messages → Grok bridge (ForwardAsAnthropic)
+//   - Codex / OpenAI Responses → Grok (forwardGrokResponses, WS bridge, chat bridge)
+//
+// Native tools become eligible under auto selection, so callers must not apply
+// this policy to paid accounts. intentSourceBody should reflect the tool intent
+// after unsupported tool types have been sanitized (for Codex, post-patch).
 func applyGrokFreeMessagesFunctionToolCacheRoute(body, intentSourceBody []byte, account *Account, cacheIdentity string) ([]byte, error) {
 	if strings.TrimSpace(cacheIdentity) == "" || !isKnownGrokFreeAccount(account) {
 		return body, nil

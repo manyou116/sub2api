@@ -57,9 +57,23 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	if err != nil {
 		return nil, err
 	}
+	// Intent for Free mixed-tools routing must be post-sanitize: Codex often
+	// sends unsupported tool carriers (e.g. namespace) that patch drops. Using the
+	// original body would make isGrokFreeCacheFunctionToolIntent reject the
+	// whole request even when only function tools remain for xAI.
+	freeRouteIntentBody := patchedBody
 	patchedBody, err = applyGrokResponsesCacheIdentity(patchedBody, body, cacheIdentity, account.IsGrokOAuth())
 	if err != nil {
 		return nil, fmt.Errorf("apply grok prompt cache identity: %w", err)
+	}
+	// Align with ForwardAsAnthropic (Messages→Grok): Free OAuth + function tools
+	// can take xAI's cache-capable mixed-tools route. Without this, Codex
+	// /v1/responses always carries client tools so applyGrokResponsesCacheIdentity
+	// skips native-tool injection and Free traffic stays on the non-cacheable
+	// build-free routing bucket.
+	patchedBody, err = applyGrokFreeMessagesFunctionToolCacheRoute(patchedBody, freeRouteIntentBody, account, cacheIdentity)
+	if err != nil {
+		return nil, fmt.Errorf("apply grok Free function-tool cache route: %w", err)
 	}
 
 	token, _, err := s.getRequestCredential(ctx, c, account)
