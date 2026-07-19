@@ -56,6 +56,7 @@ type AccountHandler struct {
 	rateLimitService        *service.RateLimitService
 	accountUsageService     *service.AccountUsageService
 	accountTestService      *service.AccountTestService
+	kiroModelDiscovery      service.KiroModelDiscovery
 	concurrencyService      *service.ConcurrencyService
 	crsSyncService          *service.CRSSyncService
 	sessionLimitCache       service.SessionLimitCache
@@ -69,6 +70,11 @@ type AccountHandler struct {
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
 func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamBillingProbeService) {
 	h.upstreamBillingProbe = probe
+}
+
+// SetKiroModelDiscovery attaches optional live model discovery for Kiro accounts.
+func (h *AccountHandler) SetKiroModelDiscovery(discovery service.KiroModelDiscovery) {
+	h.kiroModelDiscovery = discovery
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -2429,6 +2435,50 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	if account.Platform == service.PlatformAntigravity {
 		// 直接复用 antigravity.DefaultModels()，与 /v1/models 端点保持同步
 		response.Success(c, antigravity.DefaultModels())
+		return
+	}
+
+	// Handle Kiro accounts (P5): explicit mapping wins; otherwise try live discovery.
+	if account.IsKiro() {
+		defaults := service.KiroDefaultModels
+		mapping := account.GetModelMapping()
+		if len(mapping) > 0 {
+			defaultByID := make(map[string]service.KiroAvailableModel, len(defaults))
+			for _, model := range defaults {
+				defaultByID[model.ID] = model
+			}
+			requestedModels := make([]string, 0, len(mapping))
+			for requestedModel := range mapping {
+				requestedModels = append(requestedModels, requestedModel)
+			}
+			sort.Strings(requestedModels)
+			models := make([]service.KiroAvailableModel, 0, len(mapping))
+			for _, requestedModel := range requestedModels {
+				if dm, ok := defaultByID[requestedModel]; ok {
+					models = append(models, dm)
+					continue
+				}
+				models = append(models, service.KiroAvailableModel{
+					ID:          requestedModel,
+					Type:        "model",
+					DisplayName: requestedModel,
+				})
+			}
+			response.Success(c, models)
+			return
+		}
+
+		if h.kiroModelDiscovery != nil {
+			models, err := h.kiroModelDiscovery.ListAvailableModels(c.Request.Context(), account)
+			if err == nil && len(models) > 0 {
+				response.Success(c, models)
+				return
+			}
+			if err != nil {
+				slog.Warn("kiro_models.discovery_failed", "account_id", account.ID, "error", err)
+			}
+		}
+		response.Success(c, defaults)
 		return
 	}
 
