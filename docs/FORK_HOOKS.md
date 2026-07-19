@@ -59,6 +59,7 @@ approves a new fork-only Grok patch.
 | Service | `openai_web_images_service.go` | inflight + cooldown (DB truth + cache) |
 | Admin | `admin_account.go` UpdateAccount | preserves `openai_web_images` when extra omits key |
 | Path select | `openai_images_legacy_web.go` / images handler | `UsesOpenAIWebImagesPath` / legacy web path |
+| Chat bridge | `openai_chat_completions.go`, `openai_chat_image_bridge.go` | `tryChatCompletionsImageBridge` before GPT image endpoint guard; temporary path rewrite to `/v1/images/generations` or `/v1/images/edits` |
 | Scheduler | `openai_account_scheduler.go` | web image path does **not** consume text concurrency slots; filters `IsWebImageRateLimited` |
 | Durable RL | **`account_repo_webimg.go`** + `migrations/177_add_web_image_rate_limit.sql` | `SetWebImageRateLimited` / `ClearWebImageRateLimit` / `attachWebImageRateLimits` / capacity list |
 | Hot hook only | `account_repo.go` | one call: `attachWebImageRateLimits` after account load |
