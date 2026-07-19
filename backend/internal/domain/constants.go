@@ -23,7 +23,18 @@ const (
 	PlatformGemini      = "gemini"
 	PlatformAntigravity = "antigravity"
 	PlatformGrok        = "grok"
+	PlatformKiro        = "kiro"
 	PlatformComposite   = "composite"
+)
+
+const (
+	KiroAuthMethodSocial = "social"
+	KiroAuthMethodIdC    = "idc"
+)
+
+const (
+	KiroDefaultRegion    = "us-east-1"
+	KiroIDEUserAgentTmpl = "KiroIDE-0.6.18-%s"
 )
 
 // Account type constants
