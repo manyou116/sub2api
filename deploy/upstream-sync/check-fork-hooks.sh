@@ -36,6 +36,60 @@ need_rg() {
 
 echo "== Fork hook check (see docs/FORK_HOOKS.md) =="
 
+# --- P1 webimg ---
+echo "-- P1 webimg --"
+need_file backend/internal/service/openaiimages/webdriver/types.go
+need_file backend/internal/service/openai_web_images_service.go
+need_file backend/migrations/177_add_web_image_rate_limit.sql
+need_file backend/internal/repository/account_repo_webimg.go
+need_file backend/internal/service/account_webimg.go
+need_file backend/internal/service/openai_account_scheduler_webimg.go
+need_rg "SetWebImageRateLimited repo (fork file)" \
+  "SetWebImageRateLimited" \
+  backend/internal/repository/account_repo_webimg.go
+need_rg "attachWebImageRateLimits (fork file)" \
+  "attachWebImageRateLimits" \
+  backend/internal/repository/account_repo_webimg.go
+need_rg "capacity list includes text-RL webimg accounts" \
+  "ListSchedulableCapacityByGroupIDs" \
+  backend/internal/repository/account_repo_webimg.go
+need_rg "IsWebImageRateLimited helper (fork file)" \
+  "IsWebImageRateLimited" \
+  backend/internal/service/account_webimg.go
+need_rg "web path skip text slot (fork file)" \
+  "acquireAccountSlotForSchedule" \
+  backend/internal/service/openai_account_scheduler_webimg.go
+need_rg "hot account_repo still attaches webimg cooldown" \
+  "attachWebImageRateLimits" \
+  backend/internal/repository/account_repo.go
+need_rg "hot scheduler still calls webimg cooldown gate" \
+  "accountBlockedByWebImageCooldown" \
+  backend/internal/service/openai_account_scheduler.go
+
+# --- P1 webimg (extra call-site hooks) ---
+echo "-- P1 webimg call sites --"
+need_rg "UsesOpenAIWebImagesPath helper" \
+  "UsesOpenAIWebImagesPath" \
+  backend/internal/service/openai_images_legacy_web.go
+need_rg "ClearWebImageRateLimit repo" \
+  "ClearWebImageRateLimit" \
+  backend/internal/repository/account_repo_webimg.go
+need_rg "ClearRateLimit clears web image cooldown" \
+  "ClearWebImageRateLimit" \
+  backend/internal/service/ratelimit_service.go
+need_rg "webimg package import or path" \
+  "openaiimages" \
+  backend/internal/service/openai_web_images_service.go
+
+# --- P4 capacity (lightweight) ---
+echo "-- P4 capacity --"
+need_rg "image concurrency capacity fields" \
+  "image_concurrency_used" \
+  backend/internal/service/group_capacity_service.go
+need_rg "scheduler webimg path check" \
+  "UsesOpenAIWebImagesPath" \
+  backend/internal/service/openai_account_scheduler_webimg.go
+
 # --- P3 docs/tooling ---
 echo "-- P3 docs/tooling --"
 need_file docs/FORK_HOOKS.md
