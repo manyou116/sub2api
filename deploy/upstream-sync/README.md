@@ -95,6 +95,5 @@ After every successful merge (local or CI):
 
 Full agent-oriented checklist: [`docs/FORK_HOOKS.md`](../../docs/FORK_HOOKS.md).
 
-This catches regressions like dropped `normalizeGrokOpenAIClientBody` call sites
-(`presencePenalty` 400 after taking upstream Grok files wholesale).
-
+This catches regressions like dropped webimg/Kiro hook files after taking
+upstream files wholesale.

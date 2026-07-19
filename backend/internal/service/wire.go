@@ -195,6 +195,24 @@ func ProvideAccountTestService(
 	return service
 }
 
+func ProvideOpenAIWebImagesService(
+	cfg *config.Config,
+	rdb *redis.Client,
+	accountRepo AccountRepository,
+	gateway *OpenAIGatewayService,
+) *OpenAIWebImagesService {
+	svc := NewOpenAIWebImagesService(cfg, rdb, accountRepo)
+	if gateway != nil {
+		gateway.SetOpenAIWebImagesService(svc)
+		// Probe/schedule must use the same refreshed OAuth token path as image forward.
+		svc.SetAccessTokenFunc(func(ctx context.Context, account *Account) (string, error) {
+			token, _, err := gateway.GetAccessToken(ctx, account)
+			return token, err
+		})
+	}
+	return svc
+}
+
 func ProvideGrokQuotaService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
@@ -718,6 +736,7 @@ var ProviderSet = wire.NewSet(
 	ProvideGrokTokenProvider,
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
+	ProvideOpenAIWebImagesService,
 	ProvideGrokQuotaService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,

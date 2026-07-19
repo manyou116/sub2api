@@ -63,6 +63,7 @@ type AccountHandler struct {
 	tokenCacheInvalidator   service.TokenCacheInvalidator
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
+	webImages               *service.OpenAIWebImagesService
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -1471,6 +1472,7 @@ func (h *AccountHandler) ClearError(c *gin.Context) {
 	}
 
 	account, err := h.adminService.ClearAccountError(c.Request.Context(), accountID)
+	h.clearWebImagesCooldownBestEffort(context.Background(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -1531,6 +1533,8 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 	for _, id := range req.AccountIDs {
 		accountID := id // 闭包捕获
 		g.Go(func() error {
+			// Clear web image cooldown even if account error clear fails.
+			h.clearWebImagesCooldownBestEffort(context.Background(), accountID)
 			account, err := h.adminService.ClearAccountError(gctx, accountID)
 			if err != nil {
 				mu.Lock()
@@ -2151,6 +2155,7 @@ func (h *AccountHandler) ClearRateLimit(c *gin.Context) {
 	}
 
 	err = h.rateLimitService.ClearRateLimit(c.Request.Context(), accountID)
+	h.clearWebImagesCooldownBestEffort(context.Background(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
