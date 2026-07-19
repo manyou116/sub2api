@@ -49,6 +49,8 @@ services:
       - SERVER_MODE=${SERVER_MODE:-release}
       - ENABLE_SERVER_TIMING=${ENABLE_SERVER_TIMING:-false}
       - RUN_MODE=${RUN_MODE:-standard}
+      - SERVER_SHUTDOWN_TIMEOUT=${SERVER_SHUTDOWN_TIMEOUT:-300}
+      - SERVER_SHUTDOWN_DRAIN_DELAY=${SERVER_SHUTDOWN_DRAIN_DELAY:-0}
 
       # =======================================================================
       # Database Configuration (PostgreSQL)
@@ -174,6 +176,8 @@ services:
         condition: service_healthy
     networks:
       - sub2api-network
+    # Wait for in-flight API requests on SIGTERM (should be >= server.shutdown_timeout)
+    stop_grace_period: 320s
     healthcheck:
       test:
         [

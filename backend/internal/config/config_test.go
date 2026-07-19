@@ -41,10 +41,24 @@ func TestLoadHTTPIngressSafetyDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 10, cfg.Server.ReadHeaderTimeout)
 	require.Equal(t, 64*1024, cfg.Server.MaxHeaderBytes)
+	require.Equal(t, 300, cfg.Server.ShutdownTimeout)
+	require.Equal(t, 0, cfg.Server.ShutdownDrainDelay)
 	require.Equal(t, int64(32*1024*1024), cfg.Gateway.TextMaxBodySize)
 	require.True(t, cfg.APIKeyAuth.InvalidAbuse.Enabled)
 	require.Equal(t, 120, cfg.APIKeyAuth.InvalidAbuse.Threshold)
 	require.Equal(t, 16384, cfg.APIKeyAuth.InvalidAbuse.Capacity)
+}
+
+func TestLoadServerShutdownConfigFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("SERVER_SHUTDOWN_TIMEOUT", "45")
+	t.Setenv("SERVER_SHUTDOWN_DRAIN_DELAY", "7")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, 45, cfg.Server.ShutdownTimeout)
+	require.Equal(t, 7, cfg.Server.ShutdownDrainDelay)
 }
 
 func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
