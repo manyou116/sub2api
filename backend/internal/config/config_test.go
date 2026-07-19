@@ -55,6 +55,8 @@ func TestLoadHTTPIngressSafetyDefaults(t *testing.T) {
 	require.Empty(t, cfg.Server.TrustedProxies)
 	require.False(t, cfg.Server.TrustedProxiesConfigured)
 	require.True(t, cfg.TrustForwardedIPForAPIKeyACL())
+	require.Equal(t, 300, cfg.Server.ShutdownTimeout)
+	require.Equal(t, 0, cfg.Server.ShutdownDrainDelay)
 	require.Equal(t, int64(32*1024*1024), cfg.Gateway.TextMaxBodySize)
 	require.True(t, cfg.APIKeyAuth.InvalidAbuse.Enabled)
 	require.Equal(t, 120, cfg.APIKeyAuth.InvalidAbuse.Threshold)
@@ -252,6 +254,19 @@ func TestLoadTrustedProxiesPresenceFromYAML(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadServerShutdownConfigFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("SERVER_SHUTDOWN_TIMEOUT", "45")
+	t.Setenv("SERVER_SHUTDOWN_DRAIN_DELAY", "7")
+
+	cfg, err := Load()
+
+	require.NoError(t, err)
+	require.Equal(t, 45, cfg.Server.ShutdownTimeout)
+	require.Equal(t, 7, cfg.Server.ShutdownDrainDelay)
+}
+
 
 func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
 	viper.Reset()

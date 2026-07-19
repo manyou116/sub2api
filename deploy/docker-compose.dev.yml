@@ -28,6 +28,8 @@ services:
       - SERVER_MODE=debug
       - ENABLE_SERVER_TIMING=${ENABLE_SERVER_TIMING:-false}
       - RUN_MODE=${RUN_MODE:-standard}
+      - SERVER_SHUTDOWN_TIMEOUT=${SERVER_SHUTDOWN_TIMEOUT:-300}
+      - SERVER_SHUTDOWN_DRAIN_DELAY=${SERVER_SHUTDOWN_DRAIN_DELAY:-0}
       - DATABASE_HOST=postgres
       - DATABASE_PORT=5432
       - DATABASE_USER=${POSTGRES_USER:-sub2api}
@@ -81,6 +83,8 @@ services:
         condition: service_healthy
     networks:
       - sub2api-network
+    # Wait for in-flight API requests on SIGTERM (should be >= server.shutdown_timeout)
+    stop_grace_period: 320s
     healthcheck:
       test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 30s

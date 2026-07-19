@@ -7,7 +7,6 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/ent"
@@ -349,31 +348,19 @@ func provideCleanup(
 		}
 
 		runParallel := func(steps []cleanupStep) {
-			var wg sync.WaitGroup
-			for i := range steps {
-				step := steps[i]
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					if err := step.fn(); err != nil {
-						log.Printf("[Cleanup] %s failed: %v", step.name, err)
-						return
-					}
-					log.Printf("[Cleanup] %s succeeded", step.name)
-				}()
+			cleanupSteps := make([]CleanupStep, len(steps))
+			for i, step := range steps {
+				cleanupSteps[i] = CleanupStep{Name: step.name, Fn: step.fn}
 			}
-			wg.Wait()
+			RunCleanupParallel(ctx, cleanupSteps)
 		}
 
 		runSequential := func(steps []cleanupStep) {
-			for i := range steps {
-				step := steps[i]
-				if err := step.fn(); err != nil {
-					log.Printf("[Cleanup] %s failed: %v", step.name, err)
-					continue
-				}
-				log.Printf("[Cleanup] %s succeeded", step.name)
+			cleanupSteps := make([]CleanupStep, len(steps))
+			for i, step := range steps {
+				cleanupSteps[i] = CleanupStep{Name: step.name, Fn: step.fn}
 			}
+			RunCleanupSequential(ctx, cleanupSteps)
 		}
 
 		runParallel(parallelSteps)

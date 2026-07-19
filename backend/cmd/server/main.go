@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/server/routes"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
 	"github.com/Wei-Shaw/sub2api/internal/web"
 
@@ -177,14 +178,30 @@ func runMainServer() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
+	routes.MarkShuttingDown()
 	log.Println("Shutting down server...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	drainDelay := time.Duration(cfg.Server.ShutdownDrainDelay) * time.Second
+	if drainDelay > 0 {
+		log.Printf("Drain delay: waiting %s for load balancers to stop routing...", drainDelay)
+		time.Sleep(drainDelay)
+	}
+
+	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeout) * time.Second
+	if shutdownTimeout <= 0 {
+		shutdownTimeout = 300 * time.Second
+	}
+	log.Printf("Waiting up to %s for in-flight requests to finish...", shutdownTimeout)
+
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	if err := app.Server.Shutdown(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
+		log.Printf("Graceful shutdown incomplete: %v; forcing close of remaining connections", err)
+		if closeErr := app.Server.Close(); closeErr != nil {
+			log.Printf("Forced close error: %v", closeErr)
+		}
+	} else {
+		log.Println("Server exited gracefully")
 	}
-
-	log.Println("Server exited")
 }

@@ -1,0 +1,240 @@
+name: Upstream Sync
+
+# When Wei-Shaw/sub2api publishes a new pure semver tag (vX.Y.Z), merge it into
+# THIS fork (origin BASE_BRANCH). Clean merge → push here + fork tag.
+# Conflicts → PR for manual resolve (never force-push over conflicts).
+#
+# Tag scheme: v99.{upstream_without_v}-{FORK_SLUG}.{n}
+# e.g. upstream v0.1.154 → v99.0.1.154-plus.1
+# Leading 99. makes in-app parseVersion() treat us as newer than official
+# Wei-Shaw tags, so admin never shows "update available" / one-click upgrade
+# to the official binary (which would wipe fork features).
+
+on:
+  schedule:
+    # Poll upstream tags often enough to feel "automatic"
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream tag (empty = latest pure vX.Y.Z on Wei-Shaw/sub2api)"
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: "Plan only, do not push/merge"
+        required: false
+        type: boolean
+        default: false
+  repository_dispatch:
+    types: [upstream-release]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: ${{ vars.UPSTREAM_REPO || 'Wei-Shaw/sub2api' }}
+  FORK_SLUG: ${{ vars.FORK_SLUG || 'plus' }}
+  # Branch on THIS fork that receives upstream merges (must contain your fork commits).
+  BASE_BRANCH: ${{ vars.SYNC_BASE_BRANCH || 'main' }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch remotes
+        run: |
+          set -euo pipefail
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream --tags --force
+          git fetch origin --tags --force
+          git fetch origin "${BASE_BRANCH}" --force || true
+
+      - name: Resolve upstream tag + plan
+        id: plan
+        env:
+          INPUT_TAG: ${{ github.event.inputs.upstream_tag }}
+          DISPATCH_TAG: ${{ github.event.client_payload.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${INPUT_TAG:-}" ]; then
+            UTAG="$INPUT_TAG"
+          elif [ -n "${DISPATCH_TAG:-}" ]; then
+            UTAG="$DISPATCH_TAG"
+          else
+            # Latest pure semver tag from upstream remote (ignore -plus / pre-release style).
+            UTAG="$(git ls-remote --tags --refs upstream \
+              | awk '{print $2}' \
+              | sed 's#refs/tags/##' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -1 || true)"
+          fi
+          UTAG="${UTAG#refs/tags/}"
+          if [ -z "${UTAG:-}" ]; then
+            echo "No upstream semver tag found"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Ensure we have the tag object locally
+          if ! git rev-parse -q --verify "refs/tags/${UTAG}" >/dev/null; then
+            git fetch upstream "refs/tags/${UTAG}:refs/tags/${UTAG}" || \
+              git fetch upstream "refs/tags/${UTAG}"
+          fi
+          UP_COMMIT="$(git rev-list -n1 "${UTAG}")"
+          echo "upstream_tag=${UTAG}" >> "$GITHUB_OUTPUT"
+          echo "upstream_commit=${UP_COMMIT}" >> "$GITHUB_OUTPUT"
+
+          if ! git rev-parse -q --verify "origin/${BASE_BRANCH}" >/dev/null; then
+            echo "origin/${BASE_BRANCH} missing — set vars.SYNC_BASE_BRANCH to a branch that exists on this fork (e.g. main)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Already merged into THIS fork's base branch?
+          if git merge-base --is-ancestor "$UP_COMMIT" "origin/${BASE_BRANCH}" 2>/dev/null; then
+            echo "origin/${BASE_BRANCH} already contains ${UTAG} (${UP_COMMIT}) — nothing to merge"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Next fork release tag on this upstream base.
+          # v99.{X.Y.Z}-plus.N — not v{X.Y.Z}-plus.N (that false-triggers update UI).
+          BASE_VER="${UTAG#v}"
+          n=1
+          while git ls-remote --tags origin "refs/tags/v99.${BASE_VER}-${FORK_SLUG}.${n}" | grep -q . \
+            || git rev-parse -q --verify "refs/tags/v99.${BASE_VER}-${FORK_SLUG}.${n}" >/dev/null 2>&1; do
+            n=$((n+1))
+          done
+          FORK_TAG="v99.${BASE_VER}-${FORK_SLUG}.${n}"
+          BRANCH="sync/upstream-${UTAG#v}"
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "already=false" >> "$GITHUB_OUTPUT"
+          echo "fork_tag=${FORK_TAG}" >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "Plan: merge ${UTAG} into origin/${BASE_BRANCH} → tag ${FORK_TAG}"
+
+      - name: Merge upstream into fork base (clean path)
+        id: merge
+        if: steps.plan.outputs.skip != 'true' && github.event.inputs.dry_run != 'true'
+        run: |
+          set -euo pipefail
+          UTAG="${{ steps.plan.outputs.upstream_tag }}"
+          BRANCH="${{ steps.plan.outputs.branch }}"
+          FORK_TAG="${{ steps.plan.outputs.fork_tag }}"
+
+          git checkout -B "$BRANCH" "origin/${BASE_BRANCH}"
+
+          if git merge --no-ff -m "chore(sync): merge upstream ${UTAG}
+
+Merged into this fork from ${UPSTREAM_REPO} tag ${UTAG}.
+Next fork release tag: ${FORK_TAG}" "${UTAG}"; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+            # Push sync branch then fast-forward base branch HERE (this fork)
+            git push -u origin "$BRANCH" --force-with-lease
+            git push origin "HEAD:refs/heads/${BASE_BRANCH}"
+            echo "merged_to_base=true" >> "$GITHUB_OUTPUT"
+            echo "Merged cleanly into origin/${BASE_BRANCH}"
+          else
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+            echo "merged_to_base=false" >> "$GITHUB_OUTPUT"
+            # Preserve conflict markers for human PR
+            git add -A
+            if git diff --cached --quiet; then
+              git commit --allow-empty -m "chore(sync): WIP merge upstream ${UTAG} (conflicts)"
+            else
+              git commit -m "chore(sync): WIP merge upstream ${UTAG} (conflicts — search for <<<<<<<)"
+            fi
+            rm -f .git/MERGE_HEAD || true
+            git push -u origin "$BRANCH" --force-with-lease
+            echo "Conflicts — opened branch ${BRANCH} for PR (will not push to ${BASE_BRANCH})"
+          fi
+
+      - name: Verify fork hooks
+        if: success()
+        run: |
+          set -euo pipefail
+          chmod +x deploy/upstream-sync/check-fork-hooks.sh
+          ./deploy/upstream-sync/check-fork-hooks.sh
+
+      - name: Open PR only on conflicts
+        id: pr
+        if: steps.plan.outputs.skip != 'true' && steps.merge.outputs.clean == 'false' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH="${{ steps.plan.outputs.branch }}"
+          UTAG="${{ steps.plan.outputs.upstream_tag }}"
+          FORK_TAG="${{ steps.plan.outputs.fork_tag }}"
+          TITLE="chore(sync): upstream ${UTAG} needs manual resolve"
+          BODY="Automated merge of \`${UPSTREAM_REPO}\` tag \`${UTAG}\` into \`${BASE_BRANCH}\` **has conflicts**.
+
+This PR is on branch \`${BRANCH}\`. Resolve conflicts, merge into \`${BASE_BRANCH}\`, then tag:
+
+\`\`\`bash
+git tag -a ${FORK_TAG} -m \"fork on ${UTAG}\"
+git push origin ${FORK_TAG}
+\`\`\`
+
+### Hot paths (plus fork)
+- \`openai_account_scheduler.go\` / \`openai_gateway_scheduling.go\`
+- \`openai_images_responses.go\` / images gateway
+- \`AccountsView.vue\` / account admin
+- \`wire.go\` / \`config.go\`
+"
+          if gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' | grep -q .; then
+            NUM=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')
+            gh pr edit "$NUM" --title "$TITLE" --body "$BODY"
+            gh pr view "$NUM" --json url -q .url
+          else
+            gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --title "$TITLE" --body "$BODY" || \
+              gh pr create --base "$BASE_BRANCH" --head "$BRANCH" --title "$TITLE" --body "$BODY"
+          fi
+
+      - name: Tag fork release after clean merge
+        if: steps.plan.outputs.skip != 'true' && steps.merge.outputs.clean == 'true' && github.event.inputs.dry_run != 'true'
+        run: |
+          set -euo pipefail
+          FORK_TAG="${{ steps.plan.outputs.fork_tag }}"
+          UTAG="${{ steps.plan.outputs.upstream_tag }}"
+          git fetch origin "${BASE_BRANCH}" --tags
+          git checkout "origin/${BASE_BRANCH}"
+          if git ls-remote --tags origin "refs/tags/${FORK_TAG}" | grep -q .; then
+            echo "Tag already exists: ${FORK_TAG}"
+            exit 0
+          fi
+          git tag -a "$FORK_TAG" -m "fork release on upstream ${UTAG}"
+          git push origin "$FORK_TAG"
+          echo "Pushed ${FORK_TAG} (triggers Release workflow if configured for v*)"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Upstream sync" >> "$GITHUB_STEP_SUMMARY"
+          echo "- upstream: \`${{ steps.plan.outputs.upstream_tag || 'n/a' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- skip: \`${{ steps.plan.outputs.skip }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- clean merge: \`${{ steps.merge.outputs.clean || 'n/a' }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- base branch (THIS fork): \`${{ env.BASE_BRANCH }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- fork tag: \`${{ steps.plan.outputs.fork_tag || 'n/a' }}\`" >> "$GITHUB_STEP_SUMMARY"
