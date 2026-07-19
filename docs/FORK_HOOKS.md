@@ -86,13 +86,40 @@ routing and tenant-isolated `conversationId` for prompt-cache affinity.
 | EventStream | `pkg/kiroeventstream/` | frame decoder |
 | Gateway | `routes/gateway.go` | `isKiroGatewayPlatform` + `KiroChatCompletions` + `KiroResponses` |
 | Admin | `routes/kiro_admin.go` + call site in `admin.go` | `registerKiroAdminRoutes` → `/kiro/import` |
-| Group/quota allowlists | `group_handler.go`, `AllowedQuotaPlatforms`, `migrations/185_user_platform_quotas_add_kiro.sql` | `kiro` accepted for groups and user-platform quota rows |
+| Group/quota allowlists | `group_handler.go`, `AllowedQuotaPlatforms`, `migrations/186_user_platform_quotas_add_kiro.sql` | `kiro` accepted for groups and user-platform quota rows |
 | Token refresh | `token_refresh_service.go` | `KiroTokenRefresher` registered |
 | Wire | `wire.go` / `wire_gen.go` | `ProvideKiroTokenProvider` + `SetKiroTokenProvider` |
 | Cache identity | `kiro_prompt_cache.go` | `ResolveKiroCacheIdentity` (no raw client key upstream) |
 | Conversation id | `kiro_chat_service.go` `buildKiroPayload` | stable id from cache identity, not random UUID only |
 | Usage cache estimate | `kiro_chat_service.go`, `kiro_responses_service.go` | `applyKiroEstimatedCacheUsage` fills `cache_read` only when upstream omitted it |
+| Live model discovery | `kiro_model_discovery_service.go`, `account_handler.go` | account model list tries Kiro Q `ListAvailableModels` when no explicit mapping exists |
 | Frontend models | `frontend/src/composables/useModelWhitelist.ts` | `kiroModels` + `kiroPresetMappings` for account mapping UI |
+
+**Default:** off when no `platform=kiro` group/account exists.
+
+**Shape:** runtime stays in `package service` (`kiro_*.go` + `account_kiro.go`) to avoid
+Account/gateway import cycles; EventStream decoder is the only isolated package
+(`pkg/kiroeventstream`). Do not reintroduce an empty `service/kiro` ownership stub.
+
+
+
+### P5 — Kiro platform
+
+**Why:** Kiro (AWS CodeWhisperer) as a first-class platform with sticky account
+routing and tenant-isolated `conversationId` for prompt-cache affinity.
+
+| Hook | File / area | Must contain / behavior |
+|------|-------------|-------------------------|
+| Platform const | `domain/constants.go`, `service/domain_constants.go` | `PlatformKiro = "kiro"` |
+| Core services | `service/kiro_*.go`, `account_kiro.go` | token/chat/responses-bridge/selector/cache/quarantine |
+| EventStream | `pkg/kiroeventstream/` | frame decoder |
+| Gateway | `routes/gateway.go` | `isKiroGatewayPlatform` + `KiroChatCompletions` + `KiroResponses` |
+| Admin | `routes/kiro_admin.go` + call site in `admin.go` | `registerKiroAdminRoutes` → `/kiro/import` |
+| Group/quota allowlists | `group_handler.go`, `AllowedQuotaPlatforms`, `migrations/186_user_platform_quotas_add_kiro.sql` | `kiro` accepted for groups and user-platform quota rows |
+| Token refresh | `token_refresh_service.go` | `KiroTokenRefresher` registered |
+| Wire | `wire.go` / `wire_gen.go` | `ProvideKiroTokenProvider` + `SetKiroTokenProvider` |
+| Cache identity | `kiro_prompt_cache.go` | `ResolveKiroCacheIdentity` (no raw client key upstream) |
+| Conversation id | `kiro_chat_service.go` `buildKiroPayload` | stable id from cache identity, not random UUID only |
 
 **Default:** off when no `platform=kiro` group/account exists.
 
