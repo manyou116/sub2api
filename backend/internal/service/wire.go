@@ -269,6 +269,18 @@ func ProvideGrokTokenProvider(
 	return p
 }
 
+// ProvideKiroTokenProvider creates KiroTokenProvider with OAuthRefreshAPI injection (P5).
+func ProvideKiroTokenProvider(
+	accountRepo AccountRepository,
+	tokenCache GeminiTokenCache,
+	refreshAPI *OAuthRefreshAPI,
+) *KiroTokenProvider {
+	p := NewKiroTokenProvider(accountRepo, tokenCache)
+	executor := NewKiroTokenRefresher(NewKiroTokenService())
+	p.SetRefreshAPI(refreshAPI, executor)
+	return p
+}
+
 // ProvideDashboardAggregationService 创建并启动仪表盘聚合服务
 func ProvideDashboardAggregationService(repo DashboardAggregationRepository, timingWheel *TimingWheelService, lockCache LeaderLockCache, db *sql.DB, cfg *config.Config) *DashboardAggregationService {
 	svc := NewDashboardAggregationService(repo, timingWheel, cfg)
@@ -719,6 +731,9 @@ var ProviderSet = wire.NewSet(
 	NewGeminiMessagesCompatService,
 	ProvideAntigravityTokenProvider,
 	ProvideGrokTokenProvider,
+	ProvideKiroTokenProvider,
+	NewKiroModelDiscoveryService,
+	wire.Bind(new(KiroModelDiscovery), new(*KiroModelDiscoveryService)),
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
 	ProvideOpenAIWebImagesService,
