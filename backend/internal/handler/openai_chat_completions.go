@@ -80,10 +80,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", invalidStreamFieldTypeMessage)
 		return
 	}
-	if service.IsGPTImageGenerationModel(reqModel) {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "This model is not supported on the Chat Completions endpoint")
-		return
-	}
 
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 
@@ -107,6 +103,10 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		mappedForBridge = channelMapping.MappedModel
 	}
 	if h.tryChatCompletionsImageBridge(c, reqLog, body, reqModel, mappedForBridge) {
+		return
+	}
+	if service.IsGPTImageGenerationModel(reqModel) {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "This model is not supported on the Chat Completions endpoint")
 		return
 	}
 

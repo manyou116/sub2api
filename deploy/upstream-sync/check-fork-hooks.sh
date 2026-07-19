@@ -80,6 +80,19 @@ need_rg "ClearRateLimit clears web image cooldown" \
 need_rg "webimg package import or path" \
   "openaiimages" \
   backend/internal/service/openai_web_images_service.go
+need_rg "chat image bridge endpoint resolver" \
+  "ResolveChatImageBridgeEndpoint" \
+  backend/internal/service/openai_chat_image_bridge.go
+need_rg "chat image bridge rewrites request path" \
+  "c.Request.URL.Path = imagesEndpoint" \
+  backend/internal/handler/openai_chat_image_bridge.go
+bridge_line="$(grep -n "tryChatCompletionsImageBridge" backend/internal/handler/openai_chat_completions.go | head -n1 | cut -d: -f1 || true)"
+guard_line="$(grep -n "This model is not supported on the Chat Completions endpoint" backend/internal/handler/openai_chat_completions.go | head -n1 | cut -d: -f1 || true)"
+if [[ -n "$bridge_line" && -n "$guard_line" && "$bridge_line" -lt "$guard_line" ]]; then
+  ok "chat image bridge runs before GPT image endpoint guard"
+else
+  bad "chat image bridge must run before GPT image endpoint guard"
+fi
 
 # --- P4 capacity (lightweight) ---
 echo "-- P4 capacity --"
