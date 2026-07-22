@@ -140,6 +140,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		}
 	}
 	if account.Platform == PlatformGrok {
+		upstreamBody, err = normalizeGrokOpenAIClientBody(upstreamBody, upstreamModel, true)
+		if err != nil {
+			return nil, fmt.Errorf("normalize grok chat body: %w", err)
+		}
 		upstreamBody, err = stripGrokChatPromptCacheKey(upstreamBody)
 		if err != nil {
 			return nil, fmt.Errorf("remove Responses-only Grok prompt cache key: %w", err)

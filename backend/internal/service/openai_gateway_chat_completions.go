@@ -72,6 +72,15 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 
 	if account.Platform == PlatformGrok {
+		billingModel := resolveOpenAIForwardModel(account, gjson.GetBytes(body, "model").String(), defaultMappedModel)
+		upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+		normalizedBody, normErr := normalizeGrokOpenAIClientBody(body, upstreamModel, true)
+		if normErr != nil {
+			return nil, fmt.Errorf("normalize grok chat body: %w", normErr)
+		}
+		// Keep stop/reasoning_effort for routing; raw path re-normalizes for upstream.
+		body = reapplyGrokChatRouteSignals(body, normalizedBody)
+
 		if account.IsGrokOAuth() {
 			eligible, reason := grokChatResponsesBridgeEligibility(body)
 			if eligible {
@@ -80,6 +89,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			logger.L().Debug("grok chat_completions: using raw fallback",
 				zap.Int64("account_id", account.ID),
 				zap.String("reason", reason),
+				zap.String("upstream_model", upstreamModel),
 			)
 		}
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
