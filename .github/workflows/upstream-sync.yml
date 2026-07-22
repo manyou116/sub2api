@@ -146,10 +146,7 @@ jobs:
 
           git checkout -B "$BRANCH" "origin/${BASE_BRANCH}"
 
-          if git merge --no-ff -m "chore(sync): merge upstream ${UTAG}
-
-Merged into this fork from ${UPSTREAM_REPO} tag ${UTAG}.
-Next fork release tag: ${FORK_TAG}" "${UTAG}"; then
+          if git merge --no-ff -m "chore(sync): merge upstream ${UTAG}" "${UTAG}"; then
             echo "clean=true" >> "$GITHUB_OUTPUT"
             # Push sync branch then fast-forward base branch HERE (this fork)
             git push -u origin "$BRANCH" --force-with-lease
@@ -191,19 +188,19 @@ Next fork release tag: ${FORK_TAG}" "${UTAG}"; then
           TITLE="chore(sync): upstream ${UTAG} needs manual resolve"
           BODY="Automated merge of \`${UPSTREAM_REPO}\` tag \`${UTAG}\` into \`${BASE_BRANCH}\` **has conflicts**.
 
-This PR is on branch \`${BRANCH}\`. Resolve conflicts, merge into \`${BASE_BRANCH}\`, then tag:
+          This PR is on branch \`${BRANCH}\`. Resolve conflicts, merge into \`${BASE_BRANCH}\`, then tag:
 
-\`\`\`bash
-git tag -a ${FORK_TAG} -m \"fork on ${UTAG}\"
-git push origin ${FORK_TAG}
-\`\`\`
+          \`\`\`bash
+          git tag -a ${FORK_TAG} -m \"fork on ${UTAG}\"
+          git push origin ${FORK_TAG}
+          \`\`\`
 
-### Hot paths (plus fork)
-- \`openai_account_scheduler.go\` / \`openai_gateway_scheduling.go\`
-- \`openai_images_responses.go\` / images gateway
-- \`AccountsView.vue\` / account admin
-- \`wire.go\` / \`config.go\`
-"
+          ### Hot paths (plus fork)
+          - \`openai_account_scheduler.go\` / \`openai_gateway_scheduling.go\`
+          - \`openai_images_responses.go\` / images gateway
+          - \`AccountsView.vue\` / account admin
+          - \`wire.go\` / \`config.go\`
+          "
           if gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' | grep -q .; then
             NUM=$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')
             gh pr edit "$NUM" --title "$TITLE" --body "$BODY"
