@@ -267,7 +267,6 @@ func TestLoadServerShutdownConfigFromEnv(t *testing.T) {
 	require.Equal(t, 7, cfg.Server.ShutdownDrainDelay)
 }
 
-
 func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
 	viper.Reset()
 	t.Setenv("JWT_SECRET", "")
