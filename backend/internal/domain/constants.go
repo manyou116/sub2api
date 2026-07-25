@@ -23,6 +23,7 @@ const (
 	PlatformGemini      = "gemini"
 	PlatformAntigravity = "antigravity"
 	PlatformGrok        = "grok"
+<<<<<<< HEAD
 	PlatformKiro        = "kiro"
 )
 
@@ -36,6 +37,9 @@ const (
 const (
 	KiroDefaultRegion    = "us-east-1"
 	KiroIDEUserAgentTmpl = "KiroIDE-0.6.18-%s" // %s -> machineId
+=======
+	PlatformComposite   = "composite"
+>>>>>>> v0.1.164
 )
 
 // Account type constants

@@ -22,7 +22,9 @@ import type {
   CheckMixedChannelRequest,
   CheckMixedChannelResponse,
   UpstreamBillingProbeResult,
-  UpstreamBillingProbeSettings
+  UpstreamBillingProbeSettings,
+  OllamaCloudUsageSettings,
+  OllamaCloudUsageState
 } from '@/types'
 
 /**
@@ -974,6 +976,7 @@ export async function probeUpstreamBillingBatch(accountIds: number[]): Promise<U
   return data.results
 }
 
+<<<<<<< HEAD
 export async function bulkOpenAIWebImages(payload: {
   account_ids: number[]
   patch?: OpenAIWebImagesPatch
@@ -1029,10 +1032,55 @@ export async function overviewOpenAIWebImages(ids: number[]): Promise<OpenAIWebI
 export async function bulkProbeOpenAIWebImages(account_ids: number[]): Promise<{ id: string; status: string }> {
   const { data } = await apiClient.post<{ id: string; status: string }>('/admin/accounts/openai-web-images/bulk-probe', {
     account_ids
+=======
+export async function getOllamaCloudUsageSettings(): Promise<OllamaCloudUsageSettings> {
+  const { data } = await apiClient.get<OllamaCloudUsageSettings>('/admin/accounts/ollama-cloud-usage/settings')
+  return data
+}
+
+export async function updateOllamaCloudUsageSettings(
+  settings: OllamaCloudUsageSettings
+): Promise<OllamaCloudUsageSettings> {
+  const { data } = await apiClient.put<OllamaCloudUsageSettings>(
+    '/admin/accounts/ollama-cloud-usage/settings',
+    settings
+  )
+  return data
+}
+
+export async function getOllamaCloudUsage(id: number): Promise<OllamaCloudUsageState> {
+  const { data } = await apiClient.get<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage`)
+  return data
+}
+
+export async function saveOllamaCloudUsageSession(id: number, session: string): Promise<OllamaCloudUsageState> {
+  const { data } = await apiClient.put<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/session`, {
+    session
+>>>>>>> v0.1.164
   })
   return data
 }
 
+<<<<<<< HEAD
+=======
+export async function deleteOllamaCloudUsageSession(id: number): Promise<OllamaCloudUsageState> {
+  const { data } = await apiClient.delete<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/session`)
+  return data
+}
+
+export async function setOllamaCloudUsageAutoRefresh(id: number, enabled: boolean): Promise<OllamaCloudUsageState> {
+  const { data } = await apiClient.put<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/auto-refresh`, {
+    enabled
+  })
+  return data
+}
+
+export async function refreshOllamaCloudUsage(id: number): Promise<OllamaCloudUsageState> {
+  const { data } = await apiClient.post<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/refresh`)
+  return data
+}
+
+>>>>>>> v0.1.164
 export const accountsAPI = {
   list,
   listWithEtag,
@@ -1085,6 +1133,7 @@ export const accountsAPI = {
   setUpstreamBillingProbeEnabled,
   probeUpstreamBilling,
   probeUpstreamBillingBatch,
+<<<<<<< HEAD
   patchOpenAIWebImages,
   getOpenAIWebImagesStatus,
   probeOpenAIWebImages,
@@ -1120,6 +1169,15 @@ export async function importKiro(payload: {
 }): Promise<KiroImportResponse> {
   const { data } = await apiClient.post<KiroImportResponse>('/admin/accounts/kiro/import', payload)
   return data
+=======
+  getOllamaCloudUsageSettings,
+  updateOllamaCloudUsageSettings,
+  getOllamaCloudUsage,
+  saveOllamaCloudUsageSession,
+  deleteOllamaCloudUsageSession,
+  setOllamaCloudUsageAutoRefresh,
+  refreshOllamaCloudUsage
+>>>>>>> v0.1.164
 }
 
 export default accountsAPI

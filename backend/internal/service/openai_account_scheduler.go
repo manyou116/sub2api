@@ -1696,6 +1696,7 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if s != nil && s.service != nil && s.service.isOpenAIAccountRuntimeBlockedForRequest(account, req.RequiredImageCapability, req.RequestedModel) {
 		return false, "runtime_blocked"
 	}
+<<<<<<< HEAD
 	// Codex 5h/7d auto-pause is a text-channel signal. Web image path has independent quota
 	// and must not be blocked when only Codex windows are exhausted.
 	// Quota auto-pause must also run during the initial filter so TopK is not filled with paused accounts (#4599).
@@ -1706,6 +1707,19 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 				reason += "_" + decision.window
 			}
 			return false, reason
+=======
+	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(account) {
+		return false, "proxy_stream_quarantined"
+	}
+	// Quota auto-pause must be evaluated during the initial filter too. Without it the
+	// TopK candidate pool can be filled with paused accounts and the later fresh/DB
+	// rechecks won't reach healthy accounts that fell outside TopK — manifesting as
+	// "no available accounts" even though healthy ones exist.
+	if paused, decision := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+		reason := "quota_auto_pause"
+		if decision.window != "" {
+			reason += "_" + decision.window
+>>>>>>> v0.1.164
 		}
 	}
 	// 母账号健康联动：影子账号的凭据来自母账号，母账号不可调度时影子也不应被选中。

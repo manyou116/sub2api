@@ -228,6 +228,7 @@ func TestAccountHandlerGetAvailableModels_OpenAIOAuthPassthroughFallsBackToDefau
 	require.NotEqual(t, "gpt-5", resp.Data[0].ID)
 }
 
+<<<<<<< HEAD
 func TestAccountHandlerGetAvailableModels_KiroUsesExplicitModelMapping(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
@@ -249,12 +250,33 @@ func TestAccountHandlerGetAvailableModels_KiroUsesExplicitModelMapping(t *testin
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models", nil)
+=======
+func TestAccountHandlerGetAvailableModels_OpenAIAPIKeyDefaultsToConcreteGPT56Sol(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       46,
+			Name:     "openai-apikey",
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeAPIKey,
+			Status:   service.StatusActive,
+			Credentials: map[string]any{
+				"api_key": "test-key",
+			},
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/46/models", nil)
+>>>>>>> v0.1.164
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	var resp struct {
 		Data []struct {
+<<<<<<< HEAD
 			ID          string `json:"id"`
 			DisplayName string `json:"display_name"`
 		} `json:"data"`
@@ -324,12 +346,19 @@ func TestAccountHandlerGetAvailableModels_KiroDiscoveryFailureFallsBackToDefault
 
 	var resp struct {
 		Data []struct {
+=======
+>>>>>>> v0.1.164
 			ID string `json:"id"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+<<<<<<< HEAD
 	require.Len(t, resp.Data, len(service.KiroDefaultModels))
 	require.Equal(t, service.KiroDefaultModels[0].ID, resp.Data[0].ID)
+=======
+	require.NotEmpty(t, resp.Data)
+	require.Equal(t, "gpt-5.6-sol", resp.Data[0].ID)
+>>>>>>> v0.1.164
 }
 
 func TestAccountHandlerGetAvailableModels_OpenAISparkShadowReturnsMappingModels(t *testing.T) {
