@@ -103,9 +103,6 @@ func (d *Driver) ProbeQuota(ctx context.Context, auth Auth) (*Quota, error) {
 	if err != nil {
 		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, NewError(ErrorKindAuth, stage, "token invalidated", resp.StatusCode, false)
-	}
 	if resp.StatusCode >= 400 {
 		return nil, classifyHTTP(stage, resp.StatusCode, resp.String())
 	}
@@ -310,9 +307,6 @@ func (d *Driver) chatRequirements(ctx context.Context, client *req.Client, heade
 	if err != nil {
 		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
 	}
-	if prep.StatusCode == http.StatusUnauthorized {
-		return nil, NewError(ErrorKindAuth, stage, "token invalidated", prep.StatusCode, false)
-	}
 	if prep.StatusCode >= 400 {
 		return nil, classifyHTTP(stage, prep.StatusCode, prep.String())
 	}
@@ -332,9 +326,6 @@ func (d *Driver) chatRequirements(ctx context.Context, client *req.Client, heade
 		Post(baseURL + basePath + "/finalize")
 	if err != nil {
 		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
-	}
-	if fin.StatusCode == http.StatusUnauthorized {
-		return nil, NewError(ErrorKindAuth, stage, "token invalidated", fin.StatusCode, false)
 	}
 	if fin.StatusCode >= 400 {
 		return nil, classifyHTTP(stage, fin.StatusCode, fin.String())
@@ -489,9 +480,6 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 		return "", nil, nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusUnauthorized {
-		return "", nil, nil, NewError(ErrorKindAuth, stage, "token invalidated", resp.StatusCode, false)
-	}
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return "", nil, nil, classifyHTTP(stage, resp.StatusCode, string(b))
@@ -1253,20 +1241,27 @@ func normalizeThinkingEffort(v string) string {
 }
 
 func classifyHTTP(stage string, status int, body string) *Error {
+	newHTTPError := func(kind ErrorKind, message string, retryable bool) *Error {
+		err := NewError(kind, stage, message, status, retryable)
+		err.ResponseBody = []byte(body)
+		return err
+	}
 	if status == http.StatusUnauthorized {
-		return NewError(ErrorKindAuth, stage, "token invalidated", status, false)
+		return newHTTPError(ErrorKindAuth, "token invalidated", false)
 	}
 	if looksLikeRateLimitMessage(body) && IsImageQuotaLimitedMessage(body) {
-		return NewError(ErrorKindRateLimited, stage, truncate(body, 500), statusOr(status, http.StatusTooManyRequests), true)
+		err := newHTTPError(ErrorKindRateLimited, truncate(body, 500), true)
+		err.StatusCode = statusOr(status, http.StatusTooManyRequests)
+		return err
 	}
 	if status == http.StatusTooManyRequests {
 		// HTTP 429 without quota phrasing = temporary throttle (conversation/read), not image quota.
-		return NewError(ErrorKindTransport, stage, truncate(body, 500), http.StatusTooManyRequests, true)
+		return newHTTPError(ErrorKindTransport, truncate(body, 500), true)
 	}
 	if looksLikePolicyMessage(body) {
-		return NewError(ErrorKindPolicy, stage, truncate(body, 300), status, false)
+		return newHTTPError(ErrorKindPolicy, truncate(body, 300), false)
 	}
-	return NewError(ErrorKindUpstream, stage, truncate(body, 300), status, status >= 500)
+	return newHTTPError(ErrorKindUpstream, truncate(body, 300), status >= 500)
 }
 
 func statusOr(status, fallback int) int {

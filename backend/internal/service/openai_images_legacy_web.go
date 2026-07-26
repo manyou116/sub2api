@@ -97,6 +97,10 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 	if _, known := s.webImages.getQuotaCache(ctx, account.ID); !known {
 		if _, err := s.webImages.ProbeAccount(ctx, account.ID, true); err != nil {
 			logger.LegacyPrintf("service.openai_web_images", "web image probe failed account=%d err=%v policy=%s", account.ID, err, s.webImages.cfgOrDefault().UnknownQuotaPolicy)
+			var webErr *webdriver.Error
+			if asWebErr(err, &webErr) && webErr.Kind == webdriver.ErrorKindAuth {
+				return nil, s.openAIWebImageAuthFailover(ctx, account, webErr, channelMappedModel)
+			}
 		}
 	}
 	st, _ := s.webImages.GetStatus(ctx, account)
@@ -197,6 +201,8 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 				status = http.StatusBadGateway
 			}
 			switch we.Kind {
+			case webdriver.ErrorKindAuth:
+				return nil, s.openAIWebImageAuthFailover(ctx, account, we, businessModel)
 			case webdriver.ErrorKindRateLimited:
 				// Only Free-plan / image-quota text should arm web cooldown + remaining=0.
 				// Conversation GET HTTP 429 is transport throttle and must not burn the account.
@@ -274,6 +280,23 @@ func buildOpenAIWebImagesResponse(result *webdriver.GenerateResult, responseForm
 	}
 	payload["data"] = items
 	return json.Marshal(payload)
+}
+
+// openAIWebImageAuthFailover shares the text-channel account-state policy,
+// while every upstream 401 still moves this request to another account.
+func (s *OpenAIGatewayService) openAIWebImageAuthFailover(ctx context.Context, account *Account, webErr *webdriver.Error, model string) error {
+	if webErr == nil {
+		return &UpstreamFailoverError{StatusCode: http.StatusUnauthorized, RetryableOnSameAccount: false}
+	}
+	if s != nil && s.webImages != nil {
+		s.webImages.MarkFail(ctx, account, webErr.Message, false)
+	}
+	if s != nil {
+		// The shared return value describes whether account state changed, not whether
+		// a 401 is eligible for failover. Do not let it keep this request on the same account.
+		_ = s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusUnauthorized, http.Header{}, webErr.ResponseBody, account.GetMappedModel(model))
+	}
+	return &UpstreamFailoverError{StatusCode: http.StatusUnauthorized, ResponseBody: webErr.ResponseBody, RetryableOnSameAccount: false}
 }
 
 func writeOpenAIWebImagesJSONError(c *gin.Context, status int, errType, message string) {
