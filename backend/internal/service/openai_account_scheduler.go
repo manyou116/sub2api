@@ -508,16 +508,16 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		)
 		return nil, true, nil
 	}
-	result, acquireErr := s.acquireAccountSlotForSchedule(ctx, account, req)
-	if acquireErr == nil && result != nil && result.Acquired {
+	selection, acquireErr := s.acquireAccountSlotForSchedule(ctx, account, req)
+	if acquireErr == nil && selection != nil && selection.Acquired {
 		_ = s.service.refreshStickySessionTTL(ctx, req.GroupID, sessionHash, s.service.openAIWSSessionStickyTTL())
-		return result, false, nil
+		return selection, false, nil
 	}
 
 	cfg := s.service.schedulingConfig()
 	// WaitPlan.MaxConcurrency 使用 Concurrency（非 EffectiveLoadFactor），因为 WaitPlan 控制的是 Redis 实际并发槽位等待。
 	if s.service.concurrencyService != nil {
-		if escapeCfg.enabled && acquireErr == nil && result != nil && !result.Acquired {
+		if escapeCfg.enabled && acquireErr == nil && selection != nil && !selection.Acquired {
 			errorRate, ttft, _ := s.stats.snapshot(accountID)
 			slog.Info("sticky_escape_triggered",
 				"account_id", accountID,
@@ -1119,12 +1119,14 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 			continue
 		}
 
-		var result *AcquireResult
+		var (
+			result     *AcquireResult
+			attempted  bool
+			acquireErr error
+		)
 		if skipTextSlot {
 			result = &AcquireResult{Acquired: true, ReleaseFunc: func() {}}
 		} else {
-			var attempted bool
-			var acquireErr error
 			result, attempted, acquireErr = s.tryAcquireOpenAIAccountSlot(ctx, candidate.account.ID, candidate.account.Concurrency, budget)
 			if !attempted {
 				break
@@ -1163,7 +1165,7 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 			result = &AcquireResult{Acquired: true, ReleaseFunc: func() {}}
 		} else if !freshSkipTextSlot && (skipTextSlot || fresh.Concurrency != candidate.account.Concurrency) {
 			release(result)
-			result, attempted, acquireErr := s.tryAcquireOpenAIAccountSlot(ctx, fresh.ID, fresh.Concurrency, budget)
+			result, attempted, acquireErr = s.tryAcquireOpenAIAccountSlot(ctx, fresh.ID, fresh.Concurrency, budget)
 			if !attempted {
 				continue
 			}
@@ -1330,8 +1332,8 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	if err != nil {
 		return nil, 0, 0, 0, err
 	}
-	// Image path: also pull text-rate-limited OAuth accounts that can still serve Web images.
-	// Snapshot/DB ListSchedulable* excludes RateLimitResetAt windows, which hid account 74-like cases.
+	// ListSchedulable excludes accounts in a text-rate-limit window. Web image
+	// quota is independent, so add those accounts back for image requests only.
 	if req.RequiredImageCapability != "" || isOpenAIImageGenerationModel(req.RequestedModel) {
 		if extra, e2 := s.service.listAccountsAllowingTextRateLimit(ctx, req.GroupID, req.Platform); e2 == nil && len(extra) > 0 {
 			accounts = mergeAccountsByID(accounts, extra)
@@ -1686,7 +1688,6 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
-	// Durable web-image cooldown (Postgres) — filter before attempt to avoid burning switches.
 	if accountBlockedByWebImageCooldown(account, req) {
 		return false, "web_image_cooldown"
 	}
@@ -1696,9 +1697,13 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if s != nil && s.service != nil && s.service.isOpenAIAccountRuntimeBlockedForRequest(account, req.RequiredImageCapability, req.RequestedModel) {
 		return false, "runtime_blocked"
 	}
-	// Codex 5h/7d auto-pause is a text-channel signal. Web image path has independent quota
-	// and must not be blocked when only Codex windows are exhausted.
-	// Quota auto-pause must also run during the initial filter so TopK is not filled with paused accounts (#4599).
+	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(account) {
+		return false, "proxy_stream_quarantined"
+	}
+	// Quota auto-pause must be evaluated during the initial filter too. Without it the
+	// TopK candidate pool can be filled with paused accounts and the later fresh/DB
+	// rechecks won't reach healthy accounts that fell outside TopK — manifesting as
+	// "no available accounts" even though healthy ones exist.
 	if s == nil || s.service == nil || !s.service.shouldBypassTextRateLimitForWebImages(account, req.RequiredImageCapability, req.RequestedModel) {
 		if paused, decision := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
 			reason := "quota_auto_pause"
@@ -2767,19 +2772,17 @@ func mergeAccountsByID(base []Account, extra []Account) []Account {
 	seen := make(map[int64]struct{}, len(base)+len(extra))
 	out := make([]Account, 0, len(base)+len(extra))
 	for i := range base {
-		id := base[i].ID
-		if _, ok := seen[id]; ok {
+		if _, ok := seen[base[i].ID]; ok {
 			continue
 		}
-		seen[id] = struct{}{}
+		seen[base[i].ID] = struct{}{}
 		out = append(out, base[i])
 	}
 	for i := range extra {
-		id := extra[i].ID
-		if _, ok := seen[id]; ok {
+		if _, ok := seen[extra[i].ID]; ok {
 			continue
 		}
-		seen[id] = struct{}{}
+		seen[extra[i].ID] = struct{}{}
 		out = append(out, extra[i])
 	}
 	return out

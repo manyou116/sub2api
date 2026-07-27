@@ -303,6 +303,9 @@ gateway:
   # Use this to avoid compact failures when newer models are not yet supported by the compact endpoint.
   # 当 compact 端点暂未支持更新模型时，可通过这里降级规避失败。
   openai_compact_model: "gpt-5.4"
+  # ChatGPT Frameless Live 单会话硬上限（秒）。
+  live:
+    max_session_duration_seconds: 3600
   # OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
   # ---------------------------------------------------------------------------
   # OpenAI Web Images (fork): ChatGPT Web picture_v2 path for gpt-image-2.
@@ -432,6 +435,11 @@ gateway:
     fallback_error_threshold: 2
     fallback_window_seconds: 60
     fallback_ttl_seconds: 600
+  # OpenAI Responses SSE 代理断流熔断；按 proxy_id 跨账号隔离，仅影响下一次调度。
+  openai_proxy_stream_circuit:
+    failure_threshold: 2
+    window_seconds: 60
+    ttl_seconds: 600
   # HTTP upstream connection pool settings (HTTP/2 + multi-proxy scenario defaults)
   # HTTP 上游连接池配置（HTTP/2 + 多代理场景默认值）
   # Max idle connections across all hosts

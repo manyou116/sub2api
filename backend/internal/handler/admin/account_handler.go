@@ -64,12 +64,17 @@ type AccountHandler struct {
 	tokenCacheInvalidator   service.TokenCacheInvalidator
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
+	ollamaCloudUsage        *service.OllamaCloudUsageService
 	webImages               *service.OpenAIWebImagesService
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
 func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamBillingProbeService) {
 	h.upstreamBillingProbe = probe
+}
+
+func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
+	h.ollamaCloudUsage = usage
 }
 
 // SetKiroModelDiscovery attaches optional live model discovery for Kiro accounts.
@@ -215,9 +220,17 @@ type AccountSchedulerGroupScore struct {
 
 const accountListGroupUngroupedQueryValue = "ungrouped"
 
+func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
+	out := dto.AccountFromService(account)
+	if h != nil && h.ollamaCloudUsage != nil && out != nil {
+		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
+	}
+	return out
+}
+
 func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) AccountWithConcurrency {
 	item := AccountWithConcurrency{
-		Account:            dto.AccountFromService(account),
+		Account:            h.accountResponseFromService(account),
 		CurrentConcurrency: 0,
 	}
 	if account == nil {
@@ -530,6 +543,16 @@ func (h *AccountHandler) List(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if h.ollamaCloudUsage != nil && len(accounts) > 0 {
+		accountPointers := make([]*service.Account, len(accounts))
+		for index := range accounts {
+			accountPointers[index] = &accounts[index]
+		}
+		if err := h.ollamaCloudUsage.ResolveAccounts(c.Request.Context(), accountPointers); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
 
 	// Get current concurrency counts for all accounts
 	accountIDs := make([]int64, len(accounts))
@@ -633,7 +656,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 	for i := range accounts {
 		acc := &accounts[i]
 		item := AccountWithConcurrency{
-			Account:            dto.AccountFromService(acc),
+			Account:            h.accountResponseFromService(acc),
 			CurrentConcurrency: concurrencyCounts[acc.ID],
 			SchedulerScore:     schedulerScores[acc.ID],
 			SchedulerScores:    schedulerGroupScores[acc.ID],
@@ -746,6 +769,12 @@ func (h *AccountHandler) GetByID(c *gin.Context) {
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	if h.ollamaCloudUsage != nil {
+		if err := h.ollamaCloudUsage.ResolveAccounts(c.Request.Context(), []*service.Account{account}); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
@@ -1539,7 +1568,8 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 	for _, id := range req.AccountIDs {
 		accountID := id // 闭包捕获
 		g.Go(func() error {
-			// Clear web image cooldown even if account error clear fails.
+			// Image cooldown is independent of the text error state, so clear it for
+			// the same reset action even when the text-side clear fails.
 			h.clearWebImagesCooldownBestEffort(context.Background(), accountID)
 			account, err := h.adminService.ClearAccountError(gctx, accountID)
 			if err != nil {
@@ -2438,7 +2468,6 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
-	// Handle Kiro accounts (P5): explicit mapping wins; otherwise try live discovery.
 	if account.IsKiro() {
 		defaults := service.KiroDefaultModels
 		mapping := account.GetModelMapping()
@@ -2454,20 +2483,15 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 			sort.Strings(requestedModels)
 			models := make([]service.KiroAvailableModel, 0, len(mapping))
 			for _, requestedModel := range requestedModels {
-				if dm, ok := defaultByID[requestedModel]; ok {
-					models = append(models, dm)
+				if model, ok := defaultByID[requestedModel]; ok {
+					models = append(models, model)
 					continue
 				}
-				models = append(models, service.KiroAvailableModel{
-					ID:          requestedModel,
-					Type:        "model",
-					DisplayName: requestedModel,
-				})
+				models = append(models, service.KiroAvailableModel{ID: requestedModel, Type: "model", DisplayName: requestedModel})
 			}
 			response.Success(c, models)
 			return
 		}
-
 		if h.kiroModelDiscovery != nil {
 			models, err := h.kiroModelDiscovery.ListAvailableModels(c.Request.Context(), account)
 			if err == nil && len(models) > 0 {

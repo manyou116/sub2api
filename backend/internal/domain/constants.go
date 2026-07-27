@@ -24,18 +24,17 @@ const (
 	PlatformAntigravity = "antigravity"
 	PlatformGrok        = "grok"
 	PlatformKiro        = "kiro"
+	PlatformComposite   = "composite"
 )
 
-// Kiro auth method constants (stored in Account.Credentials["auth_method"])
 const (
 	KiroAuthMethodSocial = "social"
 	KiroAuthMethodIdC    = "idc"
 )
 
-// Kiro defaults
 const (
 	KiroDefaultRegion    = "us-east-1"
-	KiroIDEUserAgentTmpl = "KiroIDE-0.6.18-%s" // %s -> machineId
+	KiroIDEUserAgentTmpl = "KiroIDE-0.6.18-%s"
 )
 
 // Account type constants
@@ -145,6 +144,7 @@ var DefaultBedrockModelMapping = map[string]string{
 	// Claude Fable
 	"claude-fable-5": "anthropic.claude-fable-5",
 	// Claude Opus
+	"claude-opus-5":            "us.anthropic.claude-opus-5-v1",
 	"claude-opus-4-8":          "us.anthropic.claude-opus-4-8-v1",
 	"claude-opus-4-7":          "us.anthropic.claude-opus-4-7-v1",
 	"claude-opus-4-6-thinking": "us.anthropic.claude-opus-4-6-v1",

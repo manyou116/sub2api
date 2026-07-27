@@ -228,31 +228,48 @@ func TestAccountHandlerGetAvailableModels_OpenAIOAuthPassthroughFallsBackToDefau
 	require.NotEqual(t, "gpt-5", resp.Data[0].ID)
 }
 
-func TestAccountHandlerGetAvailableModels_KiroUsesExplicitModelMapping(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_OpenAIAPIKeyDefaultsToConcreteGPT56Sol(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
-			ID:       47,
-			Name:     "kiro-oauth",
-			Platform: service.PlatformKiro,
-			Type:     service.AccountTypeOAuth,
+			ID:       46,
+			Name:     "openai-apikey",
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeAPIKey,
 			Status:   service.StatusActive,
 			Credentials: map[string]any{
-				"model_mapping": map[string]any{
-					"my-kiro-alias": "claude-opus-4.6",
-				},
+				"api_key": "test-key",
 			},
 		},
 	}
-	discovery := &kiroModelDiscoveryStub{models: []service.KiroAvailableModel{{ID: "live-model", Type: "model", DisplayName: "Live Model"}}}
-	router := setupAvailableModelsRouter(svc, discovery)
+	router := setupAvailableModelsRouter(svc)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/46/models", nil)
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
 
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NotEmpty(t, resp.Data)
+	require.Equal(t, "gpt-5.6-sol", resp.Data[0].ID)
+}
+
+func TestAccountHandlerGetAvailableModels_KiroUsesExplicitModelMapping(t *testing.T) {
+	svc := &availableModelsAdminService{stubAdminService: newStubAdminService(), account: service.Account{
+		ID: 47, Name: "kiro-oauth", Platform: service.PlatformKiro, Type: service.AccountTypeOAuth, Status: service.StatusActive,
+		Credentials: map[string]any{"model_mapping": map[string]any{"my-kiro-alias": "claude-opus-4.6"}},
+	}}
+	discovery := &kiroModelDiscoveryStub{models: []service.KiroAvailableModel{{ID: "live-model", Type: "model", DisplayName: "Live Model"}}}
+	router := setupAvailableModelsRouter(svc, discovery)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
 	var resp struct {
 		Data []struct {
 			ID          string `json:"id"`
@@ -267,27 +284,15 @@ func TestAccountHandlerGetAvailableModels_KiroUsesExplicitModelMapping(t *testin
 }
 
 func TestAccountHandlerGetAvailableModels_KiroUsesDiscoveredModelsWithoutMapping(t *testing.T) {
-	svc := &availableModelsAdminService{
-		stubAdminService: newStubAdminService(),
-		account: service.Account{
-			ID:          48,
-			Name:        "kiro-live",
-			Platform:    service.PlatformKiro,
-			Type:        service.AccountTypeOAuth,
-			Status:      service.StatusActive,
-			Credentials: map[string]any{},
-		},
-	}
+	svc := &availableModelsAdminService{stubAdminService: newStubAdminService(), account: service.Account{
+		ID: 48, Name: "kiro-live", Platform: service.PlatformKiro, Type: service.AccountTypeOAuth, Status: service.StatusActive, Credentials: map[string]any{},
+	}}
 	discovery := &kiroModelDiscoveryStub{models: []service.KiroAvailableModel{{ID: "claude-opus-4.7", Type: "model", DisplayName: "Claude Opus 4.7"}}}
 	router := setupAvailableModelsRouter(svc, discovery)
-
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/48/models", nil)
-	router.ServeHTTP(rec, req)
-
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/48/models", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, 1, discovery.calls)
-
 	var resp struct {
 		Data []struct {
 			ID          string `json:"id"`
@@ -301,27 +306,15 @@ func TestAccountHandlerGetAvailableModels_KiroUsesDiscoveredModelsWithoutMapping
 }
 
 func TestAccountHandlerGetAvailableModels_KiroDiscoveryFailureFallsBackToDefaults(t *testing.T) {
-	svc := &availableModelsAdminService{
-		stubAdminService: newStubAdminService(),
-		account: service.Account{
-			ID:          49,
-			Name:        "kiro-live-fallback",
-			Platform:    service.PlatformKiro,
-			Type:        service.AccountTypeOAuth,
-			Status:      service.StatusActive,
-			Credentials: map[string]any{},
-		},
-	}
+	svc := &availableModelsAdminService{stubAdminService: newStubAdminService(), account: service.Account{
+		ID: 49, Name: "kiro-live-fallback", Platform: service.PlatformKiro, Type: service.AccountTypeOAuth, Status: service.StatusActive, Credentials: map[string]any{},
+	}}
 	discovery := &kiroModelDiscoveryStub{err: errors.New("upstream unavailable")}
 	router := setupAvailableModelsRouter(svc, discovery)
-
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/49/models", nil)
-	router.ServeHTTP(rec, req)
-
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/49/models", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, 1, discovery.calls)
-
 	var resp struct {
 		Data []struct {
 			ID string `json:"id"`
