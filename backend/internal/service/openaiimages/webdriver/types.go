@@ -67,6 +67,9 @@ type Error struct {
 	StatusCode int
 	Retryable  bool
 	Stage      string
+	// ResponseBody preserves the upstream error payload for callers that need
+	// to apply account-state policy without treating all HTTP 401s alike.
+	ResponseBody []byte
 }
 
 func (e *Error) Error() string {

@@ -61,31 +61,61 @@ func NewDriver(factory func(proxyURL string) (*req.Client, error)) *Driver {
 
 // Serialize conversation GET polls per access-token within this process.
 // Concurrent webimg jobs otherwise stack 429s on the same account.
-var accountPollLocks sync.Map // key(string) -> *sync.Mutex
+var accountPollLocks = struct {
+	sync.Mutex
+	locks map[string]*accountPollLock
+}{locks: make(map[string]*accountPollLock)}
+
+type accountPollLock struct {
+	semaphore  chan struct{}
+	references int
+}
 
 func pollLockKey(auth Auth) string {
 	tok := strings.TrimSpace(auth.AccessToken)
 	if tok == "" {
 		return "anon"
 	}
-	if len(tok) > 24 {
-		return tok[:24]
-	}
-	return tok
+	// OAuth access tokens are JWTs and commonly share their first dozens of
+	// bytes. Hash the complete token so distinct accounts never serialize their
+	// image polls behind one another, without retaining the token as a map key.
+	sum := sha256.Sum256([]byte(tok))
+	return hex.EncodeToString(sum[:])
 }
 
-func withAccountPollLock(key string, fn func() error) error {
+func withAccountPollLock(ctx context.Context, key string, fn func() error) error {
 	if key == "" {
 		key = "anon"
 	}
-	v, _ := accountPollLocks.LoadOrStore(key, &sync.Mutex{})
-	mu, ok := v.(*sync.Mutex)
-	if !ok {
-		return fmt.Errorf("account poll lock has unexpected type %T", v)
+
+	accountPollLocks.Lock()
+	lock := accountPollLocks.locks[key]
+	if lock == nil {
+		lock = &accountPollLock{semaphore: make(chan struct{}, 1)}
+		accountPollLocks.locks[key] = lock
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	return fn()
+	lock.references++
+	accountPollLocks.Unlock()
+
+	release := func() {
+		accountPollLocks.Lock()
+		lock.references--
+		if lock.references == 0 && accountPollLocks.locks[key] == lock {
+			delete(accountPollLocks.locks, key)
+		}
+		accountPollLocks.Unlock()
+	}
+	select {
+	case lock.semaphore <- struct{}{}:
+		defer func() {
+			<-lock.semaphore
+			release()
+		}()
+		return fn()
+	case <-ctx.Done():
+		release()
+		return NewError(ErrorKindTimeout, "poll", ctx.Err().Error(), 0, true)
+	}
 }
 
 func (d *Driver) ProbeQuota(ctx context.Context, auth Auth) (*Quota, error) {
@@ -102,9 +132,6 @@ func (d *Driver) ProbeQuota(ctx context.Context, auth Auth) (*Quota, error) {
 		Post(baseURL + "/backend-api/conversation/init")
 	if err != nil {
 		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
-	}
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, NewError(ErrorKindAuth, stage, "token invalidated", resp.StatusCode, false)
 	}
 	if resp.StatusCode >= 400 {
 		return nil, classifyHTTP(stage, resp.StatusCode, resp.String())
@@ -310,9 +337,6 @@ func (d *Driver) chatRequirements(ctx context.Context, client *req.Client, heade
 	if err != nil {
 		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
 	}
-	if prep.StatusCode == http.StatusUnauthorized {
-		return nil, NewError(ErrorKindAuth, stage, "token invalidated", prep.StatusCode, false)
-	}
 	if prep.StatusCode >= 400 {
 		return nil, classifyHTTP(stage, prep.StatusCode, prep.String())
 	}
@@ -332,9 +356,6 @@ func (d *Driver) chatRequirements(ctx context.Context, client *req.Client, heade
 		Post(baseURL + basePath + "/finalize")
 	if err != nil {
 		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
-	}
-	if fin.StatusCode == http.StatusUnauthorized {
-		return nil, NewError(ErrorKindAuth, stage, "token invalidated", fin.StatusCode, false)
 	}
 	if fin.StatusCode >= 400 {
 		return nil, classifyHTTP(stage, fin.StatusCode, fin.String())
@@ -489,9 +510,6 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 		return "", nil, nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusUnauthorized {
-		return "", nil, nil, NewError(ErrorKindAuth, stage, "token invalidated", resp.StatusCode, false)
-	}
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return "", nil, nil, classifyHTTP(stage, resp.StatusCode, string(b))
@@ -724,7 +742,7 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 	)
 	lockKey := pollLockKey(auth)
 	lockStarted := time.Now()
-	err := withAccountPollLock(lockKey, func() error {
+	err := withAccountPollLock(ctx, lockKey, func() error {
 		if waited := time.Since(lockStarted); waited > 250*time.Millisecond {
 			stageLog("poll", fmt.Sprintf("lock_acquired wait=%s", waited.Round(time.Millisecond)))
 		}
@@ -1253,20 +1271,27 @@ func normalizeThinkingEffort(v string) string {
 }
 
 func classifyHTTP(stage string, status int, body string) *Error {
+	newHTTPError := func(kind ErrorKind, message string, retryable bool) *Error {
+		err := NewError(kind, stage, message, status, retryable)
+		err.ResponseBody = []byte(body)
+		return err
+	}
 	if status == http.StatusUnauthorized {
-		return NewError(ErrorKindAuth, stage, "token invalidated", status, false)
+		return newHTTPError(ErrorKindAuth, "token invalidated", false)
 	}
 	if looksLikeRateLimitMessage(body) && IsImageQuotaLimitedMessage(body) {
-		return NewError(ErrorKindRateLimited, stage, truncate(body, 500), statusOr(status, http.StatusTooManyRequests), true)
+		err := newHTTPError(ErrorKindRateLimited, truncate(body, 500), true)
+		err.StatusCode = statusOr(status, http.StatusTooManyRequests)
+		return err
 	}
 	if status == http.StatusTooManyRequests {
 		// HTTP 429 without quota phrasing = temporary throttle (conversation/read), not image quota.
-		return NewError(ErrorKindTransport, stage, truncate(body, 500), http.StatusTooManyRequests, true)
+		return newHTTPError(ErrorKindTransport, truncate(body, 500), true)
 	}
 	if looksLikePolicyMessage(body) {
-		return NewError(ErrorKindPolicy, stage, truncate(body, 300), status, false)
+		return newHTTPError(ErrorKindPolicy, truncate(body, 300), false)
 	}
-	return NewError(ErrorKindUpstream, stage, truncate(body, 300), status, status >= 500)
+	return newHTTPError(ErrorKindUpstream, truncate(body, 300), status >= 500)
 }
 
 func statusOr(status, fallback int) int {
