@@ -23,12 +23,12 @@ var (
 	}
 	grokDropChatNoiseFields = []string{
 		"user", "seed", "n", "logit_bias", "logprobs", "top_logprobs",
-		"service_tier", "store", "metadata", "modalities", "audio",
+		"store", "metadata", "modalities", "audio",
 		"prediction", "web_search_options", "prompt_cache_retention",
 		"safety_identifier", "reasoning_effort",
 	}
 	grokDropResponsesNoiseFields = []string{
-		"stream_options", "metadata", "user", "service_tier", "store",
+		"stream_options", "user", "store",
 		"previous_response_id", "prompt_cache_retention", "safety_identifier",
 		"truncation", "max_tool_calls", "prompt",
 	}
