@@ -4748,6 +4748,7 @@ const platformOptions = computed(() => [
   { value: "kimi", label: "Kimi" },
   { value: "zhipu", label: "Zhipu GLM" },
   { value: "deepseek", label: "DeepSeek" },
+  { value: "kiro", label: "Kiro" },
   { value: "composite", label: "Composite" },
 ]);
 
@@ -4761,6 +4762,7 @@ const platformFilterOptions = computed(() => [
   { value: "kimi", label: "Kimi" },
   { value: "zhipu", label: "Zhipu GLM" },
   { value: "deepseek", label: "DeepSeek" },
+  { value: "kiro", label: "Kiro" },
   { value: "composite", label: "Composite" },
 ]);
 
