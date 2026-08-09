@@ -10,10 +10,13 @@ type GroupCapacitySummary struct {
 	GroupID         int64 `json:"group_id"`
 	ConcurrencyUsed int   `json:"concurrency_used"`
 	ConcurrencyMax  int   `json:"concurrency_max"`
-	SessionsUsed    int   `json:"sessions_used"`
-	SessionsMax     int   `json:"sessions_max"`
-	RPMUsed         int   `json:"rpm_used"`
-	RPMMax          int   `json:"rpm_max"`
+	// ImageConcurrencyUsed/Max: ChatGPT Web image inflight slots for accounts in the group.
+	ImageConcurrencyUsed int `json:"image_concurrency_used"`
+	ImageConcurrencyMax  int `json:"image_concurrency_max"`
+	SessionsUsed         int `json:"sessions_used"`
+	SessionsMax          int `json:"sessions_max"`
+	RPMUsed              int `json:"rpm_used"`
+	RPMMax               int `json:"rpm_max"`
 }
 
 // GroupAccountCapacityRow is the lightweight account projection needed for
@@ -26,6 +29,12 @@ type GroupAccountCapacityRow struct {
 	SessionWindowStart  *time.Time
 	SessionWindowEnd    *time.Time
 	SessionWindowStatus string
+	// Optional scheduling windows for capacity splits (text vs web-image).
+	RateLimitResetAt         *time.Time
+	OverloadUntil            *time.Time
+	WebImageRateLimitResetAt *time.Time
+	Platform                 string
+	Type                     string
 }
 
 type groupCapacityActiveGroupIDLister interface {
@@ -43,6 +52,7 @@ type GroupCapacityService struct {
 	concurrencyService *ConcurrencyService
 	sessionLimitCache  SessionLimitCache
 	rpmCache           RPMCache
+	webImages          *OpenAIWebImagesService
 }
 
 // NewGroupCapacityService creates a new GroupCapacityService.
@@ -60,6 +70,14 @@ func NewGroupCapacityService(
 		sessionLimitCache:  sessionLimitCache,
 		rpmCache:           rpmCache,
 	}
+}
+
+// SetWebImages attaches web-image inflight aggregation (optional).
+func (s *GroupCapacityService) SetWebImages(webImages *OpenAIWebImagesService) {
+	if s == nil {
+		return
+	}
+	s.webImages = webImages
 }
 
 // GetAllGroupCapacity returns capacity summary for all active groups.
@@ -155,15 +173,31 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 		}
 
 		acc := Account{
-			ID:                  row.AccountID,
-			Concurrency:         row.Concurrency,
-			Extra:               row.Extra,
-			SessionWindowStart:  row.SessionWindowStart,
-			SessionWindowEnd:    row.SessionWindowEnd,
-			SessionWindowStatus: row.SessionWindowStatus,
+			ID:                       row.AccountID,
+			Concurrency:              row.Concurrency,
+			Extra:                    row.Extra,
+			SessionWindowStart:       row.SessionWindowStart,
+			SessionWindowEnd:         row.SessionWindowEnd,
+			SessionWindowStatus:      row.SessionWindowStatus,
+			RateLimitResetAt:         row.RateLimitResetAt,
+			OverloadUntil:            row.OverloadUntil,
+			WebImageRateLimitResetAt: row.WebImageRateLimitResetAt,
+			Platform:                 row.Platform,
+			Type:                     row.Type,
 		}
 
-		results[idx].ConcurrencyMax += acc.Concurrency
+		// Text capacity: exclude accounts currently in text rate-limit / overload windows.
+		if !acc.IsRateLimited() && !acc.IsOverloaded() {
+			results[idx].ConcurrencyMax += acc.Concurrency
+		}
+		// Web image capacity: include text-rate-limited OAuth accounts (web path bypasses text RL),
+		// but exclude durable web-image cooldown.
+		if s.webImages != nil {
+			cfg := s.webImages.ParseAccountConfig(&acc)
+			if cfg.Enabled && !acc.IsWebImageRateLimited() {
+				results[idx].ImageConcurrencyMax += cfg.MaxInflight
+			}
+		}
 
 		if maxSessions := acc.GetMaxSessions(); maxSessions > 0 {
 			results[idx].SessionsMax += maxSessions
@@ -204,9 +238,15 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 		rpmMap, _ = s.rpmCache.GetRPMBatch(ctx, rpmAccountIDs)
 	}
 
+	imageInflight := map[int64]int{}
+	if s.webImages != nil {
+		imageInflight = s.webImages.GetInflightBatch(ctx, accountIDs)
+	}
+
 	for _, ref := range refs {
 		idx := groupIndex[ref.groupID]
 		results[idx].ConcurrencyUsed += concurrencyMap[ref.accountID]
+		results[idx].ImageConcurrencyUsed += imageInflight[ref.accountID]
 		if sessionsMap != nil && results[idx].SessionsMax > 0 {
 			results[idx].SessionsUsed += sessionsMap[ref.accountID]
 		}
@@ -235,6 +275,16 @@ func accountIDsForGroupsWithLimit(refs []groupCapacityAccountRef, groupIndex map
 }
 
 func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int64) (GroupCapacitySummary, error) {
+	if lister, ok := s.accountRepo.(groupCapacityAccountLister); ok {
+		summaries, err := s.getGroupCapacitiesBatch(ctx, []int64{groupID}, lister)
+		if err != nil {
+			return GroupCapacitySummary{}, err
+		}
+		if len(summaries) == 0 {
+			return GroupCapacitySummary{}, nil
+		}
+		return summaries[0], nil
+	}
 	accounts, err := s.accountRepo.ListSchedulableByGroupID(ctx, groupID)
 	if err != nil {
 		return GroupCapacitySummary{}, err
@@ -246,12 +296,20 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 	// Collect account IDs and config values
 	accountIDs := make([]int64, 0, len(accounts))
 	sessionTimeouts := make(map[int64]time.Duration)
-	var concurrencyMax, sessionsMax, rpmMax int
+	var concurrencyMax, imageMax, sessionsMax, rpmMax int
 
 	for i := range accounts {
 		acc := &accounts[i]
 		accountIDs = append(accountIDs, acc.ID)
-		concurrencyMax += acc.Concurrency
+		if !acc.IsRateLimited() && !acc.IsOverloaded() {
+			concurrencyMax += acc.Concurrency
+		}
+		if s.webImages != nil {
+			cfg := s.webImages.ParseAccountConfig(acc)
+			if cfg.Enabled && !acc.IsWebImageRateLimited() {
+				imageMax += cfg.MaxInflight
+			}
+		}
 
 		if ms := acc.GetMaxSessions(); ms > 0 {
 			sessionsMax += ms
@@ -269,6 +327,10 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 
 	// Batch query runtime data from Redis
 	concurrencyMap, _ := s.concurrencyService.GetAccountConcurrencyBatch(ctx, accountIDs)
+	imageInflight := map[int64]int{}
+	if s.webImages != nil {
+		imageInflight = s.webImages.GetInflightBatch(ctx, accountIDs)
+	}
 
 	var sessionsMap map[int64]int
 	if sessionsMax > 0 && s.sessionLimitCache != nil {
@@ -281,9 +343,10 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 	}
 
 	// Aggregate
-	var concurrencyUsed, sessionsUsed, rpmUsed int
+	var concurrencyUsed, imageUsed, sessionsUsed, rpmUsed int
 	for _, id := range accountIDs {
 		concurrencyUsed += concurrencyMap[id]
+		imageUsed += imageInflight[id]
 		if sessionsMap != nil {
 			sessionsUsed += sessionsMap[id]
 		}
@@ -293,11 +356,13 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 	}
 
 	return GroupCapacitySummary{
-		ConcurrencyUsed: concurrencyUsed,
-		ConcurrencyMax:  concurrencyMax,
-		SessionsUsed:    sessionsUsed,
-		SessionsMax:     sessionsMax,
-		RPMUsed:         rpmUsed,
-		RPMMax:          rpmMax,
+		ConcurrencyUsed:      concurrencyUsed,
+		ConcurrencyMax:       concurrencyMax,
+		ImageConcurrencyUsed: imageUsed,
+		ImageConcurrencyMax:  imageMax,
+		SessionsUsed:         sessionsUsed,
+		SessionsMax:          sessionsMax,
+		RPMUsed:              rpmUsed,
+		RPMMax:               rpmMax,
 	}, nil
 }

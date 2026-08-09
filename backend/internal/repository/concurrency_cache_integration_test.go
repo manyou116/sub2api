@@ -42,6 +42,9 @@ type apiKeyConcurrencyCacheForTest interface {
 	TrackAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
 	ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
 	GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error)
+	TrackAPIKeyImageSlot(ctx context.Context, apiKeyID int64, requestID string) error
+	ReleaseAPIKeyImageSlot(ctx context.Context, apiKeyID int64, requestID string) error
+	GetAPIKeyImageConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error)
 }
 
 func (s *ConcurrencyCacheSuite) apiKeyConcurrencyCache() apiKeyConcurrencyCacheForTest {
