@@ -141,12 +141,13 @@ echo "-- P5 kiro --"
 need_file backend/internal/pkg/kiroeventstream/decoder.go
 need_file backend/internal/service/kiro_chat_service.go
 need_file backend/internal/service/kiro_responses_service.go
+need_file backend/internal/service/kiro_model_discovery_service.go
 need_file backend/internal/service/kiro_prompt_cache.go
 need_file backend/internal/service/kiro_token_provider.go
 need_file backend/internal/service/account_kiro.go
 need_file backend/internal/handler/kiro_gateway_handler.go
 need_file backend/internal/server/routes/kiro_admin.go
-need_file backend/migrations/185_user_platform_quotas_add_kiro.sql
+need_file backend/migrations/186_user_platform_quotas_add_kiro.sql
 need_rg "PlatformKiro constant" \
   "PlatformKiro" \
   backend/internal/domain/constants.go
@@ -174,15 +175,27 @@ need_rg "kiro estimated cache usage hook" \
 need_rg "kiro responses estimated cache usage hook" \
   "applyKiroEstimatedCacheUsage" \
   backend/internal/service/kiro_responses_service.go
+need_rg "kiro live model discovery service" \
+  "ListAvailableModels" \
+  backend/internal/service/kiro_model_discovery_service.go
+need_rg "admin Kiro model list uses live discovery" \
+  "kiroModelDiscovery.ListAvailableModels" \
+  backend/internal/handler/admin/account_handler.go
 need_rg "wire kiro token provider" \
   "ProvideKiroTokenProvider" \
+  backend/internal/service/wire.go
+need_rg "wire kiro model discovery provider" \
+  "NewKiroModelDiscoveryService" \
   backend/internal/service/wire.go
 need_rg "wire injects kiro token provider into gateway/admin tests" \
   "SetKiroTokenProvider" \
   backend/cmd/server/wire_gen.go
+need_rg "wire injects kiro model discovery into account handler" \
+  "NewKiroModelDiscoveryService" \
+  backend/cmd/server/wire_gen.go
 need_rg "kiro quota migration" \
   "'kiro'" \
-  backend/migrations/185_user_platform_quotas_add_kiro.sql
+  backend/migrations/186_user_platform_quotas_add_kiro.sql
 need_rg "frontend kiro models list" \
   "const kiroModels" \
   frontend/src/composables/useModelWhitelist.ts
