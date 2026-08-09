@@ -922,23 +922,6 @@ export async function updateUpstreamBillingProbeSettings(
   return data
 }
 
-export async function setUpstreamBillingProbeEnabled(id: number, enabled: boolean): Promise<void> {
-  await apiClient.put(`/admin/accounts/${id}/upstream-billing-probe`, { enabled })
-}
-
-export async function probeUpstreamBilling(id: number): Promise<UpstreamBillingProbeResult> {
-  const { data } = await apiClient.post<UpstreamBillingProbeResult>(`/admin/accounts/${id}/upstream-billing-probe`)
-  return data
-}
-
-export async function probeUpstreamBillingBatch(accountIds: number[]): Promise<UpstreamBillingProbeResult[]> {
-  const { data } = await apiClient.post<{ results: UpstreamBillingProbeResult[] }>(
-    '/admin/accounts/upstream-billing-probe/batch',
-    { account_ids: accountIds }
-  )
-  return data.results
-}
-
 export async function getOllamaCloudUsageSettings(): Promise<OllamaCloudUsageSettings> {
   const { data } = await apiClient.get<OllamaCloudUsageSettings>('/admin/accounts/ollama-cloud-usage/settings')
   return data
@@ -980,6 +963,174 @@ export async function setOllamaCloudUsageAutoRefresh(id: number, enabled: boolea
 
 export async function refreshOllamaCloudUsage(id: number): Promise<OllamaCloudUsageState> {
   const { data } = await apiClient.post<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/refresh`)
+  return data
+}
+
+export type OpenAIWebImagesModelMode = 'auto' | 'fixed'
+export type OpenAIWebImagesEnabledMode = 'inherit' | 'on' | 'off'
+
+export interface OpenAIWebImagesPatch {
+  enabled?: boolean
+  /** inherit = remove per-account override (use GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED) */
+  enabled_mode?: OpenAIWebImagesEnabledMode
+  max_inflight?: number
+  priority?: number
+  model_mode?: OpenAIWebImagesModelMode
+  model?: string
+  thinking_effort?: string
+  require_download_attachment?: boolean
+}
+
+export interface OpenAIWebImagesStatus {
+  account_id: number
+  email?: string
+  enabled: boolean
+  /** global = inherits default_enabled; account = explicit override */
+  enabled_source?: 'global' | 'account' | string
+  default_enabled?: boolean
+  max_inflight: number
+  priority: number
+  model_mode?: OpenAIWebImagesModelMode | string
+  model?: string
+  thinking_effort?: string
+  plan_type?: string
+  resolved_model?: string
+  resolved_thinking_effort?: string
+  resolve_source?: string
+  require_download_attachment?: boolean
+  current_inflight: number
+  available_slots: number
+  remaining?: number | null
+  reset_at?: string | null
+  probed_at?: string | null
+  quota_known: boolean
+  schedulable: boolean
+  unschedulable_reason?: string
+  rate_limited?: boolean
+  cooldown_until?: string | null
+  cooldown_seconds?: number
+  stats?: {
+    success: number
+    fail: number
+    last_success_at?: string
+    last_fail_at?: string
+    last_error?: string
+    last_used_at?: string
+  }
+}
+
+export interface OpenAIWebImagesBulkResult {
+  matched: number
+  updated: number
+  failed: number
+  probe_job_id?: string
+  errors?: Array<{ account_id: number; error: string }>
+}
+
+export async function patchOpenAIWebImages(
+  id: number,
+  patch: OpenAIWebImagesPatch
+): Promise<OpenAIWebImagesStatus> {
+  const { data } = await apiClient.patch<OpenAIWebImagesStatus>(`/admin/accounts/${id}/openai-web-images`, patch)
+  return data
+}
+
+export async function getOpenAIWebImagesStatus(id: number): Promise<OpenAIWebImagesStatus> {
+  const { data } = await apiClient.get<OpenAIWebImagesStatus>(`/admin/accounts/${id}/openai-web-images/status`)
+  return data
+}
+
+export async function probeOpenAIWebImages(id: number): Promise<OpenAIWebImagesStatus> {
+  const { data } = await apiClient.post<OpenAIWebImagesStatus>(`/admin/accounts/${id}/openai-web-images/probe`)
+  return data
+}
+
+export async function clearOpenAIWebImagesCooldown(id: number): Promise<OpenAIWebImagesStatus> {
+  const { data } = await apiClient.post<OpenAIWebImagesStatus>(`/admin/accounts/${id}/openai-web-images/clear-cooldown`)
+  return data
+}
+
+export async function bulkClearOpenAIWebImagesCooldown(account_ids: number[]): Promise<{ matched: number; cleared: number }> {
+  const { data } = await apiClient.post<{ matched: number; cleared: number }>(
+    '/admin/accounts/openai-web-images/bulk-clear-cooldown',
+    { account_ids }
+  )
+  return data
+}
+
+export async function setUpstreamBillingProbeEnabled(id: number, enabled: boolean): Promise<void> {
+  await apiClient.put(`/admin/accounts/${id}/upstream-billing-probe`, { enabled })
+}
+
+export async function probeUpstreamBilling(id: number): Promise<UpstreamBillingProbeResult> {
+  const { data } = await apiClient.post<UpstreamBillingProbeResult>(`/admin/accounts/${id}/upstream-billing-probe`)
+  return data
+}
+
+export async function probeUpstreamBillingBatch(accountIds: number[]): Promise<UpstreamBillingProbeResult[]> {
+  const { data } = await apiClient.post<{ results: UpstreamBillingProbeResult[] }>(
+    '/admin/accounts/upstream-billing-probe/batch',
+    { account_ids: accountIds }
+  )
+  return data.results
+}
+
+export async function bulkOpenAIWebImages(payload: {
+  account_ids: number[]
+  patch?: OpenAIWebImagesPatch
+  actions?: { probe?: boolean }
+}): Promise<OpenAIWebImagesBulkResult> {
+  const ids = payload.account_ids || []
+  const chunkSize = 200
+  if (ids.length <= chunkSize) {
+    const { data } = await apiClient.post<OpenAIWebImagesBulkResult>(
+      '/admin/accounts/openai-web-images/bulk',
+      payload,
+      { timeout: 120000 }
+    )
+    return data
+  }
+
+  const merged: OpenAIWebImagesBulkResult = {
+    matched: 0,
+    updated: 0,
+    failed: 0,
+    errors: []
+  }
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize)
+    const { data } = await apiClient.post<OpenAIWebImagesBulkResult>(
+      '/admin/accounts/openai-web-images/bulk',
+      { ...payload, account_ids: chunk, actions: i === 0 ? payload.actions : { probe: false } },
+      { timeout: 120000 }
+    )
+    merged.matched += data?.matched || chunk.length
+    merged.updated += data?.updated || 0
+    merged.failed += data?.failed || 0
+    if (data?.errors?.length) {
+      merged.errors = (merged.errors || []).concat(data.errors)
+    }
+    if (data?.probe_job_id && !merged.probe_job_id) {
+      merged.probe_job_id = data.probe_job_id
+    }
+  }
+  return merged
+}
+
+
+export async function overviewOpenAIWebImages(ids: number[]): Promise<OpenAIWebImagesStatus[]> {
+  if (!ids.length) return []
+  const { data } = await apiClient.get<{ items: OpenAIWebImagesStatus[] }>(
+    '/admin/accounts/openai-web-images/overview',
+    { params: { ids: ids.join(',') } }
+  )
+  return data?.items ?? []
+}
+
+export async function bulkProbeOpenAIWebImages(account_ids: number[]): Promise<{ id: string; status: string }> {
+  const { data } = await apiClient.post<{ id: string; status: string }>('/admin/accounts/openai-web-images/bulk-probe', {
+    account_ids
+  })
   return data
 }
 
@@ -1037,6 +1188,14 @@ export const accountsAPI = {
   setUpstreamBillingProbeEnabled,
   probeUpstreamBilling,
   probeUpstreamBillingBatch,
+  patchOpenAIWebImages,
+  getOpenAIWebImagesStatus,
+  probeOpenAIWebImages,
+  clearOpenAIWebImagesCooldown,
+  bulkClearOpenAIWebImagesCooldown,
+  bulkOpenAIWebImages,
+  bulkProbeOpenAIWebImages,
+  overviewOpenAIWebImages,
   getOllamaCloudUsageSettings,
   updateOllamaCloudUsageSettings,
   getOllamaCloudUsage,
@@ -1044,6 +1203,33 @@ export const accountsAPI = {
   deleteOllamaCloudUsageSession,
   setOllamaCloudUsageAutoRefresh,
   refreshOllamaCloudUsage
+}
+
+
+
+// ============== Kiro (P5) ==============
+
+export interface KiroImportItemResult {
+  index: number
+  id?: string
+  email?: string
+  created: boolean
+  error?: string
+}
+
+export interface KiroImportResponse {
+  results: KiroImportItemResult[]
+  summary: { total: number; succeeded: number; failed: number }
+}
+
+export async function importKiro(payload: {
+  items: Record<string, unknown>[]
+  group_ids?: number[]
+  concurrency?: number
+  skip_mixed_channel_check?: boolean
+}): Promise<KiroImportResponse> {
+  const { data } = await apiClient.post<KiroImportResponse>('/admin/accounts/kiro/import', payload)
+  return data
 }
 
 export default accountsAPI

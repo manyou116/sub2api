@@ -56,6 +56,7 @@ type AccountHandler struct {
 	rateLimitService        *service.RateLimitService
 	accountUsageService     *service.AccountUsageService
 	accountTestService      *service.AccountTestService
+	kiroModelDiscovery      service.KiroModelDiscovery
 	concurrencyService      *service.ConcurrencyService
 	crsSyncService          *service.CRSSyncService
 	sessionLimitCache       service.SessionLimitCache
@@ -64,6 +65,7 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	webImages               *service.OpenAIWebImagesService
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -73,6 +75,11 @@ func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamB
 
 func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
 	h.ollamaCloudUsage = usage
+}
+
+// SetKiroModelDiscovery attaches optional live model discovery for Kiro accounts.
+func (h *AccountHandler) SetKiroModelDiscovery(discovery service.KiroModelDiscovery) {
+	h.kiroModelDiscovery = discovery
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -1530,6 +1537,7 @@ func (h *AccountHandler) ClearError(c *gin.Context) {
 	}
 
 	account, err := h.adminService.ClearAccountError(c.Request.Context(), accountID)
+	h.clearWebImagesCooldownBestEffort(context.Background(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -1725,6 +1733,9 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 	for _, id := range req.AccountIDs {
 		accountID := id // 闭包捕获
 		g.Go(func() error {
+			// Image cooldown is independent of the text error state, so clear it for
+			// the same reset action even when the text-side clear fails.
+			h.clearWebImagesCooldownBestEffort(context.Background(), accountID)
 			account, err := h.adminService.ClearAccountError(gctx, accountID)
 			if err != nil {
 				mu.Lock()
@@ -2345,6 +2356,7 @@ func (h *AccountHandler) ClearRateLimit(c *gin.Context) {
 	}
 
 	err = h.rateLimitService.ClearRateLimit(c.Request.Context(), accountID)
+	h.clearWebImagesCooldownBestEffort(context.Background(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -2653,6 +2665,44 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 	if account.Platform == service.PlatformAntigravity {
 		// 直接复用 antigravity.DefaultModels()，与 /v1/models 端点保持同步
 		response.Success(c, antigravity.DefaultModels())
+		return
+	}
+
+	if account.IsKiro() {
+		defaults := service.KiroDefaultModels
+		mapping := account.GetModelMapping()
+		if len(mapping) > 0 {
+			defaultByID := make(map[string]service.KiroAvailableModel, len(defaults))
+			for _, model := range defaults {
+				defaultByID[model.ID] = model
+			}
+			requestedModels := make([]string, 0, len(mapping))
+			for requestedModel := range mapping {
+				requestedModels = append(requestedModels, requestedModel)
+			}
+			sort.Strings(requestedModels)
+			models := make([]service.KiroAvailableModel, 0, len(mapping))
+			for _, requestedModel := range requestedModels {
+				if model, ok := defaultByID[requestedModel]; ok {
+					models = append(models, model)
+					continue
+				}
+				models = append(models, service.KiroAvailableModel{ID: requestedModel, Type: "model", DisplayName: requestedModel})
+			}
+			response.Success(c, models)
+			return
+		}
+		if h.kiroModelDiscovery != nil {
+			models, err := h.kiroModelDiscovery.ListAvailableModels(c.Request.Context(), account)
+			if err == nil && len(models) > 0 {
+				response.Success(c, models)
+				return
+			}
+			if err != nil {
+				slog.Warn("kiro_models.discovery_failed", "account_id", account.ID, "error", err)
+			}
+		}
+		response.Success(c, defaults)
 		return
 	}
 
