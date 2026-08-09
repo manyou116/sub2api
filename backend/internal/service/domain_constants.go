@@ -43,10 +43,15 @@ const (
 	PlatformGemini      = domain.PlatformGemini
 	PlatformAntigravity = domain.PlatformAntigravity
 	PlatformGrok        = domain.PlatformGrok
+	PlatformKiro        = domain.PlatformKiro
 	PlatformComposite   = domain.PlatformComposite
-	// PlatformKiro is retained for unsupported-platform threshold tests and legacy
-	// account rows. Scheduling-threshold evaluation never pauses kiro accounts.
-	PlatformKiro = "kiro"
+)
+
+const (
+	KiroAuthMethodSocial = domain.KiroAuthMethodSocial
+	KiroAuthMethodIdC    = domain.KiroAuthMethodIdC
+	KiroDefaultRegion    = domain.KiroDefaultRegion
+	KiroIDEUserAgentTmpl = domain.KiroIDEUserAgentTmpl
 )
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
@@ -58,6 +63,7 @@ var AllowedQuotaPlatforms = []string{
 	PlatformGemini,
 	PlatformAntigravity,
 	PlatformGrok,
+	PlatformKiro,
 }
 
 // AllowedSchedulingThresholdPlatforms 是允许设置账号自动停调阈值的平台列表。
