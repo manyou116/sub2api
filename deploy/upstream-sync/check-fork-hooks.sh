@@ -136,7 +136,6 @@ need_rg "scheduler webimg path check" \
   "UsesOpenAIWebImagesPath" \
   backend/internal/service/openai_account_scheduler_webimg.go
 
-
 # --- P5 kiro ---
 echo "-- P5 kiro --"
 need_file backend/internal/pkg/kiroeventstream/decoder.go

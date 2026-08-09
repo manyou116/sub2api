@@ -222,17 +222,26 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		reqLog.Debug("openai.images.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, parsed.Stream, &streamStarted, reqLog)
-		if slotResult == openAISlotAcquireProfitVetoed {
-			// Images 调度不装利润门，此分支实际不可达；防御性排除重选并受同一否决上限约束。
-			if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
-				h.handleOpenAIProfitVetoExhausted(c, streamStarted, reqLog, profitVetoCount)
+		// ChatGPT Web image path has its own inflight slots (web max_inflight).
+		// Do not consume text account concurrency so capacity UI stays split correctly.
+		var accountReleaseFunc func()
+		if h.gatewayService != nil && h.gatewayService.UsesOpenAIWebImagesPath(account) {
+			// Drop any text slot the scheduler may have acquired on fallback paths.
+			service.ReleaseAccountTextSlotIfWebImages(h.gatewayService, selection)
+		} else {
+			var slotResult openAISlotAcquireResult
+			accountReleaseFunc, slotResult = h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, parsed.Stream, &streamStarted, reqLog)
+			if slotResult == openAISlotAcquireProfitVetoed {
+				// Images 调度不装利润门，此分支实际不可达；防御性排除重选并受同一否决上限约束。
+				if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
+					h.handleOpenAIProfitVetoExhausted(c, streamStarted, reqLog, profitVetoCount)
+					return
+				}
+				continue
+			}
+			if slotResult != openAISlotAcquireOK {
 				return
 			}
-			continue
-		}
-		if slotResult != openAISlotAcquireOK {
-			return
 		}
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
