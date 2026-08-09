@@ -665,6 +665,8 @@ type ServerConfig struct {
 	ReadHeaderTimeout        int       `mapstructure:"read_header_timeout"`   // 读取请求头超时（秒）
 	MaxHeaderBytes           int       `mapstructure:"max_header_bytes"`      // 请求头最大字节数（HTTP/2 映射为 header-list 上限）
 	IdleTimeout              int       `mapstructure:"idle_timeout"`          // 空闲连接超时（秒）
+	ShutdownTimeout          int       `mapstructure:"shutdown_timeout"`      // 优雅退出等待 in-flight 请求超时（秒）
+	ShutdownDrainDelay       int       `mapstructure:"shutdown_drain_delay"`  // SIGTERM 后摘流再关闭监听的等待时间（秒）
 	TrustedProxies           []string  `mapstructure:"trusted_proxies"`       // 可信代理列表（CIDR/IP）
 	TrustedProxiesConfigured bool      `mapstructure:"-" json:"-" yaml:"-"`   // 是否显式配置了可信代理列表
 	MaxRequestBodySize       int64     `mapstructure:"max_request_body_size"` // 全局最大请求体限制
@@ -868,7 +870,52 @@ const (
 	ImageConcurrencyOverflowModeWait   = "wait"
 )
 
-// GatewayConfig API网关相关配置
+// OpenAIWebImagesConfig holds runtime defaults for the ChatGPT Web image path (fork feature).
+// Enablement: gateway.openai_web_images.default_enabled is the global default.
+// Account extra.openai_web_images.enabled, when present, overrides the global default.
+type OpenAIWebImagesConfig struct {
+	// DefaultEnabled applies when an account has no explicit openai_web_images.enabled.
+	// Default false (opt-in). Set true to enable web images for all OpenAI OAuth accounts.
+	DefaultEnabled           bool   `mapstructure:"default_enabled"`
+	DefaultMaxInflight       int    `mapstructure:"default_max_inflight"`
+	QuotaCacheTTLSeconds     int    `mapstructure:"quota_cache_ttl_seconds"`
+	ProbeOnSchedule          bool   `mapstructure:"probe_on_schedule"`
+	UnknownQuotaPolicy       string `mapstructure:"unknown_quota_policy"`
+	SuccessDecrementLocal    bool   `mapstructure:"success_decrement_local"`
+	RateLimitCooldownSeconds int    `mapstructure:"rate_limit_cooldown_seconds"`
+	TransportMaxRetries      int    `mapstructure:"transport_max_retries"`
+	PollTimeoutSeconds       int    `mapstructure:"poll_timeout_seconds"`
+	// PollInitialWaitSeconds: delay before first conversation GET after SSE ends (default 10).
+	// Set 0 to restore legacy immediate first poll (not recommended).
+	PollInitialWaitSeconds int `mapstructure:"poll_initial_wait_seconds"`
+	// PollIntervalSeconds: min gap between post-SSE conversation GETs (default 10).
+	PollIntervalSeconds  int    `mapstructure:"poll_interval_seconds"`
+	InflightBackend      string `mapstructure:"inflight_backend"`
+	InflightTTLSeconds   int    `mapstructure:"inflight_ttl_seconds"`
+	RedisKeyPrefix       string `mapstructure:"redis_key_prefix"`
+	BulkMaxAccounts      int    `mapstructure:"bulk_max_accounts"`
+	BulkProbeConcurrency int    `mapstructure:"bulk_probe_concurrency"`
+	// DefaultModelMode: auto (plan preset) or fixed (use default_upstream_model/thinking_effort).
+	DefaultModelMode string `mapstructure:"default_model_mode"`
+	// DefaultUpstreamModel is the ChatGPT web model slug used for auto fallback / fixed global mode.
+	DefaultUpstreamModel string `mapstructure:"default_upstream_model"`
+	// DefaultThinkingEffort e.g. extended|high|medium|low|minimal.
+	DefaultThinkingEffort string `mapstructure:"default_thinking_effort"`
+	// KeepConversationAfter keeps the ChatGPT web conversation after image result.
+	// Default false: PATCH conversation is_visible=false (same as chatgpt2api).
+	KeepConversationAfter bool `mapstructure:"keep_conversation_after"`
+}
+
+// OpenAIChatImageBridgeConfig maps /v1/chat/completions + gpt-image-* onto the
+// existing images pipeline (fork feature). When disabled, image models on chat
+// return a clear 400 pointing at /v1/images/generations.
+type OpenAIChatImageBridgeConfig struct {
+	// Enabled defaults true so clients that call chat.completions with gpt-image-* work.
+	Enabled bool `mapstructure:"enabled"`
+	// ResponseStyle: markdown_data_url (default) | multimodal_parts
+	ResponseStyle string `mapstructure:"response_style"`
+}
+
 type GatewayConfig struct {
 	// 等待上游响应头的超时时间（秒），0表示无超时
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
@@ -911,6 +958,10 @@ type GatewayConfig struct {
 	// OpenAICompactModel: /responses/compact 上游使用的模型。
 	// compact 端点支持模型滞后于普通 /responses 时，可用该配置降级规避上游错误。
 	OpenAICompactModel string `mapstructure:"openai_compact_model"`
+	// OpenAIWebImages: optional ChatGPT Web image generations path (default off).
+	OpenAIWebImages OpenAIWebImagesConfig `mapstructure:"openai_web_images"`
+	// OpenAIChatImageBridge: bridge chat.completions image models to /v1/images pipeline.
+	OpenAIChatImageBridge OpenAIChatImageBridgeConfig `mapstructure:"openai_chat_image_bridge"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// Live: ChatGPT Frameless Live 会话配置。
@@ -1843,6 +1894,8 @@ func setDefaults() {
 	viper.SetDefault("server.read_header_timeout", 10) // 10秒读取请求头
 	viper.SetDefault("server.max_header_bytes", 64*1024)
 	viper.SetDefault("server.idle_timeout", 120) // 120秒空闲超时
+	viper.SetDefault("server.shutdown_timeout", 300)
+	viper.SetDefault("server.shutdown_drain_delay", 0)
 	viper.SetDefault("server.max_request_body_size", int64(256*1024*1024))
 	// H2C 默认配置
 	viper.SetDefault("server.h2c.enabled", false)
@@ -1903,6 +1956,30 @@ func setDefaults() {
 
 	// Security - disable direct fallback on proxy error
 	viper.SetDefault("security.proxy_fallback.allow_direct_on_error", false)
+
+	// OpenAI Web Images (fork): global default_enabled + optional per-account override in extra.
+	viper.SetDefault("gateway.openai_web_images.default_enabled", false)
+	viper.SetDefault("gateway.openai_web_images.default_max_inflight", 1)
+	viper.SetDefault("gateway.openai_web_images.quota_cache_ttl_seconds", 300)
+	viper.SetDefault("gateway.openai_web_images.probe_on_schedule", true)
+	viper.SetDefault("gateway.openai_web_images.unknown_quota_policy", "optimistic")
+	viper.SetDefault("gateway.openai_web_images.success_decrement_local", true)
+	viper.SetDefault("gateway.openai_web_images.rate_limit_cooldown_seconds", 600)
+	viper.SetDefault("gateway.openai_web_images.transport_max_retries", 1)
+	viper.SetDefault("gateway.openai_web_images.poll_timeout_seconds", 180)
+	viper.SetDefault("gateway.openai_web_images.poll_initial_wait_seconds", 10)
+	viper.SetDefault("gateway.openai_web_images.poll_interval_seconds", 10)
+	viper.SetDefault("gateway.openai_web_images.inflight_backend", "redis")
+	viper.SetDefault("gateway.openai_web_images.inflight_ttl_seconds", 900)
+	viper.SetDefault("gateway.openai_web_images.redis_key_prefix", "sub2api:webimg:")
+	viper.SetDefault("gateway.openai_web_images.bulk_max_accounts", 500)
+	viper.SetDefault("gateway.openai_web_images.bulk_probe_concurrency", 5)
+	viper.SetDefault("gateway.openai_web_images.default_model_mode", "auto")
+	viper.SetDefault("gateway.openai_web_images.default_upstream_model", "gpt-5-6-thinking")
+	viper.SetDefault("gateway.openai_web_images.default_thinking_effort", "extended")
+	viper.SetDefault("gateway.openai_web_images.keep_conversation_after", false)
+	viper.SetDefault("gateway.openai_chat_image_bridge.enabled", true)
+	viper.SetDefault("gateway.openai_chat_image_bridge.response_style", "markdown_data_url")
 
 	// Billing
 	viper.SetDefault("billing.circuit_breaker.enabled", true)
@@ -2467,6 +2544,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.IdleTimeout <= 0 {
 		return fmt.Errorf("server.idle_timeout must be positive")
+	}
+	if c.Server.ShutdownTimeout < 0 {
+		return fmt.Errorf("server.shutdown_timeout must be non-negative")
+	}
+	if c.Server.ShutdownDrainDelay < 0 {
+		return fmt.Errorf("server.shutdown_drain_delay must be non-negative")
 	}
 	if c.Server.MaxRequestBodySize < 0 {
 		return fmt.Errorf("server.max_request_body_size must be non-negative")

@@ -37,6 +37,12 @@ func (r *accountRepoStubForClearAccountError) ClearRateLimit(ctx context.Context
 	r.account.RateLimitResetAt = nil
 	return nil
 }
+func (r *accountRepoStubForClearAccountError) SetWebImageRateLimited(context.Context, int64, time.Time) error {
+	return nil
+}
+func (r *accountRepoStubForClearAccountError) ClearWebImageRateLimit(context.Context, int64) error {
+	return nil
+}
 
 func (r *accountRepoStubForClearAccountError) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
 	r.clearAntigravityCalls++

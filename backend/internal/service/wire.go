@@ -195,6 +195,24 @@ func ProvideAccountTestService(
 	return service
 }
 
+func ProvideOpenAIWebImagesService(
+	cfg *config.Config,
+	rdb *redis.Client,
+	accountRepo AccountRepository,
+	gateway *OpenAIGatewayService,
+) *OpenAIWebImagesService {
+	svc := NewOpenAIWebImagesService(cfg, rdb, accountRepo)
+	if gateway != nil {
+		gateway.SetOpenAIWebImagesService(svc)
+		// Probe/schedule must use the same refreshed OAuth token path as image forward.
+		svc.SetAccessTokenFunc(func(ctx context.Context, account *Account) (string, error) {
+			token, _, err := gateway.GetAccessToken(ctx, account)
+			return token, err
+		})
+	}
+	return svc
+}
+
 func ProvideGrokQuotaService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
@@ -249,6 +267,18 @@ func ProvideGrokTokenProvider(
 	p.SetRefreshAPI(refreshAPI, executor)
 	p.SetRefreshPolicy(GrokProviderRefreshPolicy())
 	p.SetTempUnschedCache(tempUnschedCache)
+	return p
+}
+
+// ProvideKiroTokenProvider creates KiroTokenProvider with OAuthRefreshAPI injection (P5).
+func ProvideKiroTokenProvider(
+	accountRepo AccountRepository,
+	tokenCache GeminiTokenCache,
+	refreshAPI *OAuthRefreshAPI,
+) *KiroTokenProvider {
+	p := NewKiroTokenProvider(accountRepo, tokenCache)
+	executor := NewKiroTokenRefresher(NewKiroTokenService())
+	p.SetRefreshAPI(refreshAPI, executor)
 	return p
 }
 
@@ -717,8 +747,12 @@ var ProviderSet = wire.NewSet(
 	NewGeminiMessagesCompatService,
 	ProvideAntigravityTokenProvider,
 	ProvideGrokTokenProvider,
+	ProvideKiroTokenProvider,
+	NewKiroModelDiscoveryService,
+	wire.Bind(new(KiroModelDiscovery), new(*KiroModelDiscoveryService)),
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
+	ProvideOpenAIWebImagesService,
 	ProvideGrokQuotaService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,

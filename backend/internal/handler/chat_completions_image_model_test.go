@@ -21,16 +21,19 @@ func TestChatCompletionsRejectsGPTImageModelsBeforeScheduling(t *testing.T) {
 
 	for _, model := range []string{"gpt-image-1", "gpt-image-1.5", "gpt-image-2"} {
 		for _, tc := range []struct {
-			name string
-			call func(*gin.Context)
+			name        string
+			call        func(*gin.Context)
+			wantMessage string
 		}{
 			{
-				name: "gateway",
-				call: (&GatewayHandler{}).ChatCompletions,
+				name:        "gateway",
+				call:        (&GatewayHandler{}).ChatCompletions,
+				wantMessage: "Chat Completions",
 			},
 			{
-				name: "openai_gateway",
-				call: newOpenAIImageChatRejectionHandler(t).ChatCompletions,
+				name:        "openai_gateway_bridge_disabled",
+				call:        newOpenAIImageChatRejectionHandler(t).ChatCompletions,
+				wantMessage: "GATEWAY_OPENAI_CHAT_IMAGE_BRIDGE_ENABLED",
 			},
 		} {
 			t.Run(tc.name+"/"+model, func(t *testing.T) {
@@ -44,7 +47,7 @@ func TestChatCompletionsRejectsGPTImageModelsBeforeScheduling(t *testing.T) {
 
 				require.Equal(t, http.StatusBadRequest, recorder.Code)
 				require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
-				require.Contains(t, gjson.Get(recorder.Body.String(), "error.message").String(), "Chat Completions")
+				require.Contains(t, gjson.Get(recorder.Body.String(), "error.message").String(), tc.wantMessage)
 				_, selected := c.Get(opsAccountIDKey)
 				require.False(t, selected, "rejection must happen before account selection")
 			})

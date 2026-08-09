@@ -100,6 +100,12 @@
                         </span>
                         <span class="flex-1 text-left">{{ t('admin.accounts.dataImport') }}</span>
                       </button>
+                      <button class="account-tools-menu-item" @click="openImportKiro">
+                        <span class="account-tools-menu-icon bg-cyan-50 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300">
+                          <Icon name="upload" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">Import Kiro</span>
+                      </button>
                       <button class="account-tools-menu-item" @click="openExportDataDialogFromMenu">
                         <span class="account-tools-menu-icon bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300">
                           <Icon name="download" size="sm" />
@@ -280,7 +286,7 @@
             </div>
           </template>
           <template #cell-capacity="{ row }">
-            <AccountCapacityCell :account="row" />
+            <AccountCapacityCell :account="row" :web-images-status="webImagesStatusById[String(row.id)] ?? null" @web-images-probe="handleMenuWebImagesProbe" />
           </template>
           <template #cell-status="{ row }">
             <div class="flex items-center gap-1.5">
@@ -314,6 +320,13 @@
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
               :manual-refresh-token="usageManualRefreshToken"
+            />
+          </template>
+          <template #cell-web_images="{ row }">
+            <OpenAIWebImagesCell
+              :account="row"
+              :status="webImagesStatusById[String(row.id)] ?? null"
+              :loading="webImagesLoading"
             />
           </template>
           <template #cell-proxy="{ row }">
@@ -437,8 +450,9 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" :web-images-status="menu.acc ? (webImagesStatusById[String(menu.acc.id)] ?? null) : null" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" @web-images-toggle="handleMenuWebImagesToggle" @web-images-probe="handleMenuWebImagesProbe" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
+    <ImportKiroModal :show="showImportKiro" @close="showImportKiro = false" @imported="() => { showImportKiro = false; reload() }" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
       :show="showBulkEdit"
@@ -489,6 +503,7 @@ import AccountTableActions from '@/components/admin/account/AccountTableActions.
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
+import ImportKiroModal from '@/components/admin/account/kiro/ImportKiroModal.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
@@ -501,6 +516,8 @@ import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vu
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
 import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCell.vue'
+import OpenAIWebImagesCell from '@/components/account/OpenAIWebImagesCell.vue'
+import type { OpenAIWebImagesStatus } from '@/api/admin/accounts'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
@@ -564,6 +581,7 @@ const showCreate = ref(false)
 const showEdit = ref(false)
 const showSync = ref(false)
 const showImportData = ref(false)
+const showImportKiro = ref(false)
 const showExportDataDialog = ref(false)
 const includeProxyOnExport = ref(true)
 const showBulkEdit = ref(false)
@@ -613,11 +631,11 @@ const accountToolsDropdownStyle = computed(() => ({
   width: `${accountToolsDropdownPosition.width}px`
 }))
 const hiddenColumns = reactive<Set<string>>(new Set())
-const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'scheduler_score', 'rate_multiplier']
+const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'scheduler_score', 'rate_multiplier', 'web_images']
 const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
 // One-time migration: hide scheduler score for existing admins too, because showing it opt-ins to heavy backend scoring.
 const HIDDEN_COLUMNS_VERSION_KEY = 'account-hidden-columns-version'
-const HIDDEN_COLUMNS_CURRENT_VERSION = 'scheduler-score-hidden-by-default'
+const HIDDEN_COLUMNS_CURRENT_VERSION = 'web-images-in-capacity-v1'
 
 // Sorting settings
 const ACCOUNT_SORT_STORAGE_KEY = 'account-table-sort'
@@ -673,6 +691,9 @@ const todayStatsByAccountId = ref<Record<string, WindowStats>>({})
 const todayStatsLoading = ref(false)
 const todayStatsError = ref<string | null>(null)
 const todayStatsReqSeq = ref(0)
+const webImagesStatusById = ref<Record<string, OpenAIWebImagesStatus>>({})
+const webImagesLoading = ref(false)
+const webImagesReqSeq = ref(0)
 const pendingTodayStatsRefresh = ref(false)
 const usageManualRefreshToken = ref(0)
 
@@ -728,6 +749,39 @@ const refreshTodayStatsBatch = async () => {
   }
 }
 
+const loadWebImagesStatus = async () => {
+  const openaiIds = accounts.value
+    .filter(a => a.platform === 'openai' && (a.type === 'oauth' || a.type === 'setup-token'))
+    .map(a => a.id)
+  const reqSeq = ++webImagesReqSeq.value
+  if (openaiIds.length === 0) {
+    webImagesStatusById.value = {}
+    webImagesLoading.value = false
+    return
+  }
+  if (hiddenColumns.has('capacity') && hiddenColumns.has('web_images')) return
+  webImagesLoading.value = true
+  try {
+    const chunkSize = 80
+    const next: Record<string, OpenAIWebImagesStatus> = { ...webImagesStatusById.value }
+    for (const id of openaiIds) delete next[String(id)]
+    for (let i = 0; i < openaiIds.length; i += chunkSize) {
+      const items = await adminAPI.accounts.overviewOpenAIWebImages(openaiIds.slice(i, i + chunkSize))
+      if (reqSeq !== webImagesReqSeq.value) return
+      for (const item of items) next[String(item.account_id)] = item
+    }
+    webImagesStatusById.value = next
+  } catch (error) {
+    if (reqSeq === webImagesReqSeq.value) console.error('Failed to load openai web images status:', error)
+  } finally {
+    if (reqSeq === webImagesReqSeq.value) webImagesLoading.value = false
+  }
+}
+
+const onWebImagesUpdated = (status: OpenAIWebImagesStatus) => {
+  webImagesStatusById.value = { ...webImagesStatusById.value, [String(status.account_id)]: status }
+}
+
 const autoRefreshIntervalLabel = (sec: number) => {
   if (sec === 5) return t('admin.accounts.refreshInterval5s')
   if (sec === 10) return t('admin.accounts.refreshInterval10s')
@@ -777,6 +831,7 @@ const loadSavedColumns = () => {
       // Older saved column layouts may have scheduler_score visible; migrate them to the new safe default once.
       if (localStorage.getItem(HIDDEN_COLUMNS_VERSION_KEY) !== HIDDEN_COLUMNS_CURRENT_VERSION) {
         hiddenColumns.add('scheduler_score')
+        hiddenColumns.add('web_images')
         localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
         localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
       }
@@ -869,6 +924,9 @@ const toggleColumn = (key: string) => {
     refreshTodayStatsBatch().catch((error) => {
       console.error('Failed to load account today stats after showing column:', error)
     })
+  }
+  if ((key === 'web_images' || key === 'capacity') && wasHidden) {
+    loadWebImagesStatus().catch((error) => console.error('Failed to load web images status after showing column:', error))
   }
   if (key === 'scheduler_score') {
     // The server only returns scheduler scores when this column is visible, so reload the current page immediately.
@@ -971,6 +1029,7 @@ const load = async () => {
     delete requestParams.lite
   }
   await refreshTodayStatsBatch()
+  await loadWebImagesStatus()
 }
 
 const reload = async () => {
@@ -981,6 +1040,7 @@ const reload = async () => {
   pendingTodayStatsRefresh.value = false
   await baseReload()
   await refreshTodayStatsBatch()
+  await loadWebImagesStatus()
 }
 
 const refreshUpstreamBillingSortedList = async (force = false) => {
@@ -1058,6 +1118,7 @@ const isAnyModalOpen = computed(() => {
     showEdit.value ||
     showSync.value ||
     showImportData.value ||
+    showImportKiro.value ||
     showExportDataDialog.value ||
     showBulkEdit.value ||
     showTempUnsched.value ||
@@ -1168,6 +1229,7 @@ const refreshAccountsIncrementally = async () => {
     upstreamBillingNow.value = Date.now()
 
     await refreshTodayStatsBatch()
+    await loadWebImagesStatus()
   } catch (error) {
     console.error('Auto refresh failed:', error)
   } finally {
@@ -1216,6 +1278,11 @@ const toggleAccountToolsDropdown = () => {
 const openSyncFromCrs = () => {
   closeAccountToolsDropdown()
   showSync.value = true
+}
+
+const openImportKiro = () => {
+  showAccountToolsDropdown.value = false
+  showImportKiro.value = true
 }
 
 const openImportData = () => {
@@ -1408,6 +1475,7 @@ const allColumns = computed(() => {
     c.push({ key: 'groups', label: t('admin.accounts.columns.groups'), sortable: false })
   }
   c.push({ key: 'usage', label: t('admin.accounts.columns.usageWindows'), sortable: false })
+  c.push({ key: 'web_images', label: t('admin.accounts.columns.webImages'), sortable: false })
   c.push(
     { key: 'proxy', label: t('admin.accounts.columns.proxy'), sortable: false },
     { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
@@ -1495,7 +1563,11 @@ const handleBulkDelete = async () => { if(!confirm(t('common.confirm'))) return;
 const handleBulkResetStatus = async () => {
   if (!confirm(t('common.confirm'))) return
   try {
-    const result = await adminAPI.accounts.batchClearError(selIds.value)
+    const ids = [...selIds.value]
+    const result = await adminAPI.accounts.batchClearError(ids)
+    const next = { ...webImagesStatusById.value }
+    for (const id of ids) delete next[String(id)]
+    webImagesStatusById.value = next
     if (result.failed > 0) {
       appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
     } else {
@@ -1505,6 +1577,32 @@ const handleBulkResetStatus = async () => {
     reload()
   } catch (error) {
     console.error('Failed to bulk reset status:', error)
+    appStore.showError(String(error))
+  }
+}
+
+const handleMenuWebImagesToggle = async (account: Account) => {
+  try {
+    const cached = webImagesStatusById.value[String(account.id)]
+    const extra = (account.extra || {}) as Record<string, any>
+    const enabled = cached ? Boolean(cached.enabled) : Boolean(extra.openai_web_images && typeof extra.openai_web_images === 'object' && extra.openai_web_images.enabled === true)
+    const status = await adminAPI.accounts.patchOpenAIWebImages(account.id, { enabled_mode: enabled ? 'off' : 'on' })
+    onWebImagesUpdated(status)
+    appStore.showSuccess(!enabled ? t('admin.accounts.webImages.on') : t('admin.accounts.webImages.off'))
+  } catch (error) {
+    console.error('toggle web images failed', error)
+    appStore.showError(String(error))
+  }
+}
+
+const handleMenuWebImagesProbe = async (account: Account) => {
+  try {
+    const status = await adminAPI.accounts.probeOpenAIWebImages(account.id)
+    onWebImagesUpdated(status)
+    const remaining = status.quota_known && status.remaining != null ? status.remaining : t('admin.accounts.webImages.unknown')
+    appStore.showSuccess(`${t('admin.accounts.webImages.probe')}: ${remaining}`)
+  } catch (error) {
+    console.error('probe web images failed', error)
     appStore.showError(String(error))
   }
 }

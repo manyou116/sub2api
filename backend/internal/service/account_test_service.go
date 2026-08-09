@@ -24,6 +24,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+	"github.com/Wei-Shaw/sub2api/internal/service/openaiimages/webdriver"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -69,12 +70,30 @@ type AccountTestService struct {
 	geminiTokenProvider       *GeminiTokenProvider
 	claudeTokenProvider       *ClaudeTokenProvider
 	grokTokenProvider         *GrokTokenProvider
+	kiroTokenProvider         *KiroTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
+	webImages                 *OpenAIWebImagesService
+}
+
+// SetOpenAIWebImagesService injects optional Web picture_v2 path for OAuth image tests.
+func (s *AccountTestService) SetOpenAIWebImagesService(svc *OpenAIWebImagesService) {
+	if s == nil {
+		return
+	}
+	s.webImages = svc
+}
+
+// SetKiroTokenProvider injects Kiro OAuth token cache/refresh for account tests (P5).
+func (s *AccountTestService) SetKiroTokenProvider(p *KiroTokenProvider) {
+	if s == nil {
+		return
+	}
+	s.kiroTokenProvider = p
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -201,6 +220,10 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 
 	if account.Platform == PlatformAntigravity {
 		return s.routeAntigravityTest(c, account, modelID, prompt)
+	}
+
+	if account.IsKiro() {
+		return s.testKiroAccountConnection(c, account, modelID)
 	}
 
 	return s.testClaudeAccountConnection(c, account, modelID)
@@ -808,6 +831,59 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	}
 
 	return s.processOpenAIStream(c, resp.Body)
+}
+
+// testKiroAccountConnection probes Kiro CodeWhisperer with real EventStream
+// text deltas (same upstream path as gateway). Without this branch Kiro accounts
+// fall through to Claude and receive Anthropic 401 "Invalid bearer token".
+func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *Account, modelID string) error {
+	ctx := c.Request.Context()
+
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		testModelID = "claude-sonnet-4.5"
+	}
+	internalModel := resolveKiroInternalModel(account, testModelID)
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: internalModel})
+
+	chat := NewKiroChatService()
+	if s.kiroTokenProvider != nil {
+		chat.SetTokenProvider(s.kiroTokenProvider)
+	}
+
+	gotContent := false
+	_, err := chat.ProbeTextStream(ctx, account, testModelID, "hi", func(text string) error {
+		if text == "" {
+			return nil
+		}
+		gotContent = true
+		s.sendEvent(c, TestEvent{Type: "content", Text: text})
+		return nil
+	})
+	if err != nil {
+		var failoverErr *UpstreamFailoverError
+		if errors.As(err, &failoverErr) && failoverErr != nil {
+			msg := strings.TrimSpace(string(failoverErr.ResponseBody))
+			if msg == "" {
+				msg = err.Error()
+			}
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Kiro API returned %d: %s", failoverErr.StatusCode, msg))
+		}
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Kiro test failed: %s", err.Error()))
+	}
+
+	if !gotContent {
+		s.sendEvent(c, TestEvent{Type: "content", Text: "(empty response)"})
+	}
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
 }
 
 // testOpenAIChatCompletionsConnection tests an OpenAI-compatible APIKey account
@@ -1804,6 +1880,9 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	c.Writer.Flush()
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
+	if s.webImages != nil && s.webImages.ShouldUseWebPath(account) {
+		return s.testOpenAIImageWeb(c, ctx, account, authToken, modelID, prompt)
+	}
 	s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /responses image tool...\n"})
 
 	parsed := &OpenAIImagesRequest{
@@ -1901,6 +1980,138 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
+}
+func (s *AccountTestService) testOpenAIImageWeb(c *gin.Context, ctx context.Context, account *Account, authToken, modelID, prompt string) error {
+	s.sendEvent(c, TestEvent{Type: "content", Text: "Calling ChatGPT Web image path...\n"})
+	if s.webImages == nil {
+		return s.sendErrorAndEnd(c, "web images service not configured")
+	}
+	cfg := s.webImages.ParseAccountConfig(account)
+	requestID := fmt.Sprintf("account-test-%d", account.ID)
+	ok, err := s.webImages.Acquire(ctx, account.ID, cfg.MaxInflight, requestID)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "acquire inflight failed: "+err.Error())
+	}
+	if !ok {
+		return s.sendErrorAndEnd(c, "web image account inflight full")
+	}
+	defer s.webImages.Release(context.Background(), account.ID, requestID)
+
+	if st, err := s.webImages.ProbeAccount(ctx, account.ID, false); err == nil && st != nil {
+		if st.Remaining != nil {
+			s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Web quota remaining=%d max_inflight=%d\n", *st.Remaining, st.MaxInflight)})
+		} else {
+			s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Web quota unknown max_inflight=%d\n", st.MaxInflight)})
+		}
+		if st.RateLimited || st.UnschedulableReason == "cooldown" {
+			msg := "web image rate limited"
+			if st.CooldownUntil != nil {
+				msg = fmt.Sprintf("web image rate limited until %s", st.CooldownUntil.Local().Format("2006-01-02 15:04:05"))
+			}
+			s.webImages.MarkFail(ctx, account, msg, true)
+			return s.sendErrorAndEnd(c, "Web image generation failed: "+msg)
+		}
+		if st.Remaining != nil && *st.Remaining <= 0 {
+			msg := "web image quota remaining=0"
+			s.webImages.MarkFail(ctx, account, msg, true)
+			return s.sendErrorAndEnd(c, "Web image generation failed: "+msg)
+		}
+	}
+
+	proxyURL := ""
+	if account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	sel := s.webImages.ResolveUpstream(account)
+	s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf(
+		"Resolve plan=%s mode=%s upstream=%s effort=%s source=%s\n",
+		sel.PlanType, sel.ModelMode, sel.UpstreamModel, sel.ThinkingEffort, sel.Source,
+	)})
+	// Keep the admin SSE stream alive: Web image gen can take 1–3+ minutes with no bytes.
+	// Without heartbeats, browsers/proxies often show "connection interrupted".
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(8 * time.Second)
+		defer ticker.Stop()
+		elapsed := 0
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				elapsed += 8
+				s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Web image still running... %ds (requirements/SSE/poll/download)\n", elapsed)})
+			}
+		}
+	}()
+	testSize := inferOpenAIWebImageTestSize(prompt)
+	if cfg.RequireDownloadAttachment && testSize != "" && !strings.Contains(prompt, "可下载文件/附件") {
+		prompt = appendOpenAIWebImagesDownloadAttachmentPrompt(prompt, testSize)
+	}
+	// Bound generation so hung SSE/poll cannot run until proxy idle timeout.
+	// Keep this above the configured webdriver poll timeout; 4K attachments can run 4–5 minutes.
+	genTimeout := 4 * time.Minute
+	if pollTimeout := time.Duration(s.webImages.cfgOrDefault().PollTimeoutSeconds) * time.Second; pollTimeout+time.Minute > genTimeout {
+		genTimeout = pollTimeout + time.Minute
+	}
+	genCtx, cancel := context.WithTimeout(ctx, genTimeout)
+	defer cancel()
+	result, err := s.webImages.Driver().Generate(genCtx, webdriver.Auth{
+		AccessToken: authToken,
+		ProxyURL:    proxyURL,
+		UserAgent:   strings.TrimSpace(account.GetOpenAIUserAgent()),
+	}, webdriver.GenerateRequest{
+		Prompt:         prompt,
+		Model:          sel.UpstreamModel,
+		ThinkingEffort: sel.ThinkingEffort,
+		Size:           testSize,
+		N:              1,
+		ResponseFormat: "b64_json",
+	})
+	close(done)
+	if err != nil {
+		rateLimited := false
+		var we *webdriver.Error
+		if errors.As(err, &we) && we != nil && we.Kind == webdriver.ErrorKindRateLimited {
+			rateLimited = true
+		} else {
+			low := strings.ToLower(err.Error())
+			if strings.Contains(low, "free plan limit") || strings.Contains(low, "plan limit") || strings.Contains(low, "rate_limited") || strings.Contains(low, "rate limit") || strings.Contains(low, "limit resets") {
+				rateLimited = true
+			}
+		}
+		s.webImages.MarkFail(ctx, account, err.Error(), rateLimited)
+		return s.sendErrorAndEnd(c, "Web image generation failed: "+err.Error())
+	}
+	if result == nil || len(result.Data) == 0 {
+		s.webImages.MarkFail(ctx, account, "no images returned", false)
+		return s.sendErrorAndEnd(c, "No images returned from ChatGPT Web image path")
+	}
+	s.webImages.MarkSuccess(ctx, account)
+	for _, item := range result.Data {
+		if item.RevisedPrompt != "" {
+			s.sendEvent(c, TestEvent{Type: "content", Text: item.RevisedPrompt})
+		}
+		b64 := strings.TrimSpace(item.B64JSON)
+		if b64 == "" {
+			continue
+		}
+		s.sendEvent(c, TestEvent{
+			Type:     "image",
+			ImageURL: "data:image/png;base64," + b64,
+			MimeType: "image/png",
+		})
+	}
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
+}
+
+func inferOpenAIWebImageTestSize(prompt string) string {
+	matches := regexp.MustCompile(`(?i)\b([1-9][0-9]{2,4})\s*[x×]\s*([1-9][0-9]{2,4})\b`).FindStringSubmatch(prompt)
+	if len(matches) != 3 {
+		return ""
+	}
+	return matches[1] + "x" + matches[2]
 }
 
 func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
