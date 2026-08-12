@@ -2103,6 +2103,24 @@
         </div>
       </div>
 
+      <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.codexFingerprintMode') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.codexFingerprintModeDesc') }}
+            </p>
+          </div>
+          <div class="w-52 flex-shrink-0">
+            <Select v-model="codexFingerprintMode" data-testid="edit-codex-fingerprint-mode-select" :options="codexFingerprintModeOptions" />
+          </div>
+        </div>
+      </div>
+
       <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
@@ -3069,6 +3087,8 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
+type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
+const codexFingerprintMode = ref<CodexFingerprintMode>('session')
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type OpenAIWebImagesEnableMode = 'inherit' | 'on' | 'off'
@@ -3111,6 +3131,13 @@ const editWeeklyResetMode = ref<'rolling' | 'fixed' | null>(null)
 const editWeeklyResetDay = ref<number | null>(null)
 const editWeeklyResetHour = ref<number | null>(null)
 const editResetTimezone = ref<string | null>(null)
+const codexFingerprintModeOptions = computed(() => [
+  { value: 'off' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintOff') },
+  { value: 'device' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintDevice') },
+  { value: 'session' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintSession') },
+  { value: 'full' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintFull') },
+])
+
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
   { value: OPENAI_WS_MODE_CTX_POOL, label: t('admin.accounts.openai.wsModeCtxPool') },
@@ -3532,6 +3559,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
+  codexFingerprintMode.value = 'session'
   codexImageToolMode.value = 'inherit'
   openAIWebImagesEnableMode.value = 'inherit'
   openAIWebImagesMaxInflight.value = 1
@@ -3592,6 +3620,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         extra?.codex_cli_only_allow_app_server === true
     }
     if (newAccount.type === 'oauth') {
+<<<<<<< HEAD
       const webCfg = (extra?.openai_web_images && typeof extra.openai_web_images === 'object')
         ? (extra.openai_web_images as Record<string, unknown>)
         : null
@@ -3613,6 +3642,12 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         : OPENAI_WEB_IMAGES_DEFAULT_EFFORT
       openAIWebImagesProbeAfter.value = false
       openAIWebImagesRequireDownloadAttachment.value = webCfg?.require_download_attachment === true
+=======
+      const fpMode = extra?.codex_fingerprint_mode as string | undefined
+      codexFingerprintMode.value = (['off', 'device', 'session', 'full'].includes(fpMode || '')
+        ? fpMode as CodexFingerprintMode
+        : 'session')
+>>>>>>> v0.1.175
     }
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
@@ -4971,6 +5006,15 @@ const handleSubmit = async () => {
           newExtra.codex_cli_only_allow_app_server = true
         } else {
           delete newExtra.codex_cli_only_allow_app_server
+        }
+      }
+
+      // 指纹收敛模式：默认 session，不写入；非默认值显式写入（包括 off）
+      if (props.account.type === 'oauth') {
+        if (codexFingerprintMode.value !== 'session') {
+          newExtra.codex_fingerprint_mode = codexFingerprintMode.value
+        } else {
+          delete newExtra.codex_fingerprint_mode
         }
       }
 
