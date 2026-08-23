@@ -243,6 +243,9 @@ func (r *webImgAccountRepo) IncrementQuotaUsed(context.Context, int64, float64) 
 	panic("unused")
 }
 func (r *webImgAccountRepo) ResetQuotaUsed(context.Context, int64) error { panic("unused") }
+func (r *webImgAccountRepo) ResetQuotaUsedAndClearRateLimitCooldown(context.Context, int64) error {
+	panic("unused")
+}
 func (r *webImgAccountRepo) RevertProxyFallback(context.Context, int64) error {
 	panic("unused")
 }
