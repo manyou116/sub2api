@@ -3,9 +3,9 @@ version: 2
 
 project_name: sub2api
 
+# Skip go mod tidy on release (go.sum is committed); saves ~10-30s and avoids network flakes.
 before:
-  hooks:
-    - go mod tidy -C backend
+  hooks: []
 
 builds:
   - id: sub2api
