@@ -192,3 +192,61 @@ func TestUpdateAccount_FixedWeeklyResetClearsLegacyRollingUsage(t *testing.T) {
 	require.Equal(t, currentWeekStart.Format(time.RFC3339), updated.Extra["quota_weekly_start"])
 	require.False(t, updated.IsWeeklyQuotaPeriodExpired())
 }
+
+func TestUpdateAccount_PreservesOpenAIWebImagesWhenExtraOmitsKey(t *testing.T) {
+	accountID := int64(201)
+	repo := &updateAccountOveragesRepoStub{
+		account: &Account{
+			ID:       accountID,
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Status:   StatusActive,
+			Extra: map[string]any{
+				"openai_web_images": map[string]any{
+					"enabled":      true,
+					"max_inflight": 3,
+					"stats":        map[string]any{"success": float64(9)},
+				},
+				"base_rpm": float64(10),
+			},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+	updated, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Extra: map[string]any{
+			"base_rpm": float64(20),
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	raw, ok := updated.Extra["openai_web_images"].(map[string]any)
+	require.True(t, ok, "openai_web_images must be preserved: %#v", updated.Extra)
+	require.Equal(t, true, raw["enabled"])
+	require.Equal(t, 3, raw["max_inflight"])
+	require.Equal(t, float64(20), updated.Extra["base_rpm"])
+}
+
+func TestUpdateAccount_ExplicitOpenAIWebImagesCanReplace(t *testing.T) {
+	accountID := int64(202)
+	repo := &updateAccountOveragesRepoStub{
+		account: &Account{
+			ID:       accountID,
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Status:   StatusActive,
+			Extra: map[string]any{
+				"openai_web_images": map[string]any{"enabled": true, "max_inflight": 3},
+			},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+	updated, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+		Extra: map[string]any{
+			"openai_web_images": map[string]any{"enabled": false, "max_inflight": 1},
+		},
+	})
+	require.NoError(t, err)
+	raw := updated.Extra["openai_web_images"].(map[string]any)
+	require.Equal(t, false, raw["enabled"])
+	require.Equal(t, 1, raw["max_inflight"])
+}
