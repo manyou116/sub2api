@@ -153,6 +153,7 @@ type AccountTestService struct {
 	modelMetadataRegistry     map[string]modelsDevProvider
 	modelMetadataRegistryAt   time.Time
 	pluginManager             *PluginManager
+	openaiGatewayService      *OpenAIGatewayService
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
 	// grokWSDialer is optional; realtime account tests use the default OpenAI-style
@@ -173,6 +174,7 @@ func (s *AccountTestService) SetPluginManager(pluginManager *PluginManager) {
 	}
 }
 
+<<<<<<< HEAD
 // SetOpenAIWebImagesService injects optional Web picture_v2 path for OAuth image tests.
 func (s *AccountTestService) SetOpenAIWebImagesService(svc *OpenAIWebImagesService) {
 	if s == nil {
@@ -187,6 +189,30 @@ func (s *AccountTestService) SetKiroTokenProvider(p *KiroTokenProvider) {
 		return
 	}
 	s.kiroTokenProvider = p
+=======
+func (s *AccountTestService) SetOpenAIGatewayService(gateway *OpenAIGatewayService) {
+	if s != nil {
+		s.openaiGatewayService = gateway
+	}
+}
+
+// FetchOpenAIAccountModels uses the shared cached discovery path for the test picker.
+func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, account *Account) ([]openai.Model, error) {
+	if s == nil || s.openaiGatewayService == nil {
+		return nil, errors.New("OpenAI model discovery service is unavailable")
+	}
+	response, err := s.openaiGatewayService.FetchOpenAIModelsList(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	var payload struct {
+		Data []openai.Model `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body, &payload); err != nil {
+		return nil, fmt.Errorf("decode OpenAI account models: %w", err)
+	}
+	return payload.Data, nil
+>>>>>>> v0.2.2
 }
 
 // NewAccountTestService creates a new AccountTestService
