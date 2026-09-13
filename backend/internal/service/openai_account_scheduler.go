@@ -521,7 +521,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		clearBinding()
 		return nil, false, nil
 	}
-	if shouldClearStickySession(account, req.RequestedModel) || account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() || !account.IsSchedulable() {
+	if shouldClearStickySession(account, req.RequestedModel) || account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() || !s.service.isAccountSchedulableForOpenAIRequest(ctx, account, req.RequiredImageCapability) {
 		clearBinding()
 		return nil, false, nil
 	}
@@ -564,22 +564,18 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		)
 		return nil, true, nil
 	}
-	result, acquireErr := s.service.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
-	if acquireErr == nil && result != nil && result.Acquired {
+	selection, acquireErr := s.acquireAccountSlotForSchedule(ctx, account, req)
+	if acquireErr == nil && selection != nil && selection.Acquired {
 		if !req.PreserveStickyBinding {
 			_ = s.service.refreshStickySessionTTL(ctx, req.GroupID, sessionHash, s.service.openAIWSSessionStickyTTL())
 		}
-		return attachSelectionProfitGate(ctx, &AccountSelectionResult{
-			Account:     account,
-			Acquired:    true,
-			ReleaseFunc: result.ReleaseFunc,
-		}), false, nil
+		return attachSelectionProfitGate(ctx, selection), false, nil
 	}
 
 	cfg := s.service.schedulingConfig()
 	// WaitPlan.MaxConcurrency 使用 Concurrency（非 EffectiveLoadFactor），因为 WaitPlan 控制的是 Redis 实际并发槽位等待。
 	if s.service.concurrencyService != nil {
-		if escapeCfg.enabled && acquireErr == nil && result != nil && !result.Acquired {
+		if escapeCfg.enabled && acquireErr == nil && selection != nil && !selection.Acquired {
 			errorRate, ttft, _ := s.stats.snapshot(accountID)
 			slog.Info("sticky_escape_triggered",
 				"account_id", accountID,
@@ -1175,20 +1171,30 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 		if candidate.account == nil {
 			continue
 		}
-		if candidate.loadKnown && candidate.account.Concurrency > 0 &&
+		skipTextSlot := shouldSkipAccountTextSlotForWebImages(s.service, ctx, candidate.account, req.RequestedModel, req.RequiredImageCapability)
+		if !skipTextSlot && candidate.loadKnown && candidate.account.Concurrency > 0 &&
 			candidate.loadInfo.CurrentConcurrency >= candidate.account.Concurrency {
 			continue
 		}
 
-		result, attempted, acquireErr := s.tryAcquireOpenAIAccountSlot(ctx, candidate.account.ID, candidate.account.Concurrency, budget)
-		if !attempted {
-			break
-		}
-		if acquireErr != nil {
-			return nil, compactBlocked, acquireErr
-		}
-		if result == nil || !result.Acquired {
-			continue
+		var (
+			result     *AcquireResult
+			attempted  bool
+			acquireErr error
+		)
+		if skipTextSlot {
+			result = &AcquireResult{Acquired: true, ReleaseFunc: func() {}}
+		} else {
+			result, attempted, acquireErr = s.tryAcquireOpenAIAccountSlot(ctx, candidate.account.ID, candidate.account.Concurrency, budget)
+			if !attempted {
+				break
+			}
+			if acquireErr != nil {
+				return nil, compactBlocked, acquireErr
+			}
+			if result == nil || !result.Acquired {
+				continue
+			}
 		}
 
 		fresh := s.service.resolveFreshSchedulableOpenAIAccount(ctx, candidate.account, req.Platform, req.RequestedModel, false, req.RequiredCapability)
@@ -1211,7 +1217,11 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 			continue
 		}
 
-		if fresh.Concurrency != candidate.account.Concurrency {
+		freshSkipTextSlot := shouldSkipAccountTextSlotForWebImages(s.service, ctx, fresh, req.RequestedModel, req.RequiredImageCapability)
+		if freshSkipTextSlot && !skipTextSlot {
+			release(result)
+			result = &AcquireResult{Acquired: true, ReleaseFunc: func() {}}
+		} else if !freshSkipTextSlot && (skipTextSlot || fresh.Concurrency != candidate.account.Concurrency) {
 			release(result)
 			result, attempted, acquireErr = s.tryAcquireOpenAIAccountSlot(ctx, fresh.ID, fresh.Concurrency, budget)
 			if !attempted {
@@ -1310,7 +1320,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			isGrokModelQuotaBlocked(account.ID, upstreamModel, now) {
 			continue
 		}
-		result, acquireErr := s.service.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
+		result, acquireErr := s.acquireAccountSlotForSchedule(ctx, account, req)
 		if acquireErr != nil {
 			return nil, acquireErr
 		}
@@ -1318,11 +1328,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			if req.SessionHash != "" && !req.PreserveStickyBinding {
 				_ = s.service.bindOpenAIStickySessionDuringSelection(ctx, req.GroupID, req.SessionHash, account.ID)
 			}
-			return attachSelectionProfitGate(ctx, &AccountSelectionResult{
-				Account:     account,
-				Acquired:    true,
-				ReleaseFunc: result.ReleaseFunc,
-			}), nil
+			return attachSelectionProfitGate(ctx, result), nil
 		}
 		if s.service.concurrencyService != nil {
 			cfg := s.service.schedulingConfig()
@@ -1396,6 +1402,13 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	if err != nil {
 		return nil, 0, 0, 0, err
 	}
+	// ListSchedulable excludes accounts in a text-rate-limit window. Web image
+	// quota is independent, so add those accounts back for image requests only.
+	if req.RequiredImageCapability != "" || isOpenAIImageGenerationModel(req.RequestedModel) {
+		if extra, e2 := s.service.listAccountsAllowingTextRateLimit(ctx, req.GroupID, req.Platform); e2 == nil && len(extra) > 0 {
+			accounts = mergeAccountsByID(accounts, extra)
+		}
+	}
 	if len(accounts) == 0 {
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary(""))
 	}
@@ -1439,15 +1452,15 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 				continue
 			}
 		}
-		if !account.IsSchedulable() {
-			filterStats.exclude("not_schedulable")
-			continue
-		}
 		if account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() {
 			filterStats.exclude("platform_mismatch")
 			continue
 		}
-		if s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) {
+		if !s.service.isAccountSchedulableForOpenAIRequest(ctx, account, req.RequiredImageCapability) {
+			filterStats.exclude("not_schedulable")
+			continue
+		}
+		if s.service.isOpenAIAccountRuntimeBlockedForRequest(account, req.RequiredImageCapability, req.RequestedModel) {
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
@@ -1769,7 +1782,13 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if req.RequirePrivacySet && !account.IsPrivacySet() {
 		return false, "privacy_not_set"
 	}
-	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) {
+	if accountBlockedByWebImageCooldown(account, req) {
+		return false, "web_image_cooldown"
+	}
+	if s != nil && s.service != nil && s.service.isWebImageInflightFullForRequest(ctx, account, req.RequiredImageCapability, req.RequestedModel) {
+		return false, "web_image_inflight_full"
+	}
+	if s != nil && s.service != nil && s.service.isOpenAIAccountRuntimeBlockedForRequest(account, req.RequiredImageCapability, req.RequestedModel) {
 		return false, "runtime_blocked"
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(ctx, account) {
@@ -1779,15 +1798,17 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	// TopK candidate pool can be filled with paused accounts and the later fresh/DB
 	// rechecks won't reach healthy accounts that fell outside TopK — manifesting as
 	// "no available accounts" even though healthy ones exist.
-	if paused, decision := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
-		if decision.reason != "" {
-			return false, decision.reason
+	if s == nil || s.service == nil || !s.service.shouldBypassTextRateLimitForWebImages(account, req.RequiredImageCapability, req.RequestedModel) {
+		if paused, decision := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+			if decision.reason != "" {
+				return false, decision.reason
+			}
+			reason := "quota_auto_pause"
+			if decision.window != "" {
+				reason += "_" + decision.window
+			}
+			return false, reason
 		}
-		reason := "quota_auto_pause"
-		if decision.window != "" {
-			reason += "_" + decision.window
-		}
-		return false, reason
 	}
 	// 母账号健康联动：影子账号的凭据来自母账号，母账号不可调度时影子也不应被选中。
 	// Parent-health gate: shadow borrows the parent's credentials; an unschedulable
@@ -2290,7 +2311,8 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 				if selection == nil || selection.Account == nil {
 					return selection, decision, nil
 				}
-				if accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) {
+				if accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) &&
+					!s.isWebImageInflightFullForRequest(ctx, selection.Account, requiredImageCapability, requestedModel) {
 					return selection, decision, nil
 				}
 				if selection.ReleaseFunc != nil {
@@ -2316,7 +2338,8 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 				return selection, decision, nil
 			}
 			if s.isOpenAIAccountTransportCompatible(selection.Account, requiredTransport) &&
-				accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) {
+				accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) &&
+				!s.isWebImageInflightFullForRequest(ctx, selection.Account, requiredImageCapability, requestedModel) {
 				return selection, decision, nil
 			}
 			if selection.ReleaseFunc != nil {
@@ -2999,4 +3022,27 @@ func calcLoadSkewByMoments(sum float64, sumSquares float64, count int) float64 {
 		variance = 0
 	}
 	return math.Sqrt(variance)
+}
+
+func mergeAccountsByID(base []Account, extra []Account) []Account {
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[int64]struct{}, len(base)+len(extra))
+	out := make([]Account, 0, len(base)+len(extra))
+	for i := range base {
+		if _, ok := seen[base[i].ID]; ok {
+			continue
+		}
+		seen[base[i].ID] = struct{}{}
+		out = append(out, base[i])
+	}
+	for i := range extra {
+		if _, ok := seen[extra[i].ID]; ok {
+			continue
+		}
+		seen[extra[i].ID] = struct{}{}
+		out = append(out, extra[i])
+	}
+	return out
 }

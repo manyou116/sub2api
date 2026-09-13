@@ -51,6 +51,10 @@ type Account struct {
 	RateLimitResetAt *time.Time
 	OverloadUntil    *time.Time
 
+	// Web image path cooldown (Postgres). Independent of text RateLimitResetAt.
+	WebImageRateLimitedAt    *time.Time
+	WebImageRateLimitResetAt *time.Time
+
 	TempUnschedulableUntil  *time.Time
 	TempUnschedulableReason string
 

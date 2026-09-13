@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -176,4 +177,58 @@ func TestGetAllGroupCapacityBatchKeepsEmptyGroupRows(t *testing.T) {
 		{GroupID: 10},
 		{GroupID: 20, ConcurrencyMax: 4},
 	}, results)
+}
+
+func TestGetAllGroupCapacityCountsWebImageForTextRateLimitedAccounts(t *testing.T) {
+	textRL := time.Now().Add(2 * time.Hour)
+	webRL := time.Now().Add(3 * time.Hour)
+	accountRepo := &groupCapacityAccountRepoStub{
+		rows: []GroupAccountCapacityRow{
+			{
+				GroupID:          1,
+				AccountID:        10,
+				Concurrency:      5,
+				Platform:         PlatformOpenAI,
+				Type:             AccountTypeOAuth,
+				RateLimitResetAt: &textRL, // text limited
+				Extra: map[string]any{
+					"openai_web_images": map[string]any{"enabled": true, "max_inflight": 3},
+				},
+			},
+			{
+				GroupID:                  1,
+				AccountID:                11,
+				Concurrency:              4,
+				Platform:                 PlatformOpenAI,
+				Type:                     AccountTypeOAuth,
+				WebImageRateLimitResetAt: &webRL, // web limited
+				Extra: map[string]any{
+					"openai_web_images": map[string]any{"enabled": true, "max_inflight": 2},
+				},
+			},
+			{
+				GroupID:     1,
+				AccountID:   12,
+				Concurrency: 2,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Extra: map[string]any{
+					"openai_web_images": map[string]any{"enabled": true, "max_inflight": 1},
+				},
+			},
+		},
+	}
+	groupRepo := &groupCapacityGroupRepoStub{groupIDs: []int64{1}}
+	svc := NewGroupCapacityService(accountRepo, groupRepo, nil, nil, nil)
+	svc.SetWebImages(NewOpenAIWebImagesService(&config.Config{
+		Gateway: config.GatewayConfig{OpenAIWebImages: config.OpenAIWebImagesConfig{InflightBackend: "memory"}},
+	}, nil, nil))
+
+	results, err := svc.GetAllGroupCapacity(context.Background())
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	// Text max: account 11 (4) + 12 (2) = 6; account 10 text-limited excluded.
+	require.Equal(t, 6, results[0].ConcurrencyMax)
+	// Image max: account 10 (3) + 12 (1) = 4; account 11 web-limited excluded.
+	require.Equal(t, 4, results[0].ImageConcurrencyMax)
 }
