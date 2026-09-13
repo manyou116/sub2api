@@ -31,6 +31,7 @@ const (
 	// PlatformOpenCodeGo 是 OpenCode 平台（账号类型 Zen 按量 / Go 订阅）。
 	// 值保持 opencode_go 以兼容已落库的分组、配额与 Composite 路由 CHECK。
 	PlatformOpenCodeGo = "opencode_go"
+	PlatformKiro       = "kiro"
 	PlatformComposite  = "composite"
 )
 
@@ -51,6 +52,16 @@ const (
 	APIProtocolAnthropic       = "anthropic"        // 原生 Anthropic /v1/messages（适配 Claude Code）
 	APIProtocolResponses       = "responses"        // OpenAI Responses（deepseek / kimi / minimax 原生端点，适配 Codex）
 	APIProtocolAdaptive        = "adaptive"         // 按入站协议优先选择供应商原生端点
+)
+
+const (
+	KiroAuthMethodSocial = "social"
+	KiroAuthMethodIdC    = "idc"
+)
+
+const (
+	KiroDefaultRegion    = "us-east-1"
+	KiroIDEUserAgentTmpl = "KiroIDE-0.6.18-%s"
 )
 
 // Account type constants
