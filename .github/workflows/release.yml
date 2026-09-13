@@ -14,7 +14,7 @@ on:
         description: 'Simple release: only x86_64 GHCR image, skip other artifacts'
         required: false
         type: boolean
-        default: false
+        default: true
       dry_run:
         description: 'Build and verify all selected artifacts without publishing'
         required: false
@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 env:
-  SIMPLE_RELEASE: ${{ inputs.simple_release == true || vars.SIMPLE_RELEASE == 'true' }}
+  SIMPLE_RELEASE: ${{ (github.event_name == 'workflow_dispatch' && inputs.simple_release == true) || (github.event_name != 'workflow_dispatch' && vars.SIMPLE_RELEASE != 'false') }}
   DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
 
 jobs:
@@ -230,6 +230,7 @@ jobs:
           go-version-file: backend/go.mod
           cache: false
       - name: Set up QEMU
+        if: ${{ env.SIMPLE_RELEASE != 'true' }}
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
