@@ -384,6 +384,8 @@ func (r *epTrackingRepo) SetRateLimited(_ context.Context, id int64, _ time.Time
 	r.rateLimitedID = id
 	return nil
 }
+func (r *epTrackingRepo) SetWebImageRateLimited(context.Context, int64, time.Time) error { return nil }
+func (r *epTrackingRepo) ClearWebImageRateLimit(context.Context, int64) error            { return nil }
 
 func (r *epTrackingRepo) SetError(_ context.Context, id int64, _ string) error {
 	r.setErrCalls++

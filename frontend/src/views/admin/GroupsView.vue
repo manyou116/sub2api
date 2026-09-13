@@ -324,6 +324,8 @@
               v-if="capacityMap.get(row.id)"
               :concurrency-used="capacityMap.get(row.id)!.concurrencyUsed"
               :concurrency-max="capacityMap.get(row.id)!.concurrencyMax"
+              :image-concurrency-used="capacityMap.get(row.id)!.imageConcurrencyUsed"
+              :image-concurrency-max="capacityMap.get(row.id)!.imageConcurrencyMax"
               :sessions-used="capacityMap.get(row.id)!.sessionsUsed"
               :sessions-max="capacityMap.get(row.id)!.sessionsMax"
               :rpm-used="capacityMap.get(row.id)!.rpmUsed"
@@ -4283,7 +4285,7 @@ import type {
   SubscriptionType,
 } from "@/types";
 import {
-  CONCRETE_PLATFORM_OPTIONS,
+  COMPOSITE_ROUTE_PLATFORM_OPTIONS,
   GROUP_PLATFORM_OPTIONS,
 } from "@/constants/platforms";
 import type { Column } from "@/components/common/types";
@@ -4614,7 +4616,7 @@ const platformFilterOptions = computed(() => [
 ]);
 
 const compositeRoutePlatformOptions = computed(() => [
-  ...CONCRETE_PLATFORM_OPTIONS,
+  ...COMPOSITE_ROUTE_PLATFORM_OPTIONS,
 ]);
 
 const compositeRouteEndpointOptions = computed(() => [
@@ -4785,6 +4787,8 @@ const capacityMap = ref<
     {
       concurrencyUsed: number;
       concurrencyMax: number;
+      imageConcurrencyUsed: number;
+      imageConcurrencyMax: number;
       sessionsUsed: number;
       sessionsMax: number;
       rpmUsed: number;
@@ -5696,6 +5700,8 @@ const loadCapacitySummary = async () => {
       {
         concurrencyUsed: number;
         concurrencyMax: number;
+        imageConcurrencyUsed: number;
+        imageConcurrencyMax: number;
         sessionsUsed: number;
         sessionsMax: number;
         rpmUsed: number;
@@ -5706,6 +5712,8 @@ const loadCapacitySummary = async () => {
       map.set(item.group_id, {
         concurrencyUsed: item.concurrency_used,
         concurrencyMax: item.concurrency_max,
+        imageConcurrencyUsed: item.image_concurrency_used ?? 0,
+        imageConcurrencyMax: item.image_concurrency_max ?? 0,
         sessionsUsed: item.sessions_used,
         sessionsMax: item.sessions_max,
         rpmUsed: item.rpm_used,

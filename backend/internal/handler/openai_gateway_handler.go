@@ -47,6 +47,7 @@ type OpenAIGatewayHandler struct {
 	imageLimiter               *imageConcurrencyLimiter
 	maxAccountSwitches         int
 	cfg                        *config.Config
+	kiroTokenProvider          *service.KiroTokenProvider
 }
 
 type openAIWSTurnChannelMappingSnapshot struct {
@@ -372,6 +373,14 @@ func NewOpenAIGatewayHandler(
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
 	}
+}
+
+// SetKiroTokenProvider injects the Kiro access-token provider (P5).
+func (h *OpenAIGatewayHandler) SetKiroTokenProvider(p *service.KiroTokenProvider) {
+	if h == nil {
+		return
+	}
+	h.kiroTokenProvider = p
 }
 
 // Responses handles OpenAI Responses API endpoint
@@ -3309,8 +3318,30 @@ func (h *OpenAIGatewayHandler) submitMandatoryUsageRecordTask(parent context.Con
 }
 
 func (h *OpenAIGatewayHandler) acquireImageGenerationSlot(c *gin.Context, streamStarted bool) (func(), bool) {
+	// Always record API-key image stats while the request is in-flight (even if the
+	// global image concurrency limiter is disabled).
+	var imageTrackRelease func()
+	if c != nil && h != nil && h.concurrencyHelper != nil && h.concurrencyHelper.concurrencyService != nil {
+		if apiKey, ok := middleware2.GetAPIKeyFromContext(c); ok && apiKey != nil && apiKey.ID > 0 {
+			imageTrackRelease = h.concurrencyHelper.concurrencyService.TrackAPIKeyImageSlot(c.Request.Context(), apiKey.ID)
+		}
+	}
+	combine := func(release func()) func() {
+		if release == nil && imageTrackRelease == nil {
+			return nil
+		}
+		return func() {
+			if release != nil {
+				release()
+			}
+			if imageTrackRelease != nil {
+				imageTrackRelease()
+			}
+		}
+	}
+
 	if h == nil || h.cfg == nil || h.imageLimiter == nil {
-		return nil, true
+		return combine(nil), true
 	}
 	imageConcurrency := h.cfg.Gateway.ImageConcurrency
 	wait := strings.TrimSpace(imageConcurrency.OverflowMode) == config.ImageConcurrencyOverflowModeWait
@@ -3323,7 +3354,10 @@ func (h *OpenAIGatewayHandler) acquireImageGenerationSlot(c *gin.Context, stream
 		imageConcurrency.MaxWaitingRequests,
 	)
 	if acquired {
-		return release, true
+		return combine(release), true
+	}
+	if imageTrackRelease != nil {
+		imageTrackRelease()
 	}
 	h.handleStreamingAwareErrorWithCode(c, http.StatusTooManyRequests, "rate_limit_error", gatewayConcurrencyLimitCode, "Image generation concurrency limit exceeded, please retry later", streamStarted, false)
 	return nil, false
