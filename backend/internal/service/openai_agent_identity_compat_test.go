@@ -104,6 +104,58 @@ func TestAccountTestServiceOpenAICompactAgentIdentityRecoversInvalidTaskOnce(t *
 	require.Equal(t, []int64{account.ID}, invalidator.accountIDs)
 }
 
+func TestAccountTestServiceOpenAIResponsesAgentIdentityRetryPreservesPrompt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	key, privateKey := newTestAgentIdentityKey(t)
+	account := &Account{
+		ID: 22, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{
+			"auth_mode": OpenAIAuthModeAgentIdentity, "agent_runtime_id": key.runtimeID,
+			"agent_private_key": privateKey, "task_id": "task-responses-old",
+			"chatgpt_account_id": "account-agent-responses-recovery",
+		},
+	}
+	repo := &accountTestAgentIdentityRepo{account: account}
+	registerCalls := 0
+	registerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		registerCalls++
+		_, _ = io.WriteString(w, `{"task_id":"task-responses-new"}`)
+	}))
+	defer registerServer.Close()
+	oldBase := openAIAgentIdentityAuthAPIBaseURL
+	openAIAgentIdentityAuthAPIBaseURL = registerServer.URL
+	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{StatusCode: http.StatusUnauthorized, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"invalid_task_id"}}`))},
+		{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"PROBE_BETA_924\"}\n\ndata: {\"type\":\"response.completed\"}\n\n"))},
+	}}
+	invalidator := &agentIdentityWSInvalidationRecorder{}
+	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream, agentIdentityWS: invalidator}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/22/test", nil)
+	prompt := " 只输出\"PROBE_BETA_924\"\n不要添加其他内容。 "
+
+	require.NoError(t, svc.TestAccountConnection(c, account.ID, "gpt-6-astra", prompt, AccountTestModeDefault))
+	require.Equal(t, 1, registerCalls)
+	require.Len(t, upstream.requests, 2)
+	require.Len(t, upstream.bodies, 2)
+	for i, req := range upstream.requests {
+		require.Equal(t, "AgentAssertion", strings.SplitN(req.Header.Get("Authorization"), " ", 2)[0])
+		require.Equal(t, prompt, gjson.GetBytes(upstream.bodies[i], "input.0.content.0.text").String())
+		require.Equal(t, "gpt-6-astra", gjson.GetBytes(upstream.bodies[i], "model").String())
+		require.True(t, gjson.GetBytes(upstream.bodies[i], "stream").Bool())
+		require.Equal(t, "false", gjson.GetBytes(upstream.bodies[i], "store").Raw)
+	}
+	require.JSONEq(t, string(upstream.bodies[0]), string(upstream.bodies[1]))
+	require.Equal(t, "task-responses-new", account.GetCredential("task_id"))
+	require.Zero(t, repo.setErrorCalls)
+	require.Equal(t, []int64{account.ID}, invalidator.accountIDs)
+	require.Equal(t, 1, strings.Count(rec.Body.String(), `"type":"test_start"`))
+	require.Contains(t, rec.Body.String(), `"type":"content","text":"PROBE_BETA_924"`)
+	require.Contains(t, rec.Body.String(), `"type":"test_complete","success":true`)
+}
+
 func TestOpenAIAgentIdentityPassthroughKeepsSessionAndPromptCacheHeaders(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
