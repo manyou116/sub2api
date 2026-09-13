@@ -203,7 +203,7 @@ func (h *OpenAIGatewayHandler) kiroGateway(c *gin.Context, protocol kiroForwardP
 				reqLog.Warn("kiro_gateway.forward_failed_after_write", zap.Error(err))
 				hasPartial := result != nil && (result.AssembledContent != "" || result.OutputTokens > 0 || result.FirstTokenMs != nil)
 				if !hasPartial {
-					h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, scheduleModel, false, nil)
+					h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, false, nil)
 					return
 				}
 				// fall through: record partial schedule/usage from result
@@ -231,7 +231,7 @@ func (h *OpenAIGatewayHandler) kiroGateway(c *gin.Context, protocol kiroForwardP
 					if decision.Class != service.KiroErrModelCapacity &&
 						decision.Class != service.KiroErrConversationTooLong &&
 						decision.Class != service.KiroErrInvalidRequest {
-						h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, scheduleModel, false, nil)
+						h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, false, nil)
 					}
 
 					if !decision.ShouldFailover || decision.PassthroughBody || decision.ClientFlood {
@@ -251,7 +251,7 @@ func (h *OpenAIGatewayHandler) kiroGateway(c *gin.Context, protocol kiroForwardP
 					continue
 				}
 
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, scheduleModel, false, nil)
+				h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, false, nil)
 				reqLog.Error("kiro_gateway.forward_failed", zap.Error(err))
 				h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", "Upstream request failed", streamStarted)
 				return
@@ -263,9 +263,9 @@ func (h *OpenAIGatewayHandler) kiroGateway(c *gin.Context, protocol kiroForwardP
 			reportModel = result.InternalModel
 		}
 		if result != nil && result.FirstTokenMs != nil {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, reportModel, true, result.FirstTokenMs)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account, reportModel, true, result.FirstTokenMs)
 		} else {
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, reportModel, true, nil)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account, reportModel, true, nil)
 		}
 
 		// Clear model-capacity backoff after a successful upstream response.
