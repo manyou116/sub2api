@@ -2,6 +2,7 @@ package webdriver
 
 import (
 	"crypto/rand"
+	"crypto/sha3"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -9,8 +10,6 @@ import (
 	mrand "math/rand"
 	"strings"
 	"time"
-
-	"golang.org/x/crypto/sha3"
 )
 
 func buildRequirementsToken(userAgent string) string {

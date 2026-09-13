@@ -54,6 +54,7 @@ func (s *KiroChatService) Responses(
 		return nil, fmt.Errorf("kiro responses: resolve tools: %w", err)
 	}
 	customTools := apicompat.CustomToolNames(effectiveTools)
+	functionTools := apicompat.FunctionToolNames(effectiveTools)
 	toolSearch := apicompat.HasToolSearchTool(effectiveTools)
 	namespaceTools := apicompat.NamespaceToolNames(effectiveTools)
 
@@ -110,11 +111,11 @@ func (s *KiroChatService) Responses(
 	applyKiroEstimatedCacheUsage(result, &openaiReq, conversationID)
 
 	if clientStream {
-		if err := s.streamKiroAsResponses(c, resp.Body, originalModel, startedAt, result, customTools, toolSearch, namespaceTools); err != nil {
+		if err := s.streamKiroAsResponses(c, resp.Body, originalModel, startedAt, result, customTools, functionTools, toolSearch, namespaceTools); err != nil {
 			return result, err
 		}
 	} else {
-		if err := s.aggregateKiroAsResponses(c, resp.Body, originalModel, startedAt, result, customTools, toolSearch, namespaceTools); err != nil {
+		if err := s.aggregateKiroAsResponses(c, resp.Body, originalModel, startedAt, result, customTools, functionTools, toolSearch, namespaceTools); err != nil {
 			return result, err
 		}
 	}
@@ -155,6 +156,7 @@ func (s *KiroChatService) streamKiroAsResponses(
 	startedAt time.Time,
 	result *KiroChatResult,
 	customTools map[string]bool,
+	functionTools map[string]bool,
 	toolSearch bool,
 	namespaceTools map[string]apicompat.NamespacedToolName,
 ) error {
@@ -166,6 +168,7 @@ func (s *KiroChatService) streamKiroAsResponses(
 
 	state := apicompat.NewChatCompletionsToResponsesStreamState(model)
 	state.CustomTools = customTools
+	state.FunctionTools = functionTools
 	state.ToolSearchDeclared = toolSearch
 	state.NamespaceTools = namespaceTools
 
@@ -243,6 +246,7 @@ func (s *KiroChatService) aggregateKiroAsResponses(
 	startedAt time.Time,
 	result *KiroChatResult,
 	customTools map[string]bool,
+	functionTools map[string]bool,
 	toolSearch bool,
 	namespaceTools map[string]apicompat.NamespacedToolName,
 ) error {
@@ -251,7 +255,7 @@ func (s *KiroChatService) aggregateKiroAsResponses(
 		writeKiroResponsesError(c, http.StatusBadGateway, "upstream_error", err.Error())
 		return err
 	}
-	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, model, customTools, toolSearch, namespaceTools)
+	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, model, customTools, functionTools, toolSearch, namespaceTools)
 	c.JSON(http.StatusOK, responsesResp)
 	return nil
 }
