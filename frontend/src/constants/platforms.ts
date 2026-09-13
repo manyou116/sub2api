@@ -19,8 +19,22 @@ export const CONCRETE_PLATFORM_OPTIONS = [
   { value: 'kimi', label: 'Kimi' },
   { value: 'zhipu', label: 'Zhipu GLM' },
   { value: 'deepseek', label: 'DeepSeek' },
-  { value: 'minimax', label: 'MiniMax' }
+  { value: 'minimax', label: 'MiniMax' },
+  { value: 'kiro', label: 'Kiro' }
 ] as const satisfies readonly PlatformOption<AccountPlatform>[]
+
+/** Concrete providers supported by Composite model routes. */
+export const COMPOSITE_ROUTE_PLATFORM_OPTIONS = [
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'gemini', label: 'Gemini' },
+  { value: 'antigravity', label: 'Antigravity' },
+  { value: 'grok', label: 'Grok' },
+  { value: 'kimi', label: 'Kimi' },
+  { value: 'zhipu', label: 'Zhipu GLM' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'minimax', label: 'MiniMax' }
+] as const satisfies readonly PlatformOption<Exclude<GroupPlatform, 'composite' | 'kiro'>>[]
 
 /** Platforms that can own a group. */
 export const GROUP_PLATFORM_OPTIONS = [

@@ -28,6 +28,7 @@ const (
 	PlatformZhipu     = "zhipu"    // 智谱 GLM (bigmodel)
 	PlatformDeepseek  = "deepseek" // DeepSeek
 	PlatformMiniMax   = "minimax"  // MiniMax (M 系列)
+	PlatformKiro      = "kiro"
 	PlatformComposite = "composite"
 )
 
@@ -46,6 +47,16 @@ const (
 	APIProtocolAnthropic       = "anthropic"        // 原生 Anthropic /v1/messages（适配 Claude Code）
 	APIProtocolResponses       = "responses"        // OpenAI Responses（deepseek / kimi / minimax 原生端点，适配 Codex）
 	APIProtocolAdaptive        = "adaptive"         // 按入站协议优先选择供应商原生端点
+)
+
+const (
+	KiroAuthMethodSocial = "social"
+	KiroAuthMethodIdC    = "idc"
+)
+
+const (
+	KiroDefaultRegion    = "us-east-1"
+	KiroIDEUserAgentTmpl = "KiroIDE-0.6.18-%s"
 )
 
 // Account type constants

@@ -13,7 +13,7 @@ func TestMiniMaxPlatformMigration(t *testing.T) {
 
 	sql := strings.Join(strings.Fields(string(content)), " ")
 	require.Contains(t, sql,
-		"CHECK (platform IN ('anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax'))")
+		"CHECK (platform IN ('anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'kiro'))")
 	require.Contains(t, sql,
 		"CHECK (target_platform IN ('anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax'))")
 	require.Contains(t, sql,

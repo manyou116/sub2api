@@ -908,6 +908,7 @@ export default {
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
         minimax: 'MiniMax',
+        kiro: 'Kiro',
         composite: 'Composite',
       },
       saving: '保存中...',
