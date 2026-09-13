@@ -68,6 +68,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AccountPlatform, AccountType } from '@/types'
+import { platformLabel as sharedPlatformLabel } from '@/utils/platformColors'
 import GrokFreeIcon from './GrokFreeIcon.vue'
 import PlatformIcon from './PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -85,6 +86,7 @@ interface Props {
 
 const props = defineProps<Props>()
 
+<<<<<<< HEAD
 const platformLabel = computed(() => {
   if (props.platform === 'anthropic') return 'Anthropic'
   if (props.platform === 'openai') return 'OpenAI'
@@ -97,6 +99,9 @@ const platformLabel = computed(() => {
   if (props.platform === 'gemini') return 'Gemini'
   return props.platform || 'Unknown'
 })
+=======
+const platformLabel = computed(() => sharedPlatformLabel(props.platform))
+>>>>>>> v0.2.4
 
 const normalizedAuthMode = computed(() =>
   (props.authMode || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
@@ -202,10 +207,16 @@ const platformClass = computed(() => {
   if (props.platform === 'deepseek') {
     return 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
   }
+<<<<<<< HEAD
   if (props.platform === 'kiro') {
     return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300'
   }
   // gemini + unknown fallback
+=======
+  if (props.platform === 'minimax') {
+    return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
+  }
+>>>>>>> v0.2.4
   return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
 })
 
@@ -231,8 +242,13 @@ const typeClass = computed(() => {
   if (props.platform === 'deepseek') {
     return 'bg-teal-100 text-teal-600 dark:bg-teal-900/30 dark:text-teal-400'
   }
+<<<<<<< HEAD
   if (props.platform === 'kiro') {
     return 'bg-cyan-100 text-cyan-600 dark:bg-cyan-900/30 dark:text-cyan-300'
+=======
+  if (props.platform === 'minimax') {
+    return 'bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400'
+>>>>>>> v0.2.4
   }
   return 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
 })

@@ -19,7 +19,11 @@ export const CONCRETE_PLATFORM_OPTIONS = [
   { value: 'kimi', label: 'Kimi' },
   { value: 'zhipu', label: 'Zhipu GLM' },
   { value: 'deepseek', label: 'DeepSeek' },
+<<<<<<< HEAD
   { value: 'kiro', label: 'Kiro' }
+=======
+  { value: 'minimax', label: 'MiniMax' }
+>>>>>>> v0.2.4
 ] as const satisfies readonly PlatformOption<AccountPlatform>[]
 
 /** Concrete providers supported by Composite model routes. */

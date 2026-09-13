@@ -14,7 +14,11 @@ const concretePlatforms = [
   'kimi',
   'zhipu',
   'deepseek',
+<<<<<<< HEAD
   'kiro'
+=======
+  'minimax'
+>>>>>>> v0.2.4
 ]
 
 const compositeRoutePlatforms = concretePlatforms.filter((platform) => platform !== 'kiro')
