@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { CONCRETE_PLATFORM_OPTIONS, GROUP_PLATFORM_OPTIONS } from '@/constants/platforms'
+import {
+  COMPOSITE_ROUTE_PLATFORM_OPTIONS,
+  CONCRETE_PLATFORM_OPTIONS,
+  GROUP_PLATFORM_OPTIONS
+} from '@/constants/platforms'
 
 const concretePlatforms = [
   'anthropic',
@@ -11,8 +15,11 @@ const concretePlatforms = [
   'zhipu',
   'deepseek',
   'minimax',
-  'opencode_go'
+  'opencode_go',
+  'kiro'
 ]
+
+const compositeRoutePlatforms = concretePlatforms.filter((platform) => platform !== 'kiro')
 
 describe('platform option catalogs', () => {
   it('exposes every concrete account platform', () => {
@@ -24,5 +31,9 @@ describe('platform option catalogs', () => {
       ...concretePlatforms,
       'composite'
     ])
+  })
+
+  it('keeps composite route targets aligned to backend-supported platforms', () => {
+    expect(COMPOSITE_ROUTE_PLATFORM_OPTIONS.map((option) => option.value)).toEqual(compositeRoutePlatforms)
   })
 })

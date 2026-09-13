@@ -151,11 +151,14 @@ need_file backend/migrations/186_user_platform_quotas_add_kiro.sql
 need_rg "MiniMax migration preserves Kiro quotas" \
   "'kimi', 'zhipu', 'deepseek', 'minimax', 'kiro'" \
   backend/migrations/237_add_minimax_platform.sql
+need_rg "OpenCode migration preserves Kiro quotas" \
+  "'opencode_go', 'kiro'" \
+  backend/migrations/238_opencode_go_platform.sql
 need_rg "PlatformKiro constant" \
   "PlatformKiro" \
   backend/internal/domain/constants.go
 need_rg "group platform accepts kiro" \
-  "oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek minimax kiro composite" \
+  "oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek minimax opencode_go kiro composite" \
   backend/internal/handler/admin/group_handler.go
 need_rg "gateway kiro chat route" \
   "KiroChatCompletions" \

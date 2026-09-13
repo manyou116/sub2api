@@ -62,6 +62,9 @@ func RegisterGatewayRoutes(
 			h.OpenAIGateway.CountTokens(c)
 		case service.PlatformGrok:
 			h.OpenAIGateway.GrokCountTokens(c)
+		case service.PlatformKiro:
+			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+			c.JSON(http.StatusNotFound, gin.H{"type": "error", "error": gin.H{"type": "not_found_error", "message": "Token counting is not supported for Kiro groups"}})
 		default:
 			h.Gateway.CountTokens(c)
 		}
@@ -78,6 +81,9 @@ func RegisterGatewayRoutes(
 	}
 	isOpenAIOnlyEndpointGatewayPlatform := func(c *gin.Context) bool {
 		return getGroupPlatform(c) == service.PlatformOpenAI
+	}
+	isKiroGatewayPlatform := func(c *gin.Context) bool {
+		return getGroupPlatform(c) == service.PlatformKiro
 	}
 	imagesHandler := func(c *gin.Context) {
 		switch getGroupPlatform(c) {
@@ -196,6 +202,11 @@ func RegisterGatewayRoutes(
 	{
 		// /v1/messages: auto-route based on group platform
 		gateway.POST("/messages", func(c *gin.Context) {
+			if isKiroGatewayPlatform(c) {
+				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+				c.JSON(http.StatusNotFound, gin.H{"type": "error", "error": gin.H{"type": "not_found_error", "message": "Messages API is not supported for Kiro groups; use /v1/chat/completions"}})
+				return
+			}
 			if isOpenAIResponsesCompatibleGatewayPlatform(c) {
 				h.OpenAIGateway.Messages(c)
 				return
@@ -216,25 +227,40 @@ func RegisterGatewayRoutes(
 		gateway.GET("/live/:call_id", h.OpenAIGateway.LiveSideband)
 		// OpenAI Responses API: auto-route based on group platform
 		gateway.POST("/responses", func(c *gin.Context) {
+			if isKiroGatewayPlatform(c) {
+				h.OpenAIGateway.KiroResponses(c)
+				return
+			}
 			if isOpenAIResponsesCompatibleGatewayPlatform(c) {
 				h.OpenAIGateway.Responses(c)
 				return
 			}
 			h.Gateway.Responses(c)
 		})
-		gateway.POST("/responses/*subpath", guardResponsesSubpath(func(c *gin.Context) {
-			if isOpenAIResponsesCompatibleGatewayPlatform(c) {
-				h.OpenAIGateway.Responses(c)
+		gateway.POST("/responses/*subpath", func(c *gin.Context) {
+			if isKiroGatewayPlatform(c) {
+				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+				c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found_error", "message": "Responses subpaths are not supported for Kiro groups; use POST /v1/responses"}})
 				return
 			}
-			h.Gateway.Responses(c)
-		}))
+			guardResponsesSubpath(func(c *gin.Context) {
+				if isOpenAIResponsesCompatibleGatewayPlatform(c) {
+					h.OpenAIGateway.Responses(c)
+					return
+				}
+				h.Gateway.Responses(c)
+			})(c)
+		})
 		gateway.POST("/alpha/search", textBodyLimit, h.OpenAIGateway.AlphaSearch)
 		gateway.GET("/responses", func(c *gin.Context) {
 			h.OpenAIGateway.ResponsesWebSocket(c)
 		})
 		// OpenAI Chat Completions API: auto-route based on group platform
 		gateway.POST("/chat/completions", func(c *gin.Context) {
+			if isKiroGatewayPlatform(c) {
+				h.OpenAIGateway.KiroChatCompletions(c)
+				return
+			}
 			if isOpenAIResponsesCompatibleGatewayPlatform(c) {
 				h.OpenAIGateway.ChatCompletions(c)
 				return
@@ -357,6 +383,10 @@ func RegisterGatewayRoutes(
 
 	// OpenAI Responses API（不带v1前缀的别名）— auto-route based on group platform
 	responsesHandler := func(c *gin.Context) {
+		if isKiroGatewayPlatform(c) {
+			h.OpenAIGateway.KiroResponses(c)
+			return
+		}
 		if isOpenAIResponsesCompatibleGatewayPlatform(c) {
 			h.OpenAIGateway.Responses(c)
 			return
@@ -373,8 +403,16 @@ func RegisterGatewayRoutes(
 		rootRoute(http.MethodGet, prefix+"/contents/generations/tasks/:task_id", bodyLimit, h.OpenAIGateway.SeedanceTasks)
 		rootRoute(http.MethodDelete, prefix+"/contents/generations/tasks/:task_id", bodyLimit, h.OpenAIGateway.SeedanceTasks)
 	}
+	responsesSubpathHandler := func(c *gin.Context) {
+		if isKiroGatewayPlatform(c) {
+			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+			c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found_error", "message": "Responses subpaths are not supported for Kiro groups; use POST /v1/responses"}})
+			return
+		}
+		guardResponsesSubpath(responsesHandler)(c)
+	}
 	rootRoute(http.MethodPost, "/responses", bodyLimit, responsesHandler)
-	rootRoute(http.MethodPost, "/responses/*subpath", bodyLimit, guardResponsesSubpath(responsesHandler))
+	rootRoute(http.MethodPost, "/responses/*subpath", bodyLimit, responsesSubpathHandler)
 	rootRoute(http.MethodPost, "/alpha/search", textBodyLimit, h.OpenAIGateway.AlphaSearch)
 	rootRoute(http.MethodGet, "/responses", bodyLimit, func(c *gin.Context) {
 		h.OpenAIGateway.ResponsesWebSocket(c)
@@ -388,7 +426,7 @@ func RegisterGatewayRoutes(
 		codexDirect.POST("/realtime/calls", h.OpenAIGateway.Live)
 		codexDirect.GET("/:call_id", h.OpenAIGateway.LiveSideband)
 		codexDirect.POST("/responses", responsesHandler)
-		codexDirect.POST("/responses/*subpath", guardResponsesSubpath(responsesHandler))
+		codexDirect.POST("/responses/*subpath", responsesSubpathHandler)
 		codexDirect.POST("/alpha/search", textBodyLimit, h.OpenAIGateway.AlphaSearch)
 		codexDirect.GET("/responses", func(c *gin.Context) {
 			h.OpenAIGateway.ResponsesWebSocket(c)
@@ -397,6 +435,10 @@ func RegisterGatewayRoutes(
 	}
 	// OpenAI Chat Completions API（不带v1前缀的别名）— auto-route based on group platform
 	rootRoute(http.MethodPost, "/chat/completions", bodyLimit, func(c *gin.Context) {
+		if isKiroGatewayPlatform(c) {
+			h.OpenAIGateway.KiroChatCompletions(c)
+			return
+		}
 		if isOpenAIResponsesCompatibleGatewayPlatform(c) {
 			h.OpenAIGateway.ChatCompletions(c)
 			return
