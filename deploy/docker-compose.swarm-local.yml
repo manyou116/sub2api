@@ -1,0 +1,109 @@
+# =============================================================================
+# Sub2API Swarm local verification (single-node Docker Desktop/Linux)
+# =============================================================================
+# Reuses host PostgreSQL / Redis and a locally built sub2api:latest image.
+# Usage:
+#   bash deploy/build_image.sh
+#   docker swarm init
+#   cd deploy
+#   docker stack deploy -c docker-compose.swarm-local.yml sub2api
+#   docker service update --force --image sub2api:latest sub2api_sub2api
+# =============================================================================
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - target: 8080
+        published: ${SERVER_PORT:-8080}
+        protocol: tcp
+        mode: ingress
+    configs:
+      - source: caddyfile_swarm_local
+        target: /etc/caddy/Caddyfile
+    networks:
+      - sub2api-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          memory: 128M
+
+  sub2api:
+    image: ${SUB2API_IMAGE:-sub2api:latest}
+    stop_grace_period: 320s
+    environment:
+      - AUTO_SETUP=true
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8080
+      - SERVER_MODE=debug
+      - ENABLE_SERVER_TIMING=${ENABLE_SERVER_TIMING:-false}
+      - RUN_MODE=${RUN_MODE:-standard}
+      - SERVER_SHUTDOWN_TIMEOUT=${SERVER_SHUTDOWN_TIMEOUT:-300}
+      - SERVER_SHUTDOWN_DRAIN_DELAY=${SERVER_SHUTDOWN_DRAIN_DELAY:-5}
+
+      - DATABASE_HOST=${DATABASE_HOST:-host.docker.internal}
+      - DATABASE_PORT=${DATABASE_PORT:-5432}
+      - DATABASE_USER=${DATABASE_USER:-postgres}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-123456}
+      - DATABASE_DBNAME=${DATABASE_DBNAME:-sub2api}
+      - DATABASE_SSLMODE=${DATABASE_SSLMODE:-disable}
+
+      - REDIS_HOST=${REDIS_HOST:-host.docker.internal}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@sub2api.local}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-Admin@123456}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required for swarm local test}
+      - TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY:?TOTP_ENCRYPTION_KEY is required for swarm local test}
+      - SETUP_MIGRATION_TIMEOUT_SECONDS=${SETUP_MIGRATION_TIMEOUT_SECONDS:-0}
+      - TZ=${TZ:-Asia/Shanghai}
+
+      - GATEWAY_IMAGE_STREAM_DATA_INTERVAL_TIMEOUT=${GATEWAY_IMAGE_STREAM_DATA_INTERVAL_TIMEOUT:-900}
+      - GATEWAY_IMAGE_STREAM_KEEPALIVE_INTERVAL=${GATEWAY_IMAGE_STREAM_KEEPALIVE_INTERVAL:-10}
+    volumes:
+      - ../backend/data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - sub2api-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      endpoint_mode: dnsrr
+      replicas: ${SUB2API_REPLICAS:-1}
+      update_config:
+        parallelism: 1
+        order: start-first
+        delay: 5s
+        monitor: 10s
+        failure_action: rollback
+      rollback_config:
+        parallelism: 1
+        order: start-first
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+        window: 60s
+      resources:
+        limits:
+          memory: 2G
+
+networks:
+  sub2api-net:
+    driver: overlay
+    attachable: true
+
+configs:
+  caddyfile_swarm_local:
+    file: ./Caddyfile.swarm-local
