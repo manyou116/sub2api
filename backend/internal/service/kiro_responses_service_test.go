@@ -157,7 +157,7 @@ func TestStreamKiroAsResponses_EmitsTerminalEvents(t *testing.T) {
 	}, nil)
 	result := &KiroChatResult{}
 	svc := NewKiroChatService()
-	err := svc.streamKiroAsResponses(c, bytes.NewReader(frames), "claude-sonnet-4.5", time.Now(), result, nil, false, nil)
+	err := svc.streamKiroAsResponses(c, bytes.NewReader(frames), "claude-sonnet-4.5", time.Now(), result, nil, nil, false, nil)
 	require.NoError(t, err)
 	body := rec.Body.String()
 	require.Contains(t, body, "response.output_text.delta")
