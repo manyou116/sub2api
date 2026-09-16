@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -166,6 +167,49 @@ func TestLeaseRolloverSettlesOldLeaseAndRetriesWithFreshID(t *testing.T) {
 	second.Finish(128 << 10)
 	require.GreaterOrEqual(t, len(leaseIDs), 3)
 	require.NotEqual(t, leaseIDs[0], leaseIDs[len(leaseIDs)-1])
+}
+
+func TestLeaseRolloverWithPendingIOChargesOldGenerationOnce(t *testing.T) {
+	var reserveCalls atomic.Int64
+	var settles []settleRequest
+	var settleMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		if r.URL.Path == "/reserve" {
+			call := reserveCalls.Add(1)
+			if call == 2 {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"detail":{"code":"lease_rollover_required"}}`))
+				return
+			}
+			grant := 262144
+			if call == 1 {
+				grant = 69632
+			}
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"allowed":true,"managed":true,"mode":"enforce","granted_bytes":%d}`, grant)))
+			return
+		}
+		var input settleRequest
+		require.NoError(t, jsonNewDecoder(r.Body).Decode(&input))
+		settleMu.Lock()
+		settles = append(settles, input)
+		settleMu.Unlock()
+		_, _ = w.Write([]byte(`{"settled":true}`))
+	}))
+	defer server.Close()
+
+	lease, err := New(server.URL, "secret", server.Client()).OpenLease(context.Background(), "http://proxy.example:8080")
+	require.NoError(t, err)
+	old, err := lease.ReserveIO(context.Background(), 64<<10)
+	require.NoError(t, err)
+	newIO, err := lease.ReserveIO(context.Background(), 128<<10)
+	require.NoError(t, err)
+	old.Finish(1) // Late completion belongs to the settled old generation.
+	newIO.Finish(2)
+	settleMu.Lock()
+	defer settleMu.Unlock()
+	require.Len(t, settles, 1)
+	require.Equal(t, int64((64<<10)+(4<<10)), settles[0].ActualBytes)
 }
 
 func TestWrapRoundTripperDenialPreventsBaseCall(t *testing.T) {

@@ -28,7 +28,7 @@ const (
 	EnvURL   = "PROXY_BUDGET_URL"
 	EnvToken = "PROXY_BUDGET_TOKEN"
 
-	chunkBytes    int64 = 64 << 10
+	ChunkBytes    int64 = 64 << 10
 	overheadBytes int64 = 4 << 10
 )
 
@@ -261,20 +261,37 @@ type Lease struct {
 	mode        Mode
 	managed     bool
 
-	mu       sync.Mutex
-	sequence int64
-	reserved int64
-	actual   int64
-	pending  int64
-	settled  bool
+	mu         sync.Mutex
+	sequence   int64
+	reserved   int64
+	actual     int64
+	pending    int64
+	generation uint64
+	settled    bool
 }
 
-func (l *Lease) Active() bool  { return l != nil && l.managed && l.mode != ModeOff }
-func (l *Lease) Managed() bool { return l != nil && l.managed }
+func (l *Lease) Active() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.managed && l.mode != ModeOff
+}
+func (l *Lease) Managed() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.managed
+}
 func (l *Lease) Mode() Mode {
 	if l == nil {
 		return ModeOff
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	return l.mode
 }
 func (l *Lease) ID() string {
@@ -302,7 +319,7 @@ func (c *Client) OpenLease(ctx context.Context, rawProxyURL string) (*Lease, err
 		return nil, err
 	}
 	l := &Lease{client: c, fingerprint: fingerprint, id: leaseID}
-	if err := l.reserveLocked(ctx, chunkBytes+overheadBytes); err != nil {
+	if err := l.reserveLocked(ctx, ChunkBytes+overheadBytes); err != nil {
 		return nil, err
 	}
 	return l, nil
@@ -322,9 +339,10 @@ func randomUUID() (string, error) {
 // it converts known bytes to actual use; abandoning it keeps the full pending
 // amount, which prevents an interrupted write/read from becoming free traffic.
 type IOReservation struct {
-	lease *Lease
-	bytes int64
-	done  sync.Once
+	lease      *Lease
+	bytes      int64
+	generation uint64
+	done       sync.Once
 }
 
 // ReserveIO reserves a bounded I/O operation before the transport reads or
@@ -338,18 +356,13 @@ func (l *Lease) ReserveIO(ctx context.Context, bytes int64) (*IOReservation, err
 	if l.settled {
 		return nil, errors.New("proxy budget lease already settled")
 	}
-	needed := l.actual + l.pending + bytes + overheadBytes
-	for l.reserved < needed {
-		reservation := chunkBytes
-		if missing := needed - l.reserved; missing > reservation {
-			reservation = missing
-		}
-		if err := l.reserveLocked(ctx, reservation); err != nil {
+	for l.reserved < l.actual+l.pending+bytes+overheadBytes {
+		if err := l.reserveLocked(ctx, ChunkBytes); err != nil {
 			return nil, err
 		}
 	}
 	l.pending += bytes
-	return &IOReservation{lease: l, bytes: bytes}, nil
+	return &IOReservation{lease: l, bytes: bytes, generation: l.generation}, nil
 }
 
 // Finish accounts known transferred bytes and releases only the unused part of
@@ -361,6 +374,9 @@ func (r *IOReservation) Finish(actual int64) {
 	r.done.Do(func() {
 		r.lease.mu.Lock()
 		defer r.lease.mu.Unlock()
+		if r.generation != r.lease.generation {
+			return
+		}
 		if actual < 0 {
 			actual = 0
 		}
@@ -381,6 +397,9 @@ func (r *IOReservation) Unknown() {
 	r.done.Do(func() {
 		r.lease.mu.Lock()
 		defer r.lease.mu.Unlock()
+		if r.generation != r.lease.generation {
+			return
+		}
 		r.lease.pending -= r.bytes
 		r.lease.actual += r.bytes
 	})
@@ -402,19 +421,18 @@ func (l *Lease) reserveLocked(ctx context.Context, bytes int64) error {
 	}
 	response, err := l.client.reserve(ctx, reserveRequest{ProxyFingerprint: l.fingerprint, LeaseID: l.id, Sequence: l.sequence, Bytes: bytes})
 	if errors.Is(err, ErrLeaseRollover) {
-		if l.pending != 0 {
-			// An active I/O reservation belongs to the old period. Do not swap its
-			// mutable lease identity underneath a concurrent completion callback.
-			return err
-		}
-		if settleErr := l.client.settle(ctx, settleRequest{ProxyFingerprint: l.fingerprint, LeaseID: l.id, ActualBytes: l.actual + overheadBytes}); settleErr != nil {
+		// The old lease owns all outstanding I/O. Charge its unknown pending
+		// amount before switching generation so blocked readers cannot reduce
+		// the old-period settlement after a new-period write begins.
+		if settleErr := l.client.settle(ctx, settleRequest{ProxyFingerprint: l.fingerprint, LeaseID: l.id, ActualBytes: l.actual + l.pending + overheadBytes}); settleErr != nil {
 			return settleErr
 		}
 		newID, idErr := randomUUID()
 		if idErr != nil {
 			return idErr
 		}
-		l.id, l.sequence, l.reserved, l.actual = newID, 0, 0, 0
+		l.id, l.sequence, l.reserved, l.actual, l.pending = newID, 0, 0, 0, 0
+		l.generation++
 		response, err = l.client.reserve(ctx, reserveRequest{ProxyFingerprint: l.fingerprint, LeaseID: l.id, Sequence: 0, Bytes: bytes})
 	}
 	if err != nil {
@@ -485,8 +503,8 @@ func (b *budgetingBody) Read(payload []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 	requested := len(payload)
-	if requested > int(chunkBytes) {
-		requested = int(chunkBytes)
+	if requested > int(ChunkBytes) {
+		requested = int(ChunkBytes)
 	}
 	reservation, err := b.lease.ReserveIO(context.Background(), int64(requested))
 	if err != nil {
