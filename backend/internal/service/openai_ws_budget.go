@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxybudget"
 )
@@ -48,7 +49,7 @@ func (d *budgetingOpenAIWSClientDialer) Dial(ctx context.Context, wsURL string, 
 type budgetingOpenAIWSClientConn struct {
 	next  openAIWSClientConn
 	lease *proxybudget.Lease
-	ended bool
+	once  sync.Once
 }
 
 func (c *budgetingOpenAIWSClientConn) WriteJSON(ctx context.Context, value any) error {
@@ -56,36 +57,60 @@ func (c *budgetingOpenAIWSClientConn) WriteJSON(ctx context.Context, value any) 
 	if err != nil {
 		return err
 	}
-	if err := c.lease.ReserveFor(ctx, int64(len(payload))); err != nil {
+	reservation, err := c.lease.ReserveIO(ctx, int64(len(payload)))
+	if err != nil {
 		c.settle()
 		_ = c.next.Close()
 		return err
 	}
 	err = c.next.WriteJSON(ctx, value)
 	if err == nil {
-		c.lease.Observe(len(payload))
+		reservation.Finish(int64(len(payload)))
 	}
 	if err != nil {
+		// A websocket write can fail after an unknown prefix reached the proxy.
+		reservation.Unknown()
 		c.settle()
 	}
 	return err
 }
 
 func (c *budgetingOpenAIWSClientConn) ReadMessage(ctx context.Context) ([]byte, error) {
-	if err := c.lease.ReserveFor(ctx, openAIWSMessageReadLimitBytes); err != nil {
+	reservation, err := c.lease.ReserveIO(ctx, openAIWSMessageReadLimitBytes)
+	if err != nil {
 		c.settle()
 		_ = c.next.Close()
 		return nil, err
 	}
 	payload, err := c.next.ReadMessage(ctx)
-	c.lease.Observe(len(payload))
+	if err == nil {
+		reservation.Finish(int64(len(payload)))
+	} else {
+		reservation.Unknown()
+	}
 	if err != nil {
 		c.settle()
 	}
 	return payload, err
 }
 
-func (c *budgetingOpenAIWSClientConn) Ping(ctx context.Context) error { return c.next.Ping(ctx) }
+func (c *budgetingOpenAIWSClientConn) Ping(ctx context.Context) error {
+	// Ping frames bypass JSON accounting, so reserve a conservative control-frame allowance.
+	reservation, err := c.lease.ReserveIO(ctx, 256)
+	if err != nil {
+		c.settle()
+		_ = c.next.Close()
+		return err
+	}
+	err = c.next.Ping(ctx)
+	if err == nil {
+		reservation.Finish(256)
+	} else {
+		reservation.Unknown()
+		c.settle()
+	}
+	return err
+}
 
 func (c *budgetingOpenAIWSClientConn) Close() error {
 	err := c.next.Close()
@@ -94,9 +119,8 @@ func (c *budgetingOpenAIWSClientConn) Close() error {
 }
 
 func (c *budgetingOpenAIWSClientConn) settle() {
-	if c == nil || c.ended {
+	if c == nil {
 		return
 	}
-	c.ended = true
-	_ = c.lease.Settle(context.Background())
+	c.once.Do(func() { _ = c.lease.Settle(context.Background()) })
 }

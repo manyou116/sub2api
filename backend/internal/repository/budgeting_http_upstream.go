@@ -51,7 +51,7 @@ func (u *budgetingHTTPUpstream) do(req *http.Request, proxyURL string, send func
 		return nil, err
 	}
 	if req != nil && req.Body != nil && lease.Active() {
-		req.Body = &budgetingBody{ReadCloser: req.Body, lease: lease}
+		req.Body = proxybudget.WrapBody(req.Body, lease, false)
 	}
 	resp, err := send(req)
 	if err != nil {
@@ -59,52 +59,9 @@ func (u *budgetingHTTPUpstream) do(req *http.Request, proxyURL string, send func
 		return nil, err
 	}
 	if resp != nil && resp.Body != nil && lease.Active() {
-		resp.Body = &budgetingBody{ReadCloser: resp.Body, lease: lease, settleOnFinish: true}
+		resp.Body = proxybudget.WrapBody(resp.Body, lease, true)
 	} else {
 		_ = lease.Settle(context.Background())
 	}
 	return resp, nil
-}
-
-// budgetingBody caps each source read to a pre-admitted 64 KiB application
-// chunk and settles exactly once on response EOF, failure, or close.
-type budgetingBody struct {
-	io.ReadCloser
-	lease          *proxybudget.Lease
-	settleOnFinish bool
-	settled        bool
-}
-
-func (b *budgetingBody) Read(p []byte) (int, error) {
-	if b == nil || b.ReadCloser == nil {
-		return 0, io.ErrClosedPipe
-	}
-	limit, err := b.lease.BeforeRead(context.Background(), len(p))
-	if err != nil {
-		b.settle()
-		return 0, err
-	}
-	n, readErr := b.ReadCloser.Read(p[:limit])
-	b.lease.Observe(n)
-	if readErr != nil {
-		b.settle()
-	}
-	return n, readErr
-}
-
-func (b *budgetingBody) Close() error {
-	if b == nil || b.ReadCloser == nil {
-		return nil
-	}
-	err := b.ReadCloser.Close()
-	b.settle()
-	return err
-}
-
-func (b *budgetingBody) settle() {
-	if b == nil || !b.settleOnFinish || b.settled {
-		return
-	}
-	b.settled = true
-	_ = b.lease.Settle(context.Background())
 }
