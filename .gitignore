@@ -132,8 +132,12 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+<<<<<<< HEAD
 !docs/FORK_HOOKS.md
 !docs/OPENAI_WEB_IMAGES.md
+=======
+!docs/ANTIGRAVITY_ATTRIBUTION_429.md
+>>>>>>> v0.2.7
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
