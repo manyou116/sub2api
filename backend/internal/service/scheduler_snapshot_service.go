@@ -471,9 +471,11 @@ func (s *SchedulerSnapshotService) handleOutboxEvent(ctx context.Context, event 
 	case SchedulerOutboxEventAccountBulkChanged:
 		return s.handleBulkAccountEvent(ctx, event.Payload, seen)
 	case SchedulerOutboxEventAccountGroupsChanged:
-		return s.handleAccountEvent(ctx, event.AccountID, event.Payload, seen)
+		return s.handleAccountEvent(ctx, event.AccountID, event.Payload, seen, false)
 	case SchedulerOutboxEventAccountChanged:
-		return s.handleAccountEvent(ctx, event.AccountID, event.Payload, seen)
+		cacheOnly, _ := event.Payload["cache_only"].(bool)
+		_, hasGroupChange := event.Payload["group_ids"]
+		return s.handleAccountEvent(ctx, event.AccountID, event.Payload, seen, cacheOnly && !hasGroupChange)
 	case SchedulerOutboxEventGroupChanged:
 		return s.handleGroupEvent(ctx, event.GroupID, seen)
 	case SchedulerOutboxEventFullRebuild:
@@ -649,7 +651,7 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 	return s.rebuildBuckets(ctx, buckets, "account_bulk_change")
 }
 
-func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accountID *int64, payload map[string]any, seen map[batchSeenKey]struct{}) error {
+func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accountID *int64, payload map[string]any, seen map[batchSeenKey]struct{}, cacheOnly bool) error {
 	if accountID == nil || *accountID <= 0 {
 		return nil
 	}
@@ -678,6 +680,11 @@ func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accou
 		if err := s.cache.SetAccount(ctx, account); err != nil {
 			return err
 		}
+	}
+	// Only explicitly classified payload-only changes may skip membership work.
+	// Do not mark the bucket as seen: a later state/group event still needs it.
+	if cacheOnly {
+		return nil
 	}
 	if len(groupIDs) == 0 {
 		groupIDs = account.GroupIDs

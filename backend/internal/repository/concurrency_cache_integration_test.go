@@ -525,7 +525,6 @@ func (s *ConcurrencyCacheSuite) TestGetUserConcurrency_Missing() {
 }
 
 func (s *ConcurrencyCacheSuite) TestGetAccountsLoadBatch() {
-	s.T().Skip("TODO: Fix this test - CurrentConcurrency returns 0 instead of expected value in CI")
 	// Setup: Create accounts with different load states
 	account1 := int64(100)
 	account2 := int64(101)
@@ -547,7 +546,23 @@ func (s *ConcurrencyCacheSuite) TestGetAccountsLoadBatch() {
 	require.NoError(s.T(), err)
 	require.True(s.T(), ok)
 
-	// Account 3: 0/1 slots used, 0 waiting (idle)
+	// Add one active Live lease plus stale ordinary/Live members. Read-side
+	// accounting must ignore stale scores without physically removing members.
+	now, err := s.rdb.Time(s.ctx).Result()
+	require.NoError(s.T(), err)
+	for _, accountID := range []int64{account1, account3} {
+		require.NoError(s.T(), s.rdb.ZAdd(s.ctx, accountSlotKey(accountID), redis.Z{
+			Score: float64(now.Unix() - int64(testSlotTTL.Seconds())), Member: "stale-ordinary",
+		}).Err())
+		require.NoError(s.T(), s.rdb.ZAdd(s.ctx, liveAccountSlotKey(accountID), redis.Z{
+			Score: float64(now.Unix() - liveLeaseTTLSeconds), Member: "stale-live",
+		}).Err())
+	}
+	require.NoError(s.T(), s.rdb.ZAdd(s.ctx, liveAccountSlotKey(account1), redis.Z{
+		Score: float64(now.Unix()), Member: "active-live",
+	}).Err())
+
+	// Account 3 has only stale members and no waiting; it remains idle.
 
 	// Query batch load
 	accounts := []service.AccountWithConcurrency{
@@ -560,13 +575,13 @@ func (s *ConcurrencyCacheSuite) TestGetAccountsLoadBatch() {
 	require.NoError(s.T(), err)
 	require.Len(s.T(), loadMap, 3)
 
-	// Verify account1: (2 + 1) / 3 = 100%
+	// Verify account1: (2 ordinary + 1 Live + 1 waiting) / 3 = 133%.
 	load1 := loadMap[account1]
 	require.NotNil(s.T(), load1)
 	require.Equal(s.T(), account1, load1.AccountID)
-	require.Equal(s.T(), 2, load1.CurrentConcurrency)
+	require.Equal(s.T(), 3, load1.CurrentConcurrency)
 	require.Equal(s.T(), 1, load1.WaitingCount)
-	require.Equal(s.T(), 100, load1.LoadRate)
+	require.Equal(s.T(), 133, load1.LoadRate)
 
 	// Verify account2: (1 + 0) / 2 = 50%
 	load2 := loadMap[account2]
@@ -583,6 +598,13 @@ func (s *ConcurrencyCacheSuite) TestGetAccountsLoadBatch() {
 	require.Equal(s.T(), 0, load3.CurrentConcurrency)
 	require.Equal(s.T(), 0, load3.WaitingCount)
 	require.Equal(s.T(), 0, load3.LoadRate)
+
+	for _, accountID := range []int64{account1, account3} {
+		_, err := s.rdb.ZScore(s.ctx, accountSlotKey(accountID), "stale-ordinary").Result()
+		require.NoError(s.T(), err, "load reads must leave ordinary cleanup to the write/cleanup paths")
+		_, err = s.rdb.ZScore(s.ctx, liveAccountSlotKey(accountID), "stale-live").Result()
+		require.NoError(s.T(), err, "load reads must leave Live cleanup to the write/cleanup paths")
+	}
 }
 
 func (s *ConcurrencyCacheSuite) TestGetAccountsLoadBatch_Empty() {

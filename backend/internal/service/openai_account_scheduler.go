@@ -1447,7 +1447,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 
 	// require_privacy_set: 获取分组配置。GetByID 会聚合账号计数，选号不能走它。
 	var schedGroup *Group
-	if req.GroupID != nil && s.service.schedulerSnapshot != nil {
+	if !req.RequirePrivacySet && req.GroupID != nil && s.service.schedulerSnapshot != nil {
 		schedGroup, _ = s.service.schedulerSnapshot.GetGroupByIDLite(ctx, *req.GroupID)
 	}
 
