@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sub2API 上游升级与发布"
+  short_description: "备份旧分支，重放二开到最新上游，检查兼容性并发布验证镜像"
+  default_prompt: "使用 $sub2api-upstream-release，将本项目二开升级到上游最新稳定版，备份旧 main，完成测试后更新 main、push 并打新 tag，确认远端构建和镜像发布成功；不部署生产。"
