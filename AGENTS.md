@@ -7,6 +7,10 @@
 
 If `check-fork-hooks.sh` fails, fix hooks before shipping a tag.
 
+For upstream upgrades and fork releases, use the project skill
+[`sub2api-upstream-release`](.agents/skills/sub2api-upstream-release/SKILL.md).
+Preserve `.agents/skills/` when replaying the fork onto a new upstream base.
+
 ---
 
 # AI Development Rules
