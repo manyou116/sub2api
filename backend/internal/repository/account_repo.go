@@ -854,7 +854,10 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 	if affected == 0 {
 		return service.ErrAccountNotFound
 	}
-	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+	// Credentials and their derived observation fields do not change bucket
+	// membership or ordering. Keep durable replay, but only refresh the account
+	// payload; older consumers safely ignore this hint and rebuild as before.
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, map[string]any{"cache_only": true}); err != nil {
 		return err
 	}
 	if tx != nil {
@@ -1532,7 +1535,7 @@ func (r *accountRepository) UpdateGrokOAuthCredentialsIfUnchanged(
 		RETURNING a.id
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
-		SELECT $7, updated.id, NULL, NULL FROM updated
+		SELECT $7, updated.id, NULL, '{"cache_only":true}'::jsonb FROM updated
 	`,
 		string(credentialsJSON),
 		id,
