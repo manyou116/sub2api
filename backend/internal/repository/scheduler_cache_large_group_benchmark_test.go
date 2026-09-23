@@ -23,7 +23,7 @@ import (
 // Run against a private real Redis process so B/op measures client allocations,
 // not an in-process Redis emulator. No existing server or upstream is contacted.
 //
-//	GOMAXPROCS=2 GOCACHE=/tmp/sub2api-go-build go test -tags=unit ./internal/repository \
+//	GOMAXPROCS=2 GOCACHE=/Volumes/Dev/Cache/Caches/go-build go test -tags=unit ./internal/repository \
 //	  -run '^$' -bench '^BenchmarkSchedulerLargeGroup' -benchmem -benchtime=3x -count=3
 type largeGroupRedisCounter struct {
 	commands atomic.Int64
@@ -177,6 +177,7 @@ func BenchmarkSchedulerLargeGroupSnapshot(b *testing.B) {
 			counter.reset()
 			b.ReportAllocs()
 			b.SetBytes(metadataBytes)
+			cpuStart := largeGroupBenchmarkCPUTime(b)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				got, hit, err := cache.GetSnapshot(ctx, bucket)
@@ -185,6 +186,7 @@ func BenchmarkSchedulerLargeGroupSnapshot(b *testing.B) {
 				}
 			}
 			b.StopTimer()
+			b.ReportMetric(float64(largeGroupBenchmarkCPUTime(b)-cpuStart)/float64(b.N), "go_cpu_ns/op")
 			counter.report(b)
 			b.ReportMetric(float64(metadataBytes), "metadata_bytes/op")
 		})
@@ -224,6 +226,54 @@ func BenchmarkSchedulerLargeGroupLoadBatch(b *testing.B) {
 			b.StopTimer()
 			counter.report(b)
 		})
+	}
+}
+
+func BenchmarkSchedulerLargeGroupSnapshotWindow(b *testing.B) {
+	for _, tc := range []struct {
+		platform string
+		size     int
+	}{{service.PlatformOpenAI, 18_000}, {service.PlatformGrok, 27_000}} {
+		for _, width := range []int{256, 1024} {
+			b.Run(fmt.Sprintf("%s_%d/width_%d", tc.platform, tc.size, width), func(b *testing.B) {
+				rdb, counter := newLargeGroupBenchmarkRedis(b)
+				cache := NewSchedulerCache(rdb).(*schedulerCache)
+				ctx := context.Background()
+				bucket := service.SchedulerBucket{GroupID: 1, Platform: tc.platform, Mode: service.SchedulerModeSingle}
+				accounts := make([]service.Account, tc.size)
+				lastUsed := make(map[int64]time.Time, tc.size)
+				for i := range accounts {
+					accounts[i] = largeGroupBenchmarkAccount(int64(i+1), tc.platform)
+					lastUsed[accounts[i].ID] = *accounts[i].LastUsedAt
+				}
+				token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := cache.SetSnapshot(ctx, bucket, token, accounts); err != nil {
+					b.Fatal(err)
+				}
+				if err := cache.UpdateLastUsed(ctx, lastUsed); err != nil {
+					b.Fatal(err)
+				}
+				if got, hit, err := cache.GetSnapshotWindow(ctx, bucket, width); err != nil || !hit || len(got) != width {
+					b.Fatalf("warm window: hit=%v accounts=%d err=%v", hit, len(got), err)
+				}
+				counter.reset()
+				b.ReportAllocs()
+				cpuStart := largeGroupBenchmarkCPUTime(b)
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					got, hit, err := cache.GetSnapshotWindow(ctx, bucket, width)
+					if err != nil || !hit || len(got) != width {
+						b.Fatalf("window: hit=%v accounts=%d err=%v", hit, len(got), err)
+					}
+				}
+				b.StopTimer()
+				b.ReportMetric(float64(largeGroupBenchmarkCPUTime(b)-cpuStart)/float64(b.N), "go_cpu_ns/op")
+				counter.report(b)
+			})
+		}
 	}
 }
 

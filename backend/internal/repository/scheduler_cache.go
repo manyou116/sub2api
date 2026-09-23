@@ -120,6 +120,7 @@ redis.call('SREM', KEYS[3], ARGV[1])
 local currentActive = redis.call('GET', KEYS[5])
 if currentActive ~= false then
     redis.call('EXPIRE', ARGV[2] .. currentActive, tonumber(ARGV[3]))
+    redis.call('EXPIRE', ARGV[2] .. currentActive .. ':uniform', tonumber(ARGV[3]))
 end
 redis.call('DEL', KEYS[4], KEYS[5])
 return currentEpoch
@@ -155,6 +156,7 @@ redis.call('SREM', KEYS[3], ARGV[1])
 local currentActive = redis.call('GET', KEYS[5])
 if currentActive ~= false then
     redis.call('EXPIRE', ARGV[2] .. currentActive, tonumber(ARGV[3]))
+    redis.call('EXPIRE', ARGV[2] .. currentActive .. ':uniform', tonumber(ARGV[3]))
 end
 redis.call('DEL', KEYS[4], KEYS[5])
 return currentEpoch
@@ -187,14 +189,14 @@ return 0
 	// 返回 1 = 已激活, 0 = 版本过旧未激活
 	activateSnapshotScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[6]) == 1 then
-    redis.call('DEL', KEYS[4])
+    redis.call('DEL', KEYS[4], KEYS[4] .. ':uniform')
     return -1
 end
 
 local currentEpoch = tonumber(redis.call('GET', KEYS[5]))
 local expectedEpoch = tonumber(ARGV[5])
 if currentEpoch == nil or expectedEpoch == nil or currentEpoch ~= expectedEpoch then
-    redis.call('DEL', KEYS[4])
+    redis.call('DEL', KEYS[4], KEYS[4] .. ':uniform')
     return -2
 end
 
@@ -204,7 +206,7 @@ local newVersion = tonumber(ARGV[1])
 if currentActive ~= false then
 	local curVersion = tonumber(currentActive)
 	if curVersion and newVersion < curVersion then
-		redis.call('DEL', KEYS[4])
+		redis.call('DEL', KEYS[4], KEYS[4] .. ':uniform')
 		return 0
 	end
 end
@@ -215,6 +217,7 @@ redis.call('SADD', KEYS[3], ARGV[2])
 
 if currentActive ~= false and currentActive ~= ARGV[1] then
 	redis.call('EXPIRE', ARGV[3] .. currentActive, tonumber(ARGV[4]))
+	redis.call('EXPIRE', ARGV[3] .. currentActive .. ':uniform', tonumber(ARGV[4]))
 end
 
 return 1
@@ -502,11 +505,14 @@ func (c *schedulerCache) allocateSnapshotVersion(ctx context.Context, bucket ser
 }
 
 func (c *schedulerCache) writeSnapshotVersionAndReturnAccountIDs(ctx context.Context, bucket service.SchedulerBucket, version string, accounts []service.Account) ([]int64, error) {
-	accountIDs, err := c.writeAccountIDs(ctx, accounts)
+	accountIDs, proof, err := c.writeAccountIDsWithPriorityProof(ctx, accounts)
 	if err != nil {
 		return nil, err
 	}
 	if err := c.writeSnapshotAccountIDs(ctx, bucket, version, accountIDs); err != nil {
+		return nil, err
+	}
+	if err := c.writeSnapshotPriorityProof(ctx, bucket, version, proof); err != nil {
 		return nil, err
 	}
 	return accountIDs, nil
@@ -626,7 +632,10 @@ func (c *schedulerCache) DeleteAccount(ctx context.Context, accountID int64) err
 		return nil
 	}
 	id := strconv.FormatInt(accountID, 10)
-	return c.rdb.Del(ctx, schedulerAccountKey(id), schedulerAccountMetaKey(id), schedulerLastUsedKey(id)).Err()
+	if !schedulerBoundedProbeEnabled() {
+		return c.rdb.Del(ctx, schedulerAccountKey(id), schedulerAccountMetaKey(id), schedulerLastUsedKey(id)).Err()
+	}
+	return deleteSchedulerAccountWithPriorityScript.Run(ctx, c.rdb, []string{schedulerPriorityLedgerKey, schedulerAccountKey(id), schedulerAccountMetaKey(id), schedulerLastUsedKey(id)}, id).Err()
 }
 
 func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error {
@@ -796,56 +805,6 @@ func decodeCachedAccount(val any) (*service.Account, error) {
 		return nil, err
 	}
 	return &account, nil
-}
-
-func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service.Account) ([]int64, error) {
-	if len(accounts) == 0 {
-		return nil, nil
-	}
-
-	pipe := c.rdb.Pipeline()
-	accountIDs := make([]int64, 0, len(accounts))
-	pending := 0
-	flush := func() error {
-		if pending == 0 {
-			return nil
-		}
-		if _, err := pipe.Exec(ctx); err != nil {
-			return err
-		}
-		pipe = c.rdb.Pipeline()
-		pending = 0
-		return nil
-	}
-
-	for _, account := range accounts {
-		fullPayload, metaPayload, err := marshalSchedulerCacheAccount(account)
-		if err != nil {
-			slog.Warn("scheduler cache skips account with unencodable payload",
-				"account_id", account.ID,
-				"error", err,
-			)
-			continue
-		}
-
-		id := strconv.FormatInt(account.ID, 10)
-		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
-		pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
-		// Keep the hot LastUsedAt side key untouched: a lagging snapshot rebuild
-		// must not overwrite a newer scheduler update.
-		accountIDs = append(accountIDs, account.ID)
-		pending++
-		if pending >= c.writeChunkSize {
-			if err := flush(); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if err := flush(); err != nil {
-		return nil, err
-	}
-	return accountIDs, nil
 }
 
 func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, error) {
