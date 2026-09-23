@@ -118,6 +118,8 @@ type OpenAIAccountSchedulerMetricsSnapshot struct {
 	AccountSwitchRate        float64
 	LoadSkewAvg              float64
 	RuntimeStatsAccountCount int
+	BoundedProbeTotal        int64
+	BoundedProbeFallbacks    int64
 }
 
 type OpenAIAccountScheduler interface {
@@ -2493,11 +2495,20 @@ func (s *OpenAIGatewayService) RecordOpenAIAccountSwitch() {
 }
 
 func (s *OpenAIGatewayService) SnapshotOpenAIAccountSchedulerMetrics() OpenAIAccountSchedulerMetricsSnapshot {
-	scheduler := s.getOpenAIAccountScheduler(context.Background())
-	if scheduler == nil {
+	if s == nil {
 		return OpenAIAccountSchedulerMetricsSnapshot{}
 	}
-	return scheduler.SnapshotMetrics()
+	scheduler := s.getOpenAIAccountScheduler(context.Background())
+	if scheduler == nil {
+		return OpenAIAccountSchedulerMetricsSnapshot{
+			BoundedProbeTotal:     s.legacyBoundedProbeTotal.Load(),
+			BoundedProbeFallbacks: s.legacyBoundedProbeFallbacks.Load(),
+		}
+	}
+	snapshot := scheduler.SnapshotMetrics()
+	snapshot.BoundedProbeTotal += s.legacyBoundedProbeTotal.Load()
+	snapshot.BoundedProbeFallbacks += s.legacyBoundedProbeFallbacks.Load()
+	return snapshot
 }
 
 func (s *OpenAIGatewayService) openAIWSSessionStickyTTL() time.Duration {

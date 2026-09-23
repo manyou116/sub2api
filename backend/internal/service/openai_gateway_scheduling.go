@@ -27,6 +27,8 @@ const (
 	codeBuddyConversationHeader   = "X-Conversation-ID"
 )
 
+type legacyBoundedProbeFallbackContextKey struct{}
+
 var explicitOpenAIHeaderSessionNames = []string{
 	"session-id",
 	"session_id",
@@ -1168,17 +1170,32 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		})
 	}
 
-	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
-	if err != nil {
-		return nil, err
-	}
-	if isOpenAIImageGenerationModel(requestedModel) {
-		if extra, e2 := s.listAccountsAllowingTextRateLimit(ctx, groupID, platform); e2 == nil && len(extra) > 0 {
-			accounts = mergeAccountsByID(accounts, extra)
+	boundedProbe := boundedSchedulerProbeEnvEnabled() &&
+		s.schedulerSnapshot != nil &&
+		ctx.Value(legacyBoundedProbeFallbackContextKey{}) == nil &&
+		len(excludedIDs) == 0 && !requireCompact && !preferLowUpstreamRate &&
+		!isOpenAIImageGenerationModel(requestedModel)
+	var accounts []Account
+	loadFullPool := func() error {
+		var err error
+		accounts, err = s.listSchedulableAccounts(ctx, groupID, platform)
+		if err != nil {
+			return err
 		}
+		if isOpenAIImageGenerationModel(requestedModel) {
+			if extra, e2 := s.listAccountsAllowingTextRateLimit(ctx, groupID, platform); e2 == nil && len(extra) > 0 {
+				accounts = mergeAccountsByID(accounts, extra)
+			}
+		}
+		if len(accounts) == 0 {
+			return noAvailableOpenAISelectionError(requestedModel, false, openAISelectionFilterStats{}.summary(""))
+		}
+		return nil
 	}
-	if len(accounts) == 0 {
-		return nil, noAvailableOpenAISelectionError(requestedModel, false, openAISelectionFilterStats{}.summary(""))
+	if !boundedProbe {
+		if err := loadFullPool(); err != nil {
+			return nil, err
+		}
 	}
 
 	isExcluded := func(accountID int64) bool {
@@ -1243,7 +1260,33 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		}
 	}
 
-	// ============ Layer 2: Load-aware selection ============
+	probeFallback := false
+	if boundedProbe {
+		defer func() { s.recordBoundedProbe(probeFallback) }()
+		window, _, hit, windowErr := s.schedulerSnapshot.ListSchedulableAccountWindow(ctx, groupID, platform, false, 1024)
+		if windowErr == nil && hit && len(window) > 0 {
+			accounts = s.filterOpenAIAccountsBySchedulingThreshold(ctx, window)
+			if platform == PlatformGrok {
+				accounts = s.filterGrokFreeQuotaAccountsForOpenAI(ctx, accounts)
+			}
+		} else {
+			probeFallback = true
+			boundedProbe = false
+			if err := loadFullPool(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(accounts) == 0 {
+		if boundedProbe {
+			probeFallback = true
+			fallbackCtx := context.WithValue(ctx, legacyBoundedProbeFallbackContextKey{}, true)
+			return s.selectAccountWithLoadAwareness(fallbackCtx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, requiredCapability, useUpstreamTokenCost)
+		}
+		return nil, noAvailableOpenAISelectionError(requestedModel, false, openAISelectionFilterStats{}.summary(""))
+	}
+
+	// ============ Layer 2: Load-aware selection ==========
 	// Per-pass parent-health cache to avoid repeated DB calls when multiple shadow
 	// accounts share the same parent.
 	parentCacheL2 := make(map[int64]*Account)
@@ -1291,6 +1334,11 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	}
 
 	if len(candidates) == 0 {
+		if boundedProbe {
+			probeFallback = true
+			fallbackCtx := context.WithValue(ctx, legacyBoundedProbeFallbackContextKey{}, true)
+			return s.selectAccountWithLoadAwareness(fallbackCtx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, requiredCapability, useUpstreamTokenCost)
+		}
 		return nil, noAvailableOpenAISelectionError(requestedModel, false, filterStats.summary(""))
 	}
 	rateOrder := openAILegacyUpstreamRateOrder{}
@@ -1447,6 +1495,12 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 				}
 			}
 		}
+	}
+
+	if boundedProbe {
+		probeFallback = true
+		fallbackCtx := context.WithValue(ctx, legacyBoundedProbeFallbackContextKey{}, true)
+		return s.selectAccountWithLoadAwareness(fallbackCtx, groupID, platform, sessionHash, requestedModel, excludedIDs, requireCompact, requiredCapability, useUpstreamTokenCost)
 	}
 
 	// ============ Layer 3: Fallback wait ============

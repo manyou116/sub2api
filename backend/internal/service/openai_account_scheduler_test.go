@@ -20,6 +20,20 @@ type openAISnapshotCacheStub struct {
 	accountsByID     map[int64]*Account
 }
 
+type boundedOpenAISnapshotCacheStub struct {
+	*openAISnapshotCacheStub
+	window []Account
+}
+
+func (c *boundedOpenAISnapshotCacheStub) GetSnapshotWindow(context.Context, SchedulerBucket, int) ([]*Account, bool, error) {
+	accounts := make([]*Account, 0, len(c.window))
+	for i := range c.window {
+		account := c.window[i]
+		accounts = append(accounts, &account)
+	}
+	return accounts, len(accounts) > 0, nil
+}
+
 type schedulerTestOpenAIAccountRepo struct {
 	AccountRepository
 	accounts []Account
@@ -464,6 +478,38 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabledUsesLega
 	require.Equal(t, int64(36002), selection.Account.ID)
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
 	require.False(t, decision.StickyPreviousHit)
+}
+
+func TestOpenAIGatewayService_LegacyBoundedProbeUsesSnapshotWindow(t *testing.T) {
+	t.Setenv(openAIBoundedProbeEnv, "true")
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	groupID := int64(10107)
+	fullPool := []Account{
+		{ID: 37001, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.1": "gpt-5.1"}}},
+		{ID: 37002, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.1": "gpt-5.1"}}},
+	}
+	windowAccount := fullPool[1]
+	windowCache := &boundedOpenAISnapshotCacheStub{
+		openAISnapshotCacheStub: &openAISnapshotCacheStub{accountsByID: map[int64]*Account{windowAccount.ID: &windowAccount}},
+		window:                  []Account{windowAccount},
+	}
+	var acquired []int64
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: fullPool},
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: windowCache},
+		cfg:                &config.Config{Gateway: config.GatewayConfig{Scheduling: config.GatewaySchedulingConfig{LoadBatchEnabled: true}}},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{acquiredIDs: &acquired}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(context.Background(), &groupID, "", "", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, windowAccount.ID, selection.Account.ID)
+	require.Equal(t, []int64{windowAccount.ID}, acquired)
+	metrics := svc.SnapshotOpenAIAccountSchedulerMetrics()
+	require.Equal(t, int64(1), metrics.BoundedProbeTotal)
+	require.Zero(t, metrics.BoundedProbeFallbacks)
 }
 
 // Regression: the legacy load-batch path had two bare ErrNoAvailableAccounts

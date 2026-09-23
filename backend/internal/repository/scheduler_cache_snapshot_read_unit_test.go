@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -124,6 +125,289 @@ func TestSchedulerCacheSnapshotReadPreservesLegacyPayloadOrderAndBounds(t *testi
 			require.Equal(t, len(ids), readAccounts)
 		})
 	}
+}
+
+func publishSnapshotWindowFixture(t *testing.T, cache *schedulerCache, bucket service.SchedulerBucket, accounts []*service.Account) {
+	t.Helper()
+	values := make([]service.Account, len(accounts))
+	for i, account := range accounts {
+		values[i] = *account
+	}
+	ctx := context.Background()
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(t, err)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, values))
+}
+
+func seedSnapshotWindowRead(t *testing.T, cache *schedulerCache, count int) (service.SchedulerBucket, []int64, time.Time) {
+	t.Helper()
+	t.Setenv("SUB2API_SCHEDULER_BOUNDED_PROBE", "true")
+	bucket, ids, embedded := seedLegacySnapshotRead(t, cache, count)
+	accounts, hit, err := cache.GetSnapshot(context.Background(), bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	// Re-publish through the real writer from a clean Redis namespace so the
+	// active version and priority-proof ledger are initialized consistently.
+	require.NoError(t, cache.rdb.FlushDB(context.Background()).Err())
+	publishSnapshotWindowFixture(t, cache, bucket, accounts)
+	return bucket, ids, embedded
+}
+
+func TestSchedulerCacheSnapshotWindowRequiresPublishedProof(t *testing.T) {
+	cache := newSchedulerCacheUnit(t)
+	bucket, _, _ := seedLegacySnapshotRead(t, cache, 5)
+	accounts, hit, err := cache.GetSnapshotWindow(context.Background(), bucket, 2)
+	require.NoError(t, err)
+	require.False(t, hit)
+	require.Nil(t, accounts)
+}
+
+func TestSchedulerCacheSnapshotWindowRotatesAndWraps(t *testing.T) {
+	cache := newSchedulerCacheUnit(t)
+	bucket, ids, _ := seedSnapshotWindowRead(t, cache, 5)
+	ctx := context.Background()
+	want := [][]int64{
+		ids[:2],
+		ids[2:4],
+		[]int64{ids[4], ids[0]},
+	}
+	for _, expected := range want {
+		accounts, hit, err := cache.GetSnapshotWindow(ctx, bucket, 2)
+		require.NoError(t, err)
+		require.True(t, hit)
+		got := make([]int64, 0, len(accounts))
+		for _, account := range accounts {
+			got = append(got, account.ID)
+		}
+		require.Equal(t, expected, got)
+	}
+}
+
+func TestSchedulerCacheSnapshotWindowRejectsMixedPriorityPools(t *testing.T) {
+	for _, priorities := range [][]int{{0, 0, 1, 1}, {2, 2, 1, 1, 1}} {
+		t.Run(fmt.Sprint(priorities), func(t *testing.T) {
+			cache := newSchedulerCacheUnit(t)
+			bucket, _, _ := seedSnapshotWindowRead(t, cache, len(priorities))
+			accounts, hit, err := cache.GetSnapshot(context.Background(), bucket)
+			require.NoError(t, err)
+			require.True(t, hit)
+			for i, account := range accounts {
+				account.Priority = priorities[i]
+			}
+			publishSnapshotWindowFixture(t, cache, bucket, accounts)
+			for request := 0; request < 3; request++ {
+				window, hit, err := cache.GetSnapshotWindow(context.Background(), bucket, 2)
+				require.NoError(t, err)
+				require.False(t, hit, "mixed priorities require the original global ordering")
+				require.Nil(t, window)
+			}
+		})
+	}
+}
+
+func TestSchedulerCacheSnapshotWindowClampsWidthAndPreservesLastUsed(t *testing.T) {
+	cache := newSchedulerCacheUnit(t)
+	bucket, ids, embedded := seedSnapshotWindowRead(t, cache, 3)
+	for request := 0; request < 2; request++ {
+		accounts, hit, err := cache.GetSnapshotWindow(context.Background(), bucket, 1024)
+		require.NoError(t, err)
+		require.True(t, hit)
+		require.Len(t, accounts, len(ids))
+		for i, account := range accounts {
+			require.Equal(t, ids[i], account.ID)
+			want := embedded
+			if i == 0 {
+				want = embedded.Add(time.Hour)
+			}
+			require.Equal(t, want, *account.LastUsedAt)
+		}
+	}
+}
+
+func TestSchedulerCacheSnapshotWindowTreatsMissingMetadataAsMiss(t *testing.T) {
+	cache := newSchedulerCacheUnit(t)
+	bucket, ids, _ := seedSnapshotWindowRead(t, cache, 3)
+	cache.rdb.Del(context.Background(), schedulerAccountMetaKey(strconv.FormatInt(ids[1], 10)))
+	accounts, hit, err := cache.GetSnapshotWindow(context.Background(), bucket, 3)
+	require.NoError(t, err)
+	require.False(t, hit)
+	require.Nil(t, accounts)
+}
+
+func TestSchedulerCacheSnapshotWindowContinuesAcrossActiveVersions(t *testing.T) {
+	cache := newSchedulerCacheUnit(t)
+	bucket, ids, _ := seedSnapshotWindowRead(t, cache, 3)
+	ctx := context.Background()
+	_, hit, err := cache.GetSnapshotWindow(ctx, bucket, 2)
+	require.NoError(t, err)
+	require.True(t, hit)
+	accounts, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	accounts[0], accounts[2] = accounts[2], accounts[0]
+	publishSnapshotWindowFixture(t, cache, bucket, accounts)
+	accounts, hit, err = cache.GetSnapshotWindow(ctx, bucket, 2)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Equal(t, []int64{ids[0], ids[2]}, []int64{accounts[0].ID, accounts[1].ID})
+}
+
+func TestSchedulerCacheSnapshotWindowCoversEveryAccountEqually(t *testing.T) {
+	cache := newSchedulerCacheUnit(t)
+	bucket, ids, _ := seedSnapshotWindowRead(t, cache, 31)
+	seen := make(map[int64]int, len(ids))
+	// Coprime pool/window sizes exercise every wrap offset, not just whole pages.
+	for request := 0; request < len(ids); request++ {
+		accounts, hit, err := cache.GetSnapshotWindow(context.Background(), bucket, 7)
+		require.NoError(t, err)
+		require.True(t, hit)
+		require.Len(t, accounts, 7)
+		windowIDs := make(map[int64]bool, len(accounts))
+		for _, account := range accounts {
+			require.False(t, windowIDs[account.ID], "duplicate account within a window")
+			windowIDs[account.ID] = true
+			seen[account.ID]++
+		}
+	}
+	for _, id := range ids {
+		require.Equal(t, 7, seen[id], "account %d must receive equal candidate exposure", id)
+	}
+}
+
+func TestSchedulerCacheSnapshotWindowSharesCursorAcrossClients(t *testing.T) {
+	cache, mr := newSchedulerCacheUnitWithRedis(t)
+	bucket, ids, _ := seedSnapshotWindowRead(t, cache, 128)
+	type outcome struct {
+		accounts []*service.Account
+		hit      bool
+		err      error
+	}
+	results := make(chan outcome, 32)
+	var workers sync.WaitGroup
+	for range 4 {
+		rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+		t.Cleanup(func() { _ = rdb.Close() })
+		instance := NewSchedulerCache(rdb).(*schedulerCache)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for range 8 {
+				accounts, hit, err := instance.GetSnapshotWindow(context.Background(), bucket, 4)
+				results <- outcome{accounts, hit, err}
+			}
+		}()
+	}
+	workers.Wait()
+	close(results)
+	seen := make(map[int64]int, len(ids))
+	for result := range results {
+		require.NoError(t, result.err)
+		require.True(t, result.hit)
+		require.Len(t, result.accounts, 4)
+		for _, account := range result.accounts {
+			seen[account.ID]++
+		}
+	}
+	for _, id := range ids {
+		require.Equal(t, 1, seen[id], "separate clients must share one atomic rotation")
+	}
+}
+
+func TestSchedulerCacheSnapshotWindowPinsVersionDuringPublish(t *testing.T) {
+	cache, mr := newSchedulerCacheUnitWithRedis(t)
+	bucket, ids, _ := seedSnapshotWindowRead(t, cache, 5)
+	cache.rdb.AddHook(&snapshotReadBatchHook{before: func(_ int, _ []redis.Cmder) error {
+		// Publishing a different active version must not mix its membership into
+		// an in-flight window, even when the new version is unavailable locally.
+		return mr.Set(schedulerBucketKey(schedulerActivePrefix, bucket), "72")
+	}})
+	accounts, hit, err := cache.GetSnapshotWindow(context.Background(), bucket, 2)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Equal(t, []int64{ids[0], ids[1]}, []int64{accounts[0].ID, accounts[1].ID})
+	accounts, hit, err = cache.GetSnapshotWindow(context.Background(), bucket, 2)
+	require.NoError(t, err)
+	require.False(t, hit)
+	require.Nil(t, accounts)
+}
+
+func TestSchedulerCacheSnapshotWindowFailureNeverReturnsPartialCandidates(t *testing.T) {
+	for _, failure := range []string{"invalid_metadata", "invalid_last_used", "missing_head", "pipeline_error", "canceled"} {
+		t.Run(failure, func(t *testing.T) {
+			cache, mr := newSchedulerCacheUnitWithRedis(t)
+			bucket, ids, _ := seedSnapshotWindowRead(t, cache, 5)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			id := strconv.FormatInt(ids[1], 10)
+			switch failure {
+			case "invalid_metadata":
+				require.NoError(t, mr.Set(schedulerAccountMetaKey(id), "{"))
+			case "invalid_last_used":
+				require.NoError(t, mr.Set(schedulerLastUsedKey(id), "invalid"))
+			case "missing_head":
+				_, hit, err := cache.GetSnapshotWindow(ctx, bucket, 2)
+				require.NoError(t, err)
+				require.True(t, hit)
+				mr.Del(schedulerAccountMetaKey(strconv.FormatInt(ids[2], 10)))
+			case "pipeline_error":
+				cache.rdb.AddHook(&snapshotReadBatchHook{before: func(_ int, _ []redis.Cmder) error {
+					return errors.New("window pipeline unavailable")
+				}})
+			case "canceled":
+				cancel()
+			}
+			accounts, hit, err := cache.GetSnapshotWindow(ctx, bucket, 2)
+			require.Nil(t, accounts)
+			require.False(t, hit)
+			if failure == "missing_head" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestSchedulerCacheSnapshotWindowPriorityChangeInvalidatesProof(t *testing.T) {
+	cache := newSchedulerCacheUnit(t)
+	bucket, ids, _ := seedSnapshotWindowRead(t, cache, 5)
+	ctx := context.Background()
+	_, hit, err := cache.GetSnapshotWindow(ctx, bucket, 2)
+	require.NoError(t, err)
+	require.True(t, hit)
+	// Updating an account outside the next window must invalidate its proof;
+	// otherwise a newly higher-priority account could be silently skipped.
+	changed, err := cache.GetAccount(ctx, ids[4])
+	require.NoError(t, err)
+	changed.Priority = -1
+	require.NoError(t, cache.SetAccount(ctx, changed))
+	accounts, hit, err := cache.GetSnapshotWindow(ctx, bucket, 2)
+	require.NoError(t, err)
+	require.False(t, hit)
+	require.Nil(t, accounts)
+	// The full snapshot remains available while its window proof is stale.
+	accounts, hit, err = cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Len(t, accounts, 5)
+	require.Equal(t, -1, accounts[4].Priority)
+}
+
+func TestSchedulerCacheSnapshotWindowCredentialRefreshPreservesProof(t *testing.T) {
+	cache := newSchedulerCacheUnit(t)
+	bucket, ids, _ := seedSnapshotWindowRead(t, cache, 5)
+	ctx := context.Background()
+	_, hit, err := cache.GetSnapshotWindow(ctx, bucket, 2)
+	require.NoError(t, err)
+	require.True(t, hit)
+	changed, err := cache.GetAccount(ctx, ids[4])
+	require.NoError(t, err)
+	changed.Credentials["access_token"] = "synthetic-refreshed-token"
+	require.NoError(t, cache.SetAccount(ctx, changed))
+	accounts, hit, err := cache.GetSnapshotWindow(ctx, bucket, 2)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Equal(t, []int64{ids[2], ids[3]}, []int64{accounts[0].ID, accounts[1].ID})
 }
 
 func TestSchedulerCacheSnapshotReadPinsMembershipAndReadsDynamicLastUsed(t *testing.T) {

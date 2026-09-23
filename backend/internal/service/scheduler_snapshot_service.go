@@ -68,6 +68,10 @@ type schedulerSnapshotAccountIDWriter interface {
 	SetSnapshotByAccountIDs(ctx context.Context, bucket SchedulerBucket, token SchedulerBucketWriteToken, accountIDs []int64) error
 }
 
+type schedulerSnapshotWindowReader interface {
+	GetSnapshotWindow(ctx context.Context, bucket SchedulerBucket, width int) ([]*Account, bool, error)
+}
+
 func newSchedulerAccountQueryCache(taskSets ...[]schedulerBucketWriteTask) *schedulerAccountQueryCache {
 	queries := &schedulerAccountQueryCache{
 		remaining:          make(map[schedulerAccountQueryKey]int),
@@ -269,6 +273,23 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	}
 
 	return accounts, useMixed, nil
+}
+
+func (s *SchedulerSnapshotService) ListSchedulableAccountWindow(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool, width int) ([]Account, bool, bool, error) {
+	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
+	if s == nil || s.cache == nil || width <= 0 {
+		return nil, useMixed, false, nil
+	}
+	reader, ok := s.cache.(schedulerSnapshotWindowReader)
+	if !ok {
+		return nil, useMixed, false, nil
+	}
+	bucket := s.bucketFor(groupID, platform, s.resolveMode(platform, hasForcePlatform))
+	accounts, hit, err := reader.GetSnapshotWindow(ctx, bucket, width)
+	if err != nil || !hit {
+		return nil, useMixed, false, err
+	}
+	return derefAccounts(accounts), useMixed, true, nil
 }
 
 func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int64) (*Account, error) {
