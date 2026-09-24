@@ -478,9 +478,10 @@ func (r *proxyRepository) CountAccountsByProxyID(ctx context.Context, proxyID in
 	return count, nil
 }
 
+// ListAccountSummariesByProxyID 只读取指定代理下未删除账号的摘要和实时状态，避免全表宽行分页。
 func (r *proxyRepository) ListAccountSummariesByProxyID(ctx context.Context, proxyID int64) ([]service.ProxyAccountSummary, error) {
 	rows, err := r.sql.QueryContext(ctx, `
-		SELECT id, name, platform, type, notes
+		SELECT id, name, platform, type, notes, proxy_id, status, schedulable
 		FROM accounts
 		WHERE proxy_id = $1 AND deleted_at IS NULL
 		ORDER BY id DESC
@@ -493,13 +494,16 @@ func (r *proxyRepository) ListAccountSummariesByProxyID(ctx context.Context, pro
 	out := make([]service.ProxyAccountSummary, 0)
 	for rows.Next() {
 		var (
-			id       int64
-			name     string
-			platform string
-			accType  string
-			notes    sql.NullString
+			id             int64
+			name           string
+			platform       string
+			accType        string
+			notes          sql.NullString
+			accountProxyID int64
+			status         string
+			schedulable    bool
 		)
-		if err := rows.Scan(&id, &name, &platform, &accType, &notes); err != nil {
+		if err := rows.Scan(&id, &name, &platform, &accType, &notes, &accountProxyID, &status, &schedulable); err != nil {
 			return nil, err
 		}
 		var notesPtr *string
@@ -507,11 +511,14 @@ func (r *proxyRepository) ListAccountSummariesByProxyID(ctx context.Context, pro
 			notesPtr = &notes.String
 		}
 		out = append(out, service.ProxyAccountSummary{
-			ID:       id,
-			Name:     name,
-			Platform: platform,
-			Type:     accType,
-			Notes:    notesPtr,
+			ID:          id,
+			Name:        name,
+			Platform:    platform,
+			Type:        accType,
+			Notes:       notesPtr,
+			ProxyID:     accountProxyID,
+			Status:      status,
+			Schedulable: schedulable,
 		})
 	}
 	if err := rows.Err(); err != nil {

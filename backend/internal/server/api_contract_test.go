@@ -1378,6 +1378,27 @@ func TestAPIContracts(t *testing.T) {
 			}`,
 		},
 		{
+			name:       "GET /api/v1/admin/proxies/9/accounts",
+			method:     http.MethodGet,
+			path:       "/api/v1/admin/proxies/9/accounts",
+			wantStatus: http.StatusOK,
+			wantJSON: `{
+				"code": 0,
+				"message": "success",
+				"data": [
+					{"id": 18, "name": "paused", "platform": "openai", "type": "oauth", "notes": "keep note", "proxy_id": 9, "status": "active", "schedulable": false},
+					{"id": 17, "name": "enabled", "platform": "anthropic", "type": "apikey", "proxy_id": 9, "status": "error", "schedulable": true}
+				]
+			}`,
+		},
+		{
+			name:       "GET /api/v1/admin/proxies/10/accounts empty",
+			method:     http.MethodGet,
+			path:       "/api/v1/admin/proxies/10/accounts",
+			wantStatus: http.StatusOK,
+			wantJSON:   `{"code": 0, "message": "success", "data": []}`,
+		},
+		{
 			name:   "POST /api/v1/admin/accounts/bulk-update",
 			method: http.MethodPost,
 			path:   "/api/v1/admin/accounts/bulk-update",
@@ -1488,6 +1509,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
 	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil, nil)
 	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminProxyHandler := adminhandler.NewProxyHandler(adminService)
 
 	jwtAuth := func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
@@ -1537,6 +1559,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Admin.Use(adminAuth)
 	v1Admin.GET("/settings", adminSettingHandler.GetSettings)
 	v1Admin.POST("/accounts/bulk-update", adminAccountHandler.BulkUpdate)
+	v1Admin.GET("/proxies/:id/accounts", adminProxyHandler.GetProxyAccounts)
 
 	return &contractDeps{
 		now:         now,
@@ -2125,7 +2148,14 @@ func (stubProxyRepo) CountAccountsByProxyID(ctx context.Context, proxyID int64) 
 }
 
 func (stubProxyRepo) ListAccountSummariesByProxyID(ctx context.Context, proxyID int64) ([]service.ProxyAccountSummary, error) {
-	return nil, errors.New("not implemented")
+	if proxyID != 9 {
+		return []service.ProxyAccountSummary{}, nil
+	}
+	note := "keep note"
+	return []service.ProxyAccountSummary{
+		{ID: 18, Name: "paused", Platform: "openai", Type: "oauth", Notes: &note, ProxyID: 9, Status: "active", Schedulable: false},
+		{ID: 17, Name: "enabled", Platform: "anthropic", Type: "apikey", ProxyID: 9, Status: "error", Schedulable: true},
+	}, nil
 }
 
 func (stubProxyRepo) SweepExpiredProxies(ctx context.Context, now time.Time) (int64, error) {
