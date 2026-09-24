@@ -601,20 +601,16 @@ func ProxyWithAccountCountFromServiceAdmin(p *service.ProxyWithAccountCount) *Ad
 	}
 }
 
-// ProxyAccountSummaryFromService 将窄列摘要映射为接口响应，保留真实调度状态。
 func ProxyAccountSummaryFromService(a *service.ProxyAccountSummary) *ProxyAccountSummary {
 	if a == nil {
 		return nil
 	}
 	return &ProxyAccountSummary{
-		ID:          a.ID,
-		Name:        a.Name,
-		Platform:    a.Platform,
-		Type:        a.Type,
-		Notes:       a.Notes,
-		ProxyID:     a.ProxyID,
-		Status:      a.Status,
-		Schedulable: a.Schedulable,
+		ID:       a.ID,
+		Name:     a.Name,
+		Platform: a.Platform,
+		Type:     a.Type,
+		Notes:    a.Notes,
 	}
 }
 

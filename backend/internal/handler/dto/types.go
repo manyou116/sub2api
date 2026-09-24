@@ -495,14 +495,11 @@ type AdminProxyWithAccountCount struct {
 }
 
 type ProxyAccountSummary struct {
-	ID          int64   `json:"id"`
-	Name        string  `json:"name"`
-	Platform    string  `json:"platform"`
-	Type        string  `json:"type"`
-	Notes       *string `json:"notes,omitempty"`
-	ProxyID     int64   `json:"proxy_id"`
-	Status      string  `json:"status"`
-	Schedulable bool    `json:"schedulable"` // 必须保留 false，以区分已暂停与旧接口缺失字段。
+	ID       int64   `json:"id"`
+	Name     string  `json:"name"`
+	Platform string  `json:"platform"`
+	Type     string  `json:"type"`
+	Notes    *string `json:"notes,omitempty"`
 }
 
 type RedeemCode struct {

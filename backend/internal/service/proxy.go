@@ -68,14 +68,10 @@ type ProxyWithAccountCount struct {
 	QualityChecked *int64
 }
 
-// ProxyAccountSummary 仅返回代理关联账号的摘要与调度状态，不包含凭据。
 type ProxyAccountSummary struct {
-	ID          int64
-	Name        string
-	Platform    string
-	Type        string
-	Notes       *string
-	ProxyID     int64
-	Status      string
-	Schedulable bool
+	ID       int64
+	Name     string
+	Platform string
+	Type     string
+	Notes    *string
 }
