@@ -90,6 +90,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 	start := time.Now()
 	requestID := uuid.NewString()
 	cfg := s.webImages.ParseAccountConfig(account)
+	if until, ok := s.webImages.getCooldownCache(ctx, account.ID); ok && time.Now().Before(until) {
+		return nil, &UpstreamFailoverError{
+			StatusCode: http.StatusBadGateway, ResponseBody: []byte(`{"error":{"message":"web image account cooling down"}}`),
+			RetryableOnSameAccount: false,
+		}
+	}
 
 	// Always refresh quota cache when unknown so schedulable checks are meaningful.
 	// ProbeOnSchedule=false still probes here; it only mattered when defaulted off and
@@ -100,6 +106,13 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 			var webErr *webdriver.Error
 			if asWebErr(err, &webErr) && webErr.Kind == webdriver.ErrorKindAuth {
 				return nil, s.openAIWebImageAuthFailover(ctx, account, webErr, channelMappedModel)
+			}
+			if asWebErr(err, &webErr) && webdriver.IsHTMLForbiddenResponse(webErr.StatusCode, webErr.ResponseBody) {
+				s.webImages.MarkHTMLForbidden(ctx, account)
+				return nil, &UpstreamFailoverError{
+					StatusCode: http.StatusBadGateway, ResponseBody: []byte(`{"error":{"message":"ChatGPT Web access blocked"}}`),
+					RetryableOnSameAccount: false,
+				}
 			}
 		}
 	}
@@ -199,6 +212,13 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 			status = we.StatusCode
 			if status == 0 {
 				status = http.StatusBadGateway
+			}
+			if webdriver.IsHTMLForbiddenResponse(status, we.ResponseBody) {
+				s.webImages.MarkHTMLForbidden(ctx, account)
+				return nil, &UpstreamFailoverError{
+					StatusCode: http.StatusBadGateway, ResponseBody: []byte(`{"error":{"message":"ChatGPT Web access blocked"}}`),
+					RetryableOnSameAccount: false,
+				}
 			}
 			switch we.Kind {
 			case webdriver.ErrorKindAuth:

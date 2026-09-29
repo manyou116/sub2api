@@ -1279,6 +1279,9 @@ func classifyHTTP(stage string, status int, body string) *Error {
 	if status == http.StatusUnauthorized {
 		return newHTTPError(ErrorKindAuth, "token invalidated", false)
 	}
+	if IsHTMLForbiddenResponse(status, []byte(body)) {
+		return newHTTPError(ErrorKindUpstream, "ChatGPT Web returned an HTML 403 page", true)
+	}
 	if looksLikeRateLimitMessage(body) && IsImageQuotaLimitedMessage(body) {
 		err := newHTTPError(ErrorKindRateLimited, truncate(body, 500), true)
 		err.StatusCode = statusOr(status, http.StatusTooManyRequests)
@@ -1292,6 +1295,16 @@ func classifyHTTP(stage string, status int, body string) *Error {
 		return newHTTPError(ErrorKindPolicy, truncate(body, 300), false)
 	}
 	return newHTTPError(ErrorKindUpstream, truncate(body, 300), status >= 500)
+}
+
+// IsHTMLForbiddenResponse distinguishes edge/proxy block pages from structured
+// permission and content-policy errors returned by ChatGPT Web.
+func IsHTMLForbiddenResponse(status int, body []byte) bool {
+	if status != http.StatusForbidden {
+		return false
+	}
+	page := strings.ToLower(strings.TrimSpace(string(body)))
+	return strings.HasPrefix(page, "<!doctype html") || strings.HasPrefix(page, "<html")
 }
 
 func statusOr(status, fallback int) int {

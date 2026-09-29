@@ -93,6 +93,26 @@ func TestOpenAIWebImages_RedisInflight(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestOpenAIWebImages_HTMLForbiddenCooldownSharedAcrossInstances(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	account := &Account{
+		ID: 15068, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true,
+		Extra: map[string]any{"openai_web_images": map[string]any{"enabled": true}},
+	}
+	repo := &webImgAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	first := NewOpenAIWebImagesService(webImgTestCfg("redis"), rdb, repo)
+	second := NewOpenAIWebImagesService(webImgTestCfg("redis"), rdb, repo)
+	ctx := context.Background()
+
+	first.MarkHTMLForbidden(ctx, account)
+	require.True(t, second.IsWebRateLimited(ctx, account.ID))
+	require.Nil(t, account.WebImageRateLimitResetAt, "edge block must not consume image quota")
+	require.Equal(t, int64(1), first.ParseAccountConfig(account).Stats.Fail)
+}
+
 type webImgAccountRepo struct{ accounts map[int64]*Account }
 
 func (r *webImgAccountRepo) Create(context.Context, *Account) error { panic("unused") }

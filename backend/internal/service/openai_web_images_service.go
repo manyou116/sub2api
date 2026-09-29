@@ -21,6 +21,8 @@ import (
 
 const openAIWebImagesExtraKey = "openai_web_images"
 
+const webImageHTMLForbiddenCooldown = 10 * time.Minute
+
 type OpenAIWebImagesService struct {
 	cfg         *config.Config
 	rdb         *redis.Client
@@ -1069,6 +1071,14 @@ func (s *OpenAIWebImagesService) MarkFail(ctx context.Context, account *Account,
 		s.setCooldown(ctx, account.ID, until)
 	}
 	_ = s.saveAccountConfig(ctx, account.ID, account, cfg)
+}
+
+func (s *OpenAIWebImagesService) MarkHTMLForbidden(ctx context.Context, account *Account) {
+	if s == nil || account == nil {
+		return
+	}
+	s.MarkFail(ctx, account, "ChatGPT Web returned an HTML 403 page", false)
+	s.setCooldownCache(ctx, account.ID, time.Now().Add(webImageHTMLForbiddenCooldown))
 }
 
 // classifyWebImageRateLimitReason mirrors text-channel thinking: durable window vs short fuse.

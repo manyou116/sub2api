@@ -1,6 +1,38 @@
 package webdriver
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+)
+
+func TestClassifyHTMLForbiddenRetriesOnAnotherAccount(t *testing.T) {
+	for _, body := range []string{
+		"  <!DOCTYPE html><html><body>blocked</body></html>",
+		"<html><head><style global></style></head></html>",
+	} {
+		err := classifyHTTP("probe", http.StatusForbidden, body)
+		if err.Kind != ErrorKindUpstream || !err.Retryable || err.StatusCode != http.StatusForbidden {
+			t.Fatalf("HTML 403 classified as %#v", err)
+		}
+		if err.Message != "ChatGPT Web returned an HTML 403 page" || string(err.ResponseBody) != body {
+			t.Fatalf("HTML 403 message/body = %q/%q", err.Message, err.ResponseBody)
+		}
+	}
+	for _, tt := range []struct {
+		status int
+		body   string
+		kind   ErrorKind
+	}{
+		{http.StatusForbidden, `{"error":{"message":"permission denied"}}`, ErrorKindUpstream},
+		{http.StatusForbidden, `{"error":{"message":"content policy violation"}}`, ErrorKindPolicy},
+		{http.StatusBadRequest, "<html>invalid request</html>", ErrorKindUpstream},
+	} {
+		err := classifyHTTP("probe", tt.status, tt.body)
+		if err.Kind != tt.kind || err.Retryable || IsHTMLForbiddenResponse(tt.status, []byte(tt.body)) {
+			t.Fatalf("non-edge error classified as %#v", err)
+		}
+	}
+}
 
 func TestClassifyHTTP401PreservesUpstreamBody(t *testing.T) {
 	body := `{"error":{"code":"token_invalidated","message":"token invalidated"}}`
