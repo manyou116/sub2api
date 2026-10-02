@@ -48,6 +48,11 @@ func (m *sessionWindowMockRepo) ClearRateLimit(_ context.Context, id int64) erro
 	m.clearRateLimitIDs = append(m.clearRateLimitIDs, id)
 	return nil
 }
+func (m *sessionWindowMockRepo) SetWebImageRateLimited(context.Context, int64, time.Time) error {
+	return nil
+}
+func (m *sessionWindowMockRepo) ClearWebImageRateLimit(context.Context, int64) error { return nil }
+
 func (m *sessionWindowMockRepo) ClearAntigravityQuotaScopes(_ context.Context, _ int64) error {
 	return nil
 }
@@ -137,6 +142,14 @@ func (m *sessionWindowMockRepo) ListSchedulableByPlatforms(context.Context, []st
 func (m *sessionWindowMockRepo) ListSchedulableByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
 	panic("unexpected")
 }
+
+func (m *sessionWindowMockRepo) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
+	panic("unexpected ListActiveAllowingTextRateLimitByGroupIDAndPlatforms call")
+}
+func (m *sessionWindowMockRepo) ListActiveAllowingTextRateLimitByPlatforms(context.Context, []string) ([]Account, error) {
+	panic("unexpected ListActiveAllowingTextRateLimitByPlatforms call")
+}
+
 func (m *sessionWindowMockRepo) ListSchedulableUngroupedByPlatform(context.Context, string) ([]Account, error) {
 	panic("unexpected")
 }
