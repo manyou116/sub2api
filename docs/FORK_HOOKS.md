@@ -86,7 +86,7 @@ routing and tenant-isolated `conversationId` for prompt-cache affinity.
 | EventStream | `pkg/kiroeventstream/` | frame decoder |
 | Gateway | `routes/gateway.go` | `isKiroGatewayPlatform` + `KiroChatCompletions` + `KiroResponses` |
 | Admin | `routes/kiro_admin.go` + call site in `admin.go` | `registerKiroAdminRoutes` → `/kiro/import` |
-| Group/quota allowlists | `group_handler.go`, `AllowedQuotaPlatforms`, `migrations/186_user_platform_quotas_add_kiro.sql` | `kiro` accepted for groups and user-platform quota rows |
+| Group/quota allowlists | `domain/platforms.go`, `group_platform` validator, `AllowedQuotaPlatforms` | Kiro registered in the shared platform catalog; migration 242 removes database platform CHECK constraints; published migrations stay unchanged |
 | Token refresh | `token_refresh_service.go` | `KiroTokenRefresher` registered |
 | Wire | `wire.go` / `wire_gen.go` | `ProvideKiroTokenProvider` + `SetKiroTokenProvider` |
 | Cache identity | `kiro_prompt_cache.go` | `ResolveKiroCacheIdentity` (no raw client key upstream) |
