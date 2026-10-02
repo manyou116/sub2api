@@ -16,7 +16,11 @@ const concretePlatforms = [
   'deepseek',
   'minimax',
   'opencode_go',
+<<<<<<< HEAD
   'kiro'
+=======
+  'typesafe'
+>>>>>>> v0.2.13
 ]
 
 const compositeRoutePlatforms = concretePlatforms.filter((platform) => platform !== 'kiro')

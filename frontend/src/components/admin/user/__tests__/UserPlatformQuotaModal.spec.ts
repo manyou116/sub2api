@@ -106,7 +106,11 @@ describe('UserPlatformQuotaModal', () => {
     const rows = w.findAll('tbody tr')
     expect(rows.map(row => row.find('td').text())).toEqual([
       'anthropic', 'openai', 'gemini', 'antigravity', 'grok',
+<<<<<<< HEAD
       'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'kiro',
+=======
+      'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'typesafe',
+>>>>>>> v0.2.13
     ])
     for (const row of rows) {
       const inputs = row.findAll('input[type=number]')
@@ -116,11 +120,19 @@ describe('UserPlatformQuotaModal', () => {
     w.unmount()
   })
 
+<<<<<<< HEAD
   it.each(['kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'kiro'] as const)(
     'saves edits to %s without erasing existing platform limits', async (platform) => {
       const existing: PlatformQuotaUpdateItem[] = [
         { platform: 'openai', daily_limit_usd: 10, weekly_limit_usd: 20, monthly_limit_usd: 100 },
         ...(['kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'kiro'] as const).map(p => ({
+=======
+  it.each(['kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'typesafe'] as const)(
+    'saves edits to %s without erasing existing platform limits', async (platform) => {
+      const existing: PlatformQuotaUpdateItem[] = [
+        { platform: 'openai', daily_limit_usd: 10, weekly_limit_usd: 20, monthly_limit_usd: 100 },
+        ...(['kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go', 'typesafe'] as const).map(p => ({
+>>>>>>> v0.2.13
           platform: p, daily_limit_usd: 0, weekly_limit_usd: null, monthly_limit_usd: 50,
         })),
       ]

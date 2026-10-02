@@ -435,8 +435,13 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.testOpenCodeGoAccountConnection(c, account, modelID, prompt)
 	}
 
+<<<<<<< HEAD
 	if account.IsKiro() {
 		return s.testKiroAccountConnection(c, account, modelID)
+=======
+	if account.IsTypeSafe() {
+		return s.testTypeSafeAccountConnection(c, account, prompt)
+>>>>>>> v0.2.13
 	}
 
 	return s.testClaudeAccountConnection(c, account, modelID)

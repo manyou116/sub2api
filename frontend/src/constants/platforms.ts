@@ -21,7 +21,11 @@ export const CONCRETE_PLATFORM_OPTIONS = [
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'minimax', label: 'MiniMax' },
   { value: 'opencode_go', label: 'OpenCode' },
+<<<<<<< HEAD
   { value: 'kiro', label: 'Kiro' }
+=======
+  { value: 'typesafe', label: 'TypeSafe / Jev' }
+>>>>>>> v0.2.13
 ] as const satisfies readonly PlatformOption<AccountPlatform>[]
 
 /** Concrete providers supported by Composite model routes. */
