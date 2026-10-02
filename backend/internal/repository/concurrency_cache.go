@@ -29,7 +29,9 @@ const (
 	// 格式: concurrency:user:{userID}
 	userSlotKeyPrefix = "concurrency:user:"
 	// 格式: concurrency:api_key:{apiKeyID}
-	apiKeySlotKeyPrefix      = "concurrency:api_key:"
+	apiKeySlotKeyPrefix = "concurrency:api_key:"
+	// Format: concurrency:api_key_image:{apiKeyID}; image-generation stats only.
+	apiKeyImageSlotKeyPrefix = "concurrency:api_key_image:"
 	liveAccountSlotKeyPrefix = "concurrency:live:account:"
 	liveUserSlotKeyPrefix    = "concurrency:live:user:"
 	liveAPIKeySlotKeyPrefix  = "concurrency:live:api_key:"
@@ -141,6 +143,8 @@ var (
 		local leaseID = ARGV[4]
 		local replacing = tonumber(ARGV[5])
 		local now = tonumber(redis.call('TIME')[1])
+		-- Batch load reads need not physically remove expired regular slots.
+		local regularMin = '(' .. (now - tonumber(ARGV[6]))
 		local liveExpireBefore = now - ttl
 		redis.call('ZREMRANGEBYSCORE', accountLive, '-inf', liveExpireBefore)
 		redis.call('ZREMRANGEBYSCORE', userLive, '-inf', liveExpireBefore)
@@ -148,8 +152,8 @@ var (
 		if redis.call('ZSCORE', accountLive, leaseID) ~= false then
 			return 1
 		end
-		local accountCount = redis.call('ZCARD', accountRegular) + redis.call('ZCARD', accountLive)
-		local userCount = redis.call('ZCARD', userRegular) + redis.call('ZCARD', userLive)
+		local accountCount = redis.call('ZCOUNT', accountRegular, regularMin, '+inf') + redis.call('ZCARD', accountLive)
+		local userCount = redis.call('ZCOUNT', userRegular, regularMin, '+inf') + redis.call('ZCARD', userLive)
 		local allowance = 0
 		if replacing == 1 then allowance = 1 end
 		if accountMax > 0 and accountCount >= accountMax + allowance then return 0 end
@@ -384,6 +388,10 @@ func accountSlotKey(accountID int64) string {
 
 func userSlotKey(userID int64) string {
 	return fmt.Sprintf("%s%d", userSlotKeyPrefix, userID)
+}
+
+func apiKeyImageSlotKey(apiKeyID int64) string {
+	return apiKeyImageSlotKeyPrefix + strconv.FormatInt(apiKeyID, 10)
 }
 
 func apiKeySlotKey(apiKeyID int64) string {
@@ -750,6 +758,16 @@ func (c *concurrencyCache) ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64
 	return c.rdb.ZRem(ctx, key, requestID).Err()
 }
 
+func (c *concurrencyCache) TrackAPIKeyImageSlot(ctx context.Context, apiKeyID int64, requestID string) error {
+	key := apiKeyImageSlotKey(apiKeyID)
+	_, err := trackSlotScript.Run(ctx, c.rdb, []string{key}, c.slotTTLSeconds, requestID).Result()
+	return err
+}
+
+func (c *concurrencyCache) ReleaseAPIKeyImageSlot(ctx context.Context, apiKeyID int64, requestID string) error {
+	return c.rdb.ZRem(ctx, apiKeyImageSlotKey(apiKeyID), requestID).Err()
+}
+
 func (c *concurrencyCache) AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int, leaseID string) (bool, error) {
 	if c == nil || c.rdb == nil || apiKeyID <= 0 || maxConnections <= 0 || leaseID == "" {
 		return false, nil
@@ -815,7 +833,7 @@ func (c *concurrencyCache) AcquireLiveLease(
 		userSlotKey(userID),
 		liveUserSlotKey(userID),
 		liveAPIKeySlotKey(apiKeyID),
-	}, accountMax, userMax, liveLeaseTTLSeconds, leaseID, replacing).Int()
+	}, accountMax, userMax, liveLeaseTTLSeconds, leaseID, replacing, c.slotTTLSeconds).Int()
 	return result == 1, err
 }
 
@@ -880,6 +898,42 @@ func (c *concurrencyCache) GetAPIKeyConcurrencyBatch(ctx context.Context, apiKey
 	result := make(map[int64]int, len(apiKeyIDs))
 	for _, cmd := range cmds {
 		result[cmd.apiKeyID] = int(cmd.zcardCmd.Val() + cmd.liveCmd.Val())
+	}
+	return result, nil
+}
+
+// GetAPIKeyImageConcurrencyBatch deliberately uses an isolated image namespace.
+// Live and regular request slots are part of normal API-key concurrency only.
+func (c *concurrencyCache) GetAPIKeyImageConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error) {
+	if len(apiKeyIDs) == 0 {
+		return map[int64]int{}, nil
+	}
+
+	now, err := c.rdb.Time(ctx).Result()
+	if err != nil {
+		return nil, fmt.Errorf("redis TIME: %w", err)
+	}
+	cutoffTime := now.Unix() - int64(c.slotTTLSeconds)
+
+	pipe := c.rdb.Pipeline()
+	type apiKeyCmd struct {
+		apiKeyID int64
+		zcardCmd *redis.IntCmd
+	}
+	cmds := make([]apiKeyCmd, 0, len(apiKeyIDs))
+	for _, apiKeyID := range apiKeyIDs {
+		key := apiKeyImageSlotKey(apiKeyID)
+		pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(cutoffTime, 10))
+		cmds = append(cmds, apiKeyCmd{apiKeyID: apiKeyID, zcardCmd: pipe.ZCard(ctx, key)})
+	}
+
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, fmt.Errorf("pipeline exec: %w", err)
+	}
+
+	result := make(map[int64]int, len(apiKeyIDs))
+	for _, cmd := range cmds {
+		result[cmd.apiKeyID] = int(cmd.zcardCmd.Val())
 	}
 	return result, nil
 }
@@ -952,12 +1006,14 @@ func (c *concurrencyCache) GetAccountsLoadBatch(ctx context.Context, accounts []
 	}
 
 	// 使用 Pipeline 替代 Lua 脚本，兼容 Redis Cluster（Lua 内动态拼 key 会 CROSSSLOT）。
-	// 每个账号执行 3 个命令：ZREMRANGEBYSCORE（清理过期）、ZCARD（并发数）、GET（等待数）。
+	// 每个账号只读 3 个命令：普通/Live 有效槽位各一次 ZCOUNT，加等待数 GET。
+	// 清理仍由占槽、释放、后台任务和 key TTL 负责，避免扫描候选时重复写 Redis。
 	now, err := c.rdb.Time(ctx).Result()
 	if err != nil {
 		return nil, fmt.Errorf("redis TIME: %w", err)
 	}
-	cutoffTime := now.Unix() - int64(c.slotTTLSeconds)
+	regularMin := "(" + strconv.FormatInt(now.Unix()-int64(c.slotTTLSeconds), 10)
+	liveMin := "(" + strconv.FormatInt(now.Unix()-liveLeaseTTLSeconds, 10)
 
 	pipe := c.rdb.Pipeline()
 
@@ -973,20 +1029,26 @@ func (c *concurrencyCache) GetAccountsLoadBatch(ctx context.Context, accounts []
 		slotKey := accountSlotKeyPrefix + strconv.FormatInt(acc.ID, 10)
 		liveKey := liveAccountSlotKeyPrefix + strconv.FormatInt(acc.ID, 10)
 		waitKey := accountWaitKeyPrefix + strconv.FormatInt(acc.ID, 10)
-		pipe.ZRemRangeByScore(ctx, slotKey, "-inf", strconv.FormatInt(cutoffTime, 10))
-		pipe.ZRemRangeByScore(ctx, liveKey, "-inf", strconv.FormatInt(now.Unix()-liveLeaseTTLSeconds, 10))
 		ac := accountCmds{
 			id:             acc.ID,
 			maxConcurrency: acc.MaxConcurrency,
-			zcardCmd:       pipe.ZCard(ctx, slotKey),
-			liveCmd:        pipe.ZCard(ctx, liveKey),
+			zcardCmd:       pipe.ZCount(ctx, slotKey, regularMin, "+inf"),
+			liveCmd:        pipe.ZCount(ctx, liveKey, liveMin, "+inf"),
 			getCmd:         pipe.Get(ctx, waitKey),
 		}
 		cmds = append(cmds, ac)
 	}
 
-	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+	executed, err := pipe.Exec(ctx)
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return nil, fmt.Errorf("pipeline exec: %w", err)
+	}
+	// Exec returns the first command error. An earlier missing wait key (Nil)
+	// must not hide a later WRONGTYPE/transport error and report zero load.
+	for _, cmd := range executed {
+		if err := cmd.Err(); err != nil && !errors.Is(err, redis.Nil) {
+			return nil, fmt.Errorf("pipeline %s: %w", cmd.Name(), err)
+		}
 	}
 
 	loadMap := make(map[int64]*service.AccountLoadInfo, len(accounts))
