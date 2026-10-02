@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { computed } from 'vue'
-import { CONCRETE_PLATFORM_OPTIONS, GROUP_PLATFORM_OPTIONS } from '@/constants/platforms'
+import { COMPOSITE_ROUTE_PLATFORM_OPTIONS, CONCRETE_PLATFORM_OPTIONS, GROUP_PLATFORM_OPTIONS } from '@/constants/platforms'
 import {
   BUILTIN_PLATFORM_CATALOG,
   compositePrecedencePlatformIds,
@@ -27,8 +27,11 @@ const concretePlatforms = [
   'opencode_go',
   'typesafe',
   'command_code',
-  'cline'
+  'cline',
+  'kiro'
 ]
+
+const compositeRoutePlatforms = concretePlatforms.filter((platform) => platform !== 'kiro')
 
 describe('platform option catalogs', () => {
   it('exposes every concrete account platform', () => {
@@ -40,6 +43,10 @@ describe('platform option catalogs', () => {
       ...concretePlatforms,
       'composite'
     ])
+  })
+
+  it('keeps composite route targets aligned to backend-supported platforms', () => {
+    expect(COMPOSITE_ROUTE_PLATFORM_OPTIONS.map((option) => option.value)).toEqual(compositeRoutePlatforms)
   })
 })
 
@@ -64,7 +71,7 @@ describe('platform catalog with a newly registered platform', () => {
     ])
     expect(CONCRETE_PLATFORM_OPTIONS.map((option) => option.label)).toEqual([
       'Anthropic', 'OpenAI', 'Gemini', 'Antigravity', 'Grok',
-      'Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax', 'OpenCode', 'TypeSafe / Jev', 'Command Code', 'Cline'
+      'Kimi', 'Zhipu GLM', 'DeepSeek', 'MiniMax', 'OpenCode', 'TypeSafe / Jev', 'Command Code', 'Cline', 'Kiro'
     ])
     expect(platformLabel('zhipu')).toBe('Zhipu GLM')
     expect(platformLabel('composite')).toBe('Composite')

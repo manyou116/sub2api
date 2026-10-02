@@ -38,6 +38,7 @@ const (
 	// PlatformCline 是 Cline API（多模型聚合，OpenAI 兼容 Chat Completions；按量积分计费，
 	// 另有 ClinePass 订阅）。
 	PlatformCline     = "cline"
+	PlatformKiro      = "kiro"
 	PlatformComposite = "composite"
 )
 
@@ -58,6 +59,16 @@ const (
 	APIProtocolAnthropic       = "anthropic"        // 原生 Anthropic /v1/messages（适配 Claude Code）
 	APIProtocolResponses       = "responses"        // OpenAI Responses（deepseek / kimi / minimax 原生端点，适配 Codex）
 	APIProtocolAdaptive        = "adaptive"         // 按入站协议优先选择供应商原生端点
+)
+
+const (
+	KiroAuthMethodSocial = "social"
+	KiroAuthMethodIdC    = "idc"
+)
+
+const (
+	KiroDefaultRegion    = "us-east-1"
+	KiroIDEUserAgentTmpl = "KiroIDE-0.6.18-%s"
 )
 
 // Account type constants

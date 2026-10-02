@@ -228,4 +228,6 @@ func TestCompositeConcretePlatformsIncludeCNProviders(t *testing.T) {
 		require.True(t, isConcreteRequestPlatform(platform))
 		require.True(t, canCopyAccountsFromGroupPlatform(PlatformComposite, platform))
 	}
+	require.False(t, isConcreteRequestPlatform(PlatformKiro))
+	require.False(t, canCopyAccountsFromGroupPlatform(PlatformComposite, PlatformKiro))
 }
