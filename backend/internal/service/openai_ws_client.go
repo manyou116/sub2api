@@ -73,9 +73,9 @@ type openAIWSTransportMetricsDialer interface {
 }
 
 func newDefaultOpenAIWSClientDialer() openAIWSClientDialer {
-	return &coderOpenAIWSClientDialer{
+	return newBudgetingOpenAIWSClientDialer(&coderOpenAIWSClientDialer{
 		proxyClients: make(map[string]*openAIWSProxyClientEntry),
-	}
+	})
 }
 
 type coderOpenAIWSClientDialer struct {

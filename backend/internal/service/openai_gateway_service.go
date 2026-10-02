@@ -442,6 +442,7 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
+	webImages             *OpenAIWebImagesService
 	accountRepo           AccountRepository
 	usageLogRepo          UsageLogRepository
 	usageBillingRepo      UsageBillingRepository
@@ -508,6 +509,8 @@ type OpenAIGatewayService struct {
 	// 剥离跨账号回带（openai_codex_turn_state.go）。
 	openaiCodexTurnStateOrigins sync.Map
 	openaiCodexTurnStateWrites  atomic.Uint64
+	legacyBoundedProbeTotal     atomic.Int64
+	legacyBoundedProbeFallbacks atomic.Int64
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

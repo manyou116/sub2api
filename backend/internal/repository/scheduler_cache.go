@@ -31,6 +31,8 @@ const (
 	defaultSchedulerSnapshotMGetChunkSize  = 128
 	defaultSchedulerSnapshotWriteChunkSize = 256
 	schedulerLastUsedUpdateChunkSize       = 256
+	schedulerSnapshotReadBatchPages        = 8
+	schedulerSnapshotReadBatchAccounts     = 1024
 
 	// snapshotGraceTTLSeconds 旧快照过期的宽限期（秒）。
 	// 替代立即 DEL，让正在读取旧版本的 reader 有足够时间完成 ZRANGE。
@@ -118,6 +120,7 @@ redis.call('SREM', KEYS[3], ARGV[1])
 local currentActive = redis.call('GET', KEYS[5])
 if currentActive ~= false then
     redis.call('EXPIRE', ARGV[2] .. currentActive, tonumber(ARGV[3]))
+    redis.call('EXPIRE', ARGV[2] .. currentActive .. ':uniform', tonumber(ARGV[3]))
 end
 redis.call('DEL', KEYS[4], KEYS[5])
 return currentEpoch
@@ -153,6 +156,7 @@ redis.call('SREM', KEYS[3], ARGV[1])
 local currentActive = redis.call('GET', KEYS[5])
 if currentActive ~= false then
     redis.call('EXPIRE', ARGV[2] .. currentActive, tonumber(ARGV[3]))
+    redis.call('EXPIRE', ARGV[2] .. currentActive .. ':uniform', tonumber(ARGV[3]))
 end
 redis.call('DEL', KEYS[4], KEYS[5])
 return currentEpoch
@@ -185,14 +189,14 @@ return 0
 	// 返回 1 = 已激活, 0 = 版本过旧未激活
 	activateSnapshotScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[6]) == 1 then
-    redis.call('DEL', KEYS[4])
+    redis.call('DEL', KEYS[4], KEYS[4] .. ':uniform')
     return -1
 end
 
 local currentEpoch = tonumber(redis.call('GET', KEYS[5]))
 local expectedEpoch = tonumber(ARGV[5])
 if currentEpoch == nil or expectedEpoch == nil or currentEpoch ~= expectedEpoch then
-    redis.call('DEL', KEYS[4])
+    redis.call('DEL', KEYS[4], KEYS[4] .. ':uniform')
     return -2
 end
 
@@ -202,7 +206,7 @@ local newVersion = tonumber(ARGV[1])
 if currentActive ~= false then
 	local curVersion = tonumber(currentActive)
 	if curVersion and newVersion < curVersion then
-		redis.call('DEL', KEYS[4])
+		redis.call('DEL', KEYS[4], KEYS[4] .. ':uniform')
 		return 0
 	end
 end
@@ -213,6 +217,7 @@ redis.call('SADD', KEYS[3], ARGV[2])
 
 if currentActive ~= false and currentActive ~= ARGV[1] then
 	redis.call('EXPIRE', ARGV[3] .. currentActive, tonumber(ARGV[4]))
+	redis.call('EXPIRE', ARGV[3] .. currentActive .. ':uniform', tonumber(ARGV[4]))
 end
 
 return 1
@@ -276,34 +281,54 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 		return nil, false, nil
 	}
 
-	keys := make([]string, 0, len(ids))
-	lastUsedKeys := make([]string, 0, len(ids))
-	for _, id := range ids {
-		keys = append(keys, schedulerAccountMetaKey(id))
-		lastUsedKeys = append(lastUsedKeys, schedulerLastUsedKey(id))
+	chunkSize := c.mgetChunkSize
+	if chunkSize <= 0 {
+		chunkSize = defaultSchedulerSnapshotMGetChunkSize
 	}
-	values, err := c.mgetChunked(ctx, keys)
-	if err != nil {
-		return nil, false, err
-	}
-	lastUsedValues, err := c.mgetChunked(ctx, lastUsedKeys)
-	if err != nil {
-		return nil, false, err
-	}
-
-	accounts := make([]*service.Account, 0, len(values))
-	for i, val := range values {
-		if val == nil {
-			return nil, false, nil
-		}
-		account, err := decodeCachedAccount(val)
-		if err != nil {
+	accounts := make([]*service.Account, 0, len(ids))
+	for start := 0; start < len(ids); {
+		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
-		if err := applySchedulerLastUsed(account, lastUsedValues[i]); err != nil {
+		// Bound both pipelined replies and raw JSON lifetime. The final account
+		// pool remains complete and follows the pinned snapshot's ID order.
+		batchEnd := start + min(schedulerSnapshotReadBatchAccounts, len(ids)-start)
+		pipe := c.rdb.Pipeline()
+		pages := make([]struct{ metadata, lastUsed *redis.SliceCmd }, 0, schedulerSnapshotReadBatchPages)
+		for len(pages) < schedulerSnapshotReadBatchPages && start < batchEnd {
+			end := start + min(chunkSize, batchEnd-start)
+			keys := make([]string, end-start)
+			lastUsedKeys := make([]string, end-start)
+			for i, id := range ids[start:end] {
+				keys[i] = schedulerAccountMetaKey(id)
+				lastUsedKeys[i] = schedulerLastUsedKey(id)
+			}
+			pages = append(pages, struct{ metadata, lastUsed *redis.SliceCmd }{
+				metadata: pipe.MGet(ctx, keys...),
+				lastUsed: pipe.MGet(ctx, lastUsedKeys...),
+			})
+			start = end
+		}
+		if _, err := pipe.Exec(ctx); err != nil {
 			return nil, false, err
 		}
-		accounts = append(accounts, account)
+		for _, page := range pages {
+			values := page.metadata.Val()
+			lastUsedValues := page.lastUsed.Val()
+			for i, val := range values {
+				if val == nil {
+					return nil, false, nil
+				}
+				account, err := decodeCachedAccount(val)
+				if err != nil {
+					return nil, false, err
+				}
+				if err := applySchedulerLastUsed(account, lastUsedValues[i]); err != nil {
+					return nil, false, err
+				}
+				accounts = append(accounts, account)
+			}
+		}
 	}
 
 	return accounts, true, nil
@@ -480,11 +505,14 @@ func (c *schedulerCache) allocateSnapshotVersion(ctx context.Context, bucket ser
 }
 
 func (c *schedulerCache) writeSnapshotVersionAndReturnAccountIDs(ctx context.Context, bucket service.SchedulerBucket, version string, accounts []service.Account) ([]int64, error) {
-	accountIDs, err := c.writeAccountIDs(ctx, accounts)
+	accountIDs, proof, err := c.writeAccountIDsWithPriorityProof(ctx, accounts)
 	if err != nil {
 		return nil, err
 	}
 	if err := c.writeSnapshotAccountIDs(ctx, bucket, version, accountIDs); err != nil {
+		return nil, err
+	}
+	if err := c.writeSnapshotPriorityProof(ctx, bucket, version, proof); err != nil {
 		return nil, err
 	}
 	return accountIDs, nil
@@ -604,7 +632,10 @@ func (c *schedulerCache) DeleteAccount(ctx context.Context, accountID int64) err
 		return nil
 	}
 	id := strconv.FormatInt(accountID, 10)
-	return c.rdb.Del(ctx, schedulerAccountKey(id), schedulerAccountMetaKey(id), schedulerLastUsedKey(id)).Err()
+	if !schedulerBoundedProbeEnabled() {
+		return c.rdb.Del(ctx, schedulerAccountKey(id), schedulerAccountMetaKey(id), schedulerLastUsedKey(id)).Err()
+	}
+	return deleteSchedulerAccountWithPriorityScript.Run(ctx, c.rdb, []string{schedulerPriorityLedgerKey, schedulerAccountKey(id), schedulerAccountMetaKey(id), schedulerLastUsedKey(id)}, id).Err()
 }
 
 func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error {
@@ -776,56 +807,6 @@ func decodeCachedAccount(val any) (*service.Account, error) {
 	return &account, nil
 }
 
-func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service.Account) ([]int64, error) {
-	if len(accounts) == 0 {
-		return nil, nil
-	}
-
-	pipe := c.rdb.Pipeline()
-	accountIDs := make([]int64, 0, len(accounts))
-	pending := 0
-	flush := func() error {
-		if pending == 0 {
-			return nil
-		}
-		if _, err := pipe.Exec(ctx); err != nil {
-			return err
-		}
-		pipe = c.rdb.Pipeline()
-		pending = 0
-		return nil
-	}
-
-	for _, account := range accounts {
-		fullPayload, metaPayload, err := marshalSchedulerCacheAccount(account)
-		if err != nil {
-			slog.Warn("scheduler cache skips account with unencodable payload",
-				"account_id", account.ID,
-				"error", err,
-			)
-			continue
-		}
-
-		id := strconv.FormatInt(account.ID, 10)
-		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
-		pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
-		// Keep the hot LastUsedAt side key untouched: a lagging snapshot rebuild
-		// must not overwrite a newer scheduler update.
-		accountIDs = append(accountIDs, account.ID)
-		pending++
-		if pending >= c.writeChunkSize {
-			if err := flush(); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	if err := flush(); err != nil {
-		return nil, err
-	}
-	return accountIDs, nil
-}
-
 func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, error) {
 	fullPayload, err := json.Marshal(account)
 	if err != nil {
@@ -836,30 +817,6 @@ func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, erro
 		return nil, nil, fmt.Errorf("marshal account metadata: %w", err)
 	}
 	return fullPayload, metaPayload, nil
-}
-
-func (c *schedulerCache) mgetChunked(ctx context.Context, keys []string) ([]any, error) {
-	if len(keys) == 0 {
-		return []any{}, nil
-	}
-
-	out := make([]any, 0, len(keys))
-	chunkSize := c.mgetChunkSize
-	if chunkSize <= 0 {
-		chunkSize = defaultSchedulerSnapshotMGetChunkSize
-	}
-	for start := 0; start < len(keys); start += chunkSize {
-		end := start + chunkSize
-		if end > len(keys) {
-			end = len(keys)
-		}
-		part, err := c.rdb.MGet(ctx, keys[start:end]...).Result()
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, part...)
-	}
-	return out, nil
 }
 
 func buildSchedulerMetadataAccount(account service.Account) service.Account {
