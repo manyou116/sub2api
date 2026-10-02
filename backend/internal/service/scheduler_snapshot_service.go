@@ -68,6 +68,10 @@ type schedulerSnapshotAccountIDWriter interface {
 	SetSnapshotByAccountIDs(ctx context.Context, bucket SchedulerBucket, token SchedulerBucketWriteToken, accountIDs []int64) error
 }
 
+type schedulerSnapshotWindowReader interface {
+	GetSnapshotWindow(ctx context.Context, bucket SchedulerBucket, width int) ([]*Account, bool, error)
+}
+
 func newSchedulerAccountQueryCache(taskSets ...[]schedulerBucketWriteTask) *schedulerAccountQueryCache {
 	queries := &schedulerAccountQueryCache{
 		remaining:          make(map[schedulerAccountQueryKey]int),
@@ -271,6 +275,23 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	return accounts, useMixed, nil
 }
 
+func (s *SchedulerSnapshotService) ListSchedulableAccountWindow(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool, width int) ([]Account, bool, bool, error) {
+	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
+	if s == nil || s.cache == nil || width <= 0 {
+		return nil, useMixed, false, nil
+	}
+	reader, ok := s.cache.(schedulerSnapshotWindowReader)
+	if !ok {
+		return nil, useMixed, false, nil
+	}
+	bucket := s.bucketFor(groupID, platform, s.resolveMode(platform, hasForcePlatform))
+	accounts, hit, err := reader.GetSnapshotWindow(ctx, bucket, width)
+	if err != nil || !hit {
+		return nil, useMixed, false, err
+	}
+	return derefAccounts(accounts), useMixed, true, nil
+}
+
 func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int64) (*Account, error) {
 	if accountID <= 0 {
 		return nil, nil
@@ -471,9 +492,11 @@ func (s *SchedulerSnapshotService) handleOutboxEvent(ctx context.Context, event 
 	case SchedulerOutboxEventAccountBulkChanged:
 		return s.handleBulkAccountEvent(ctx, event.Payload, seen)
 	case SchedulerOutboxEventAccountGroupsChanged:
-		return s.handleAccountEvent(ctx, event.AccountID, event.Payload, seen)
+		return s.handleAccountEvent(ctx, event.AccountID, event.Payload, seen, false)
 	case SchedulerOutboxEventAccountChanged:
-		return s.handleAccountEvent(ctx, event.AccountID, event.Payload, seen)
+		cacheOnly, _ := event.Payload["cache_only"].(bool)
+		_, hasGroupChange := event.Payload["group_ids"]
+		return s.handleAccountEvent(ctx, event.AccountID, event.Payload, seen, cacheOnly && !hasGroupChange)
 	case SchedulerOutboxEventGroupChanged:
 		return s.handleGroupEvent(ctx, event.GroupID, seen)
 	case SchedulerOutboxEventFullRebuild:
@@ -649,7 +672,7 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 	return s.rebuildBuckets(ctx, buckets, "account_bulk_change")
 }
 
-func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accountID *int64, payload map[string]any, seen map[batchSeenKey]struct{}) error {
+func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accountID *int64, payload map[string]any, seen map[batchSeenKey]struct{}, cacheOnly bool) error {
 	if accountID == nil || *accountID <= 0 {
 		return nil
 	}
@@ -678,6 +701,11 @@ func (s *SchedulerSnapshotService) handleAccountEvent(ctx context.Context, accou
 		if err := s.cache.SetAccount(ctx, account); err != nil {
 			return err
 		}
+	}
+	// Only explicitly classified payload-only changes may skip membership work.
+	// Do not mark the bucket as seen: a later state/group event still needs it.
+	if cacheOnly {
+		return nil
 	}
 	if len(groupIDs) == 0 {
 		groupIDs = account.GroupIDs
