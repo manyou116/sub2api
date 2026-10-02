@@ -47,6 +47,7 @@ const (
 	PlatformMiniMax     = domain.PlatformMiniMax
 	PlatformOpenCodeGo  = domain.PlatformOpenCodeGo
 	PlatformTypeSafe    = domain.PlatformTypeSafe
+	PlatformKiro        = domain.PlatformKiro
 )
 
 // AllPlatforms 返回所有支持的平台列表
@@ -63,6 +64,7 @@ func AllPlatforms() []string {
 		PlatformMiniMax,
 		PlatformOpenCodeGo,
 		PlatformTypeSafe,
+		PlatformKiro,
 	}
 }
 

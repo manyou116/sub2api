@@ -1046,6 +1046,7 @@ export default {
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
         typesafe: 'TypeSafe / Jev',
+        kiro: 'Kiro',
         composite: 'Composite',
       },
       deleteConfirm:
