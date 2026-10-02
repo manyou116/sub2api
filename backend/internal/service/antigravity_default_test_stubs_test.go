@@ -34,6 +34,10 @@ func (s *stubAntigravityAccountRepo) SetRateLimited(_ context.Context, id int64,
 	s.rateCalls = append(s.rateCalls, defaultRateLimitCall{accountID: id, resetAt: resetAt})
 	return nil
 }
+func (s *stubAntigravityAccountRepo) SetWebImageRateLimited(context.Context, int64, time.Time) error {
+	return nil
+}
+func (s *stubAntigravityAccountRepo) ClearWebImageRateLimit(context.Context, int64) error { return nil }
 
 func (s *stubAntigravityAccountRepo) SetModelRateLimit(_ context.Context, id int64, modelKey string, resetAt time.Time, _ ...string) error {
 	s.modelRateLimitCalls = append(s.modelRateLimitCalls, defaultModelRateLimitCall{accountID: id, modelKey: modelKey, resetAt: resetAt})
