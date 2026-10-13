@@ -21,6 +21,13 @@ func webImgTestCfg(backend string) *config.Config {
 	}}}
 }
 
+func newWebImageTestRedisClient(t *testing.T, addr string) *redis.Client {
+	t.Helper()
+	client := redis.NewClient(&redis.Options{Addr: addr})
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
 func TestOpenAIWebImages_ParseAndShouldUse(t *testing.T) {
 	svc := NewOpenAIWebImagesService(webImgTestCfg("memory"), nil, nil)
 	acc := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{

@@ -62,7 +62,8 @@ func (s *OpenAIGatewayService) shouldBypassTextRateLimitForWebImages(account *Ac
 // isOpenAIAccountRuntimeBlockedForRequest skips the text/Codex in-memory 429 fuse for web-image path.
 func (s *OpenAIGatewayService) isOpenAIAccountRuntimeBlockedForRequest(account *Account, imageCap OpenAIImagesCapability, requestedModel string) bool {
 	if s.shouldBypassTextRateLimitForWebImages(account, imageCap, requestedModel) {
-		return false
+		_, blocked := s.webImages.getCooldownCache(context.Background(), account.ID)
+		return blocked || account.IsWebImageRateLimited()
 	}
 	return s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel)
 }
@@ -91,11 +92,17 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 	requestID := uuid.NewString()
 	cfg := s.webImages.ParseAccountConfig(account)
 	if until, ok := s.webImages.getCooldownCache(ctx, account.ID); ok && time.Now().Before(until) {
-		return nil, &UpstreamFailoverError{
-			StatusCode: http.StatusBadGateway, ResponseBody: []byte(`{"error":{"message":"web image account cooling down"}}`),
-			RetryableOnSameAccount: false,
-		}
+		return nil, &OpenAIWebImagesCapacityError{Reason: "cooldown"}
 	}
+	// Reserve atomically before any upstream work, including the quota probe.
+	ok, err := s.webImages.Acquire(ctx, account.ID, cfg.MaxInflight, requestID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, &OpenAIWebImagesCapacityError{Reason: "inflight_full"}
+	}
+	defer s.webImages.Release(context.Background(), account.ID, requestID)
 
 	// Always refresh quota cache when unknown so schedulable checks are meaningful.
 	// ProbeOnSchedule=false still probes here; it only mattered when defaulted off and
@@ -116,34 +123,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 			}
 		}
 	}
-	st, _ := s.webImages.GetStatus(ctx, account)
-	if st != nil && !st.Schedulable {
-		// quota_unknown/no_quota/cooldown are account-capacity issues, not upstream 429 storms.
-		// Use 503 so clients/ops see "temporarily unavailable" instead of generic rate-limit text.
-		status := http.StatusServiceUnavailable
-		reason := st.UnschedulableReason
-		if reason == "cooldown" || reason == "inflight_full" || reason == "no_quota" {
-			status = http.StatusTooManyRequests
-		}
-		return nil, &UpstreamFailoverError{
-			StatusCode:             status,
-			ResponseBody:           []byte(`{"error":{"message":"web image account not schedulable: ` + reason + `"}}`),
-			RetryableOnSameAccount: false,
-		}
+	quota, known := s.webImages.getQuotaCache(ctx, account.ID)
+	cooldown, _ := s.webImages.getCooldown(ctx, account.ID)
+	// Capacity is already reserved; do not reject our own occupied slot.
+	if ready, reason := s.webImages.evaluateSchedulable(account, cfg, 0, quota, known, cooldown); !ready {
+		return nil, &OpenAIWebImagesCapacityError{Reason: reason}
 	}
-
-	ok, err := s.webImages.Acquire(ctx, account.ID, cfg.MaxInflight, requestID)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, &UpstreamFailoverError{
-			StatusCode:             http.StatusTooManyRequests,
-			ResponseBody:           []byte(`{"error":{"message":"web image account inflight full"}}`),
-			RetryableOnSameAccount: false,
-		}
-	}
-	defer s.webImages.Release(context.Background(), account.ID, requestID)
 
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
@@ -233,7 +218,11 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 				return nil, &OpenAIImagesUpstreamError{StatusCode: status, ErrorType: "invalid_request_error", Message: msg}
 			}
 			if we.Retryable && we.Kind != webdriver.ErrorKindPolicy {
-				s.webImages.MarkFail(ctx, account, msg, rateLimited)
+				if !rateLimited && (status >= 500 || we.Kind == webdriver.ErrorKindTransport) {
+					s.webImages.MarkTransientFailure(ctx, account, msg)
+				} else {
+					s.webImages.MarkFail(ctx, account, msg, rateLimited)
+				}
 				return nil, &UpstreamFailoverError{
 					StatusCode: status, ResponseBody: []byte(fmt.Sprintf(`{"error":{"message":%q}}`, msg)), RetryableOnSameAccount: false,
 				}

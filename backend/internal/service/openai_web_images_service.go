@@ -23,6 +23,15 @@ const openAIWebImagesExtraKey = "openai_web_images"
 
 const webImageHTMLForbiddenCooldown = 10 * time.Minute
 
+// OpenAIWebImagesCapacityError describes local admission, never an upstream 429.
+type OpenAIWebImagesCapacityError struct {
+	Reason string
+}
+
+func (e *OpenAIWebImagesCapacityError) Error() string {
+	return "web image account unavailable: " + e.Reason
+}
+
 type OpenAIWebImagesService struct {
 	cfg         *config.Config
 	rdb         *redis.Client
@@ -727,6 +736,7 @@ func (s *OpenAIWebImagesService) redisAcquire(ctx context.Context, accountID int
 	script := redis.NewScript(`
 local n = tonumber(redis.call("GET", KEYS[1]) or "0")
 local max = tonumber(ARGV[1])
+if ARGV[3] ~= "" and redis.call("SISMEMBER", KEYS[2], ARGV[3]) == 1 then return 1 end
 if n >= max then return 0 end
 n = redis.call("INCR", KEYS[1])
 redis.call("EXPIRE", KEYS[1], ARGV[2])
@@ -749,7 +759,7 @@ func (s *OpenAIWebImagesService) redisRelease(ctx context.Context, accountID int
 	reqKey := s.prefix() + "inflight:" + strconv.FormatInt(accountID, 10) + ":reqs"
 	script := redis.NewScript(`
 if ARGV[1] ~= "" then
-  redis.call("SREM", KEYS[2], ARGV[1])
+  if redis.call("SREM", KEYS[2], ARGV[1]) == 0 then return 0 end
 end
 local n = tonumber(redis.call("GET", KEYS[1]) or "0")
 if n <= 1 then
@@ -1079,6 +1089,15 @@ func (s *OpenAIWebImagesService) MarkHTMLForbidden(ctx context.Context, account 
 	}
 	s.MarkFail(ctx, account, "ChatGPT Web returned an HTML 403 page", false)
 	s.setCooldownCache(ctx, account.ID, time.Now().Add(webImageHTMLForbiddenCooldown))
+}
+
+func (s *OpenAIWebImagesService) MarkTransientFailure(ctx context.Context, account *Account, message string) {
+	if ctx.Err() != nil {
+		return
+	}
+	s.MarkFail(ctx, account, message, false)
+	// Shared, expiring backoff; leave image quota and text scheduling untouched.
+	s.setCooldownCache(ctx, account.ID, time.Now().Add(30*time.Second))
 }
 
 // classifyWebImageRateLimitReason mirrors text-channel thinking: durable window vs short fuse.

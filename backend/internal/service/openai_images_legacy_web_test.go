@@ -75,7 +75,9 @@ func TestOpenAIWebImageHTMLForbiddenFailsOverAndCoolsAccount(t *testing.T) {
 			require.Nil(t, account.WebImageRateLimitResetAt, "edge cooldown must not consume daily image quota")
 
 			_, err = svc.forwardOpenAIImagesLegacyWeb(c.Request.Context(), c, account, parsed, parsed.Model)
-			require.ErrorAs(t, err, &failover)
+			var capacityErr *OpenAIWebImagesCapacityError
+			require.ErrorAs(t, err, &capacityErr)
+			require.Equal(t, "cooldown", capacityErr.Reason)
 			require.Equal(t, 1, calls, "cooldown skips a fresh probe on the next request")
 		})
 	}

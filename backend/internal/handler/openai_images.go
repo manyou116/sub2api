@@ -163,6 +163,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
+	capacityExcluded := false
 	var lastFailoverErr *service.UpstreamFailoverError
 	stopJSONKeepalive := func() {}
 	jsonKeepaliveStarted := false
@@ -195,9 +196,14 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				}
 				message := cls.Message
 				if !cls.ModelNotFound {
-					message = "No available compatible accounts"
+					message = "No available image capacity or compatible accounts"
 				}
 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
+				return
+			}
+			if capacityExcluded && errors.Is(err, service.ErrNoAvailableAccounts) {
+				markOpsRoutingCapacityLimited(c)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "capacity_error", "No available image account capacity; retry later", streamStarted)
 				return
 			}
 			if lastFailoverErr != nil {
@@ -289,6 +295,16 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 					zap.Error(err),
 				)
 			} else {
+				var capacityErr *service.OpenAIWebImagesCapacityError
+				if errors.As(err, &capacityErr) {
+					if failoverClientGone(c) {
+						return
+					}
+					failedAccountIDs[account.ID] = struct{}{}
+					capacityExcluded = true
+					reqLog.Debug("openai.images.local_capacity_reselect", zap.Int64("account_id", account.ID), zap.String("reason", capacityErr.Reason))
+					continue
+				}
 				var imageUpstreamErr *service.OpenAIImagesUpstreamError
 				if errors.As(err, &imageUpstreamErr) {
 					retryableServerError := service.IsOpenAIImagesRetryableUpstreamError(imageUpstreamErr)
