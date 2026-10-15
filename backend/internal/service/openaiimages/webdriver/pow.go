@@ -12,22 +12,21 @@ import (
 	"time"
 )
 
-func buildRequirementsToken(userAgent string) string {
-	raw, _ := json.Marshal(buildPoWConfig(userAgent))
+func buildRequirementsToken(userAgent string, now time.Time) string {
+	raw, _ := json.Marshal(buildPoWConfig(userAgent, now))
 	return "gAAAAAC" + base64.StdEncoding.EncodeToString(raw)
 }
 
-func buildProofToken(seed, difficulty, userAgent string) (string, error) {
-	answer, ok := solvePoW(seed, difficulty, buildPoWConfig(userAgent), 500000)
+func buildProofToken(seed, difficulty, userAgent string, now time.Time) (string, error) {
+	answer, ok := solvePoW(seed, difficulty, buildPoWConfig(userAgent, now), 500000)
 	if !ok {
 		return "", fmt.Errorf("failed to solve proof token")
 	}
 	return "gAAAAAB" + answer, nil
 }
 
-func buildPoWConfig(userAgent string) []any {
-	now := time.Now().UTC()
-	dateStr := now.Format("Mon Jan 02 2006 15:04:05 GMT+0000 (Coordinated Universal Time)")
+func buildPoWConfig(userAgent string, now time.Time) []any {
+	dateStr := browserDateString(now)
 	perf := 1000 + mrand.Float64()*49000
 	cores := []int{4, 8, 12, 16}
 	return []any{"1920x1080", dateStr, 4294705152, mrand.Float64(), userAgent,

@@ -119,16 +119,21 @@ func withAccountPollLock(ctx context.Context, key string, fn func() error) error
 }
 
 func (d *Driver) ProbeQuota(ctx context.Context, auth Auth) (*Quota, error) {
+	location, err := loadWebImageTimezone()
+	if err != nil {
+		return nil, err
+	}
 	client, headers, err := d.session(auth)
 	if err != nil {
 		return nil, err
 	}
 	stage := "probe"
+	zone, offset := webImageTimezoneFields(location, time.Now())
 	resp, err := client.R().SetContext(ctx).SetHeaders(headers).
 		SetHeader("Content-Type", "application/json").
 		SetHeader("X-OpenAI-Target-Path", "/backend-api/conversation/init").
 		SetHeader("X-OpenAI-Target-Route", "/backend-api/conversation/init").
-		SetBody(map[string]any{"gizmo_id": nil, "requested_default_model": nil, "conversation_id": nil, "timezone_offset_min": -480}).
+		SetBody(map[string]any{"gizmo_id": nil, "requested_default_model": nil, "conversation_id": nil, "timezone": zone, "timezone_offset_min": offset}).
 		Post(baseURL + "/backend-api/conversation/init")
 	if err != nil {
 		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
@@ -180,13 +185,17 @@ func (d *Driver) Edit(ctx context.Context, auth Auth, req GenerateRequest) (*Gen
 
 func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isEdit bool) (*GenerateResult, error) {
 	start := time.Now()
+	location, err := loadWebImageTimezone()
+	if err != nil {
+		return nil, err
+	}
 	client, headers, err := d.session(auth)
 	if err != nil {
 		return nil, err
 	}
 	// Skip homepage warm-up GET: it costs a full RTT and is not required for backend-api calls.
 	stageLog("requirements", "start")
-	requirements, err := d.chatRequirements(ctx, client, headers)
+	requirements, err := d.chatRequirements(ctx, client, headers, location)
 	if err != nil {
 		stageLog("requirements", err.Error())
 		return nil, err
@@ -228,7 +237,7 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 	stageLog("prepare", "model="+model+" effort="+effort+" size="+strings.TrimSpace(genReq.Size)+" quality="+strings.TrimSpace(genReq.Quality))
 	parentID := uuid.NewString()
 	headers["X-Oai-Turn-Trace-Id"] = uuid.NewString()
-	conduit, err := d.prepareConversation(ctx, client, headers, requirements, finalPrompt, model, parentID)
+	conduit, err := d.prepareConversation(ctx, client, headers, location, requirements, finalPrompt, model, parentID)
 	if err != nil {
 		stageLog("prepare", err.Error())
 		return nil, err
@@ -236,7 +245,7 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 	stageLog("prepare", "conduit_len="+fmt.Sprintf("%d", len(conduit)))
 	excludeInputs := inputAssetExcludeSet(refs)
 	stageLog("sse", "start")
-	conversationID, fileIDs, sedimentIDs, err := d.startConversation(ctx, client, headers, requirements, conduit, finalPrompt, model, effort, parentID, refs, excludeInputs)
+	conversationID, fileIDs, sedimentIDs, err := d.startConversation(ctx, client, headers, location, requirements, conduit, finalPrompt, model, effort, parentID, refs, excludeInputs)
 	if err != nil {
 		stageLog("sse", err.Error())
 		return nil, err
@@ -340,10 +349,10 @@ func browserHeaders(ua string) map[string]string {
 
 type chatRequirements struct{ Token, ProofToken string }
 
-func (d *Driver) chatRequirements(ctx context.Context, client *req.Client, headers map[string]string) (*chatRequirements, error) {
+func (d *Driver) chatRequirements(ctx context.Context, client *req.Client, headers map[string]string, location *time.Location) (*chatRequirements, error) {
 	stage := "requirements"
 	ua := headers["User-Agent"]
-	pToken := buildRequirementsToken(ua)
+	pToken := buildRequirementsToken(ua, time.Now().In(location))
 	basePath := "/backend-api/sentinel/chat-requirements"
 	prep, err := client.R().SetContext(ctx).SetHeaders(cloneHeaders(headers)).SetHeader("Content-Type", "application/json").
 		SetHeader("X-OpenAI-Target-Path", basePath+"/prepare").SetHeader("X-OpenAI-Target-Route", basePath+"/prepare").
@@ -359,7 +368,7 @@ func (d *Driver) chatRequirements(ctx context.Context, client *req.Client, heade
 	}
 	proofToken := ""
 	if gjson.GetBytes(prep.Bytes(), "proofofwork.required").Bool() {
-		proofToken, err = buildProofToken(gjson.GetBytes(prep.Bytes(), "proofofwork.seed").String(), gjson.GetBytes(prep.Bytes(), "proofofwork.difficulty").String(), ua)
+		proofToken, err = buildProofToken(gjson.GetBytes(prep.Bytes(), "proofofwork.seed").String(), gjson.GetBytes(prep.Bytes(), "proofofwork.difficulty").String(), ua, time.Now().In(location))
 		if err != nil {
 			return nil, NewError(ErrorKindInternal, stage, err.Error(), 0, true)
 		}
@@ -426,12 +435,13 @@ func (d *Driver) uploadImage(ctx context.Context, client *req.Client, headers ma
 	return map[string]any{"file_id": fileID, "file_name": name, "file_size": len(img.Data), "mime_type": ct, "width": 1024, "height": 1024}, nil
 }
 
-func (d *Driver) prepareConversation(ctx context.Context, client *req.Client, headers map[string]string, reqs *chatRequirements, prompt, model, parentID string) (string, error) {
+func (d *Driver) prepareConversation(ctx context.Context, client *req.Client, headers map[string]string, location *time.Location, reqs *chatRequirements, prompt, model, parentID string) (string, error) {
 	stage := "prepare"
 	path := "/backend-api/f/conversation/prepare"
+	zone, offset := webImageTimezoneFields(location, time.Now())
 	payload := map[string]any{
 		"action": "next", "is_do_not_remember": false, "parent_message_id": parentID, "model": model,
-		"client_prepare_state": "sent", "timezone_offset_min": -480, "timezone": "Asia/Shanghai",
+		"client_prepare_state": "sent", "timezone_offset_min": offset, "timezone": zone,
 		"partial_query": map[string]any{
 			"id": uuid.NewString(), "author": map[string]any{"role": "user"},
 			"content": map[string]any{"content_type": "text", "parts": []string{prompt}},
@@ -456,7 +466,7 @@ func (d *Driver) prepareConversation(ctx context.Context, client *req.Client, he
 	return gjson.GetBytes(resp.Bytes(), "conduit_token").String(), nil
 }
 
-func (d *Driver) startConversation(ctx context.Context, client *req.Client, headers map[string]string, reqs *chatRequirements, conduitToken, prompt, model, thinkingEffort, parentID string, refs []map[string]any, excludeInputs map[string]struct{}) (string, []string, []string, error) {
+func (d *Driver) startConversation(ctx context.Context, client *req.Client, headers map[string]string, location *time.Location, reqs *chatRequirements, conduitToken, prompt, model, thinkingEffort, parentID string, refs []map[string]any, excludeInputs map[string]struct{}) (string, []string, []string, error) {
 	stage := "sse"
 	parts := make([]any, 0, len(refs)+1)
 	attachments := make([]map[string]any, 0, len(refs))
@@ -480,6 +490,7 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 		metadata["attachments"] = attachments
 	}
 	now := float64(time.Now().UnixNano()) / 1e9
+	zone, offset := webImageTimezoneFields(location, time.Now())
 	prepareState := "none"
 	if conduitToken != "" {
 		prepareState = "success"
@@ -491,7 +502,7 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 	payload := map[string]any{
 		"action":            "next",
 		"messages":          []map[string]any{{"id": uuid.NewString(), "author": map[string]any{"role": "user"}, "create_time": now, "content": content, "metadata": metadata}},
-		"parent_message_id": parentID, "model": model, "client_prepare_state": prepareState, "timezone_offset_min": -480, "timezone": "Asia/Shanghai",
+		"parent_message_id": parentID, "model": model, "client_prepare_state": prepareState, "timezone_offset_min": offset, "timezone": zone,
 		"is_do_not_remember": false, "turn_attribution": map[string]any{"turn_trigger": "composer"},
 		"local_function_names": []any{}, "genui_state_snapshots": []any{},
 		"supports_buffering": true, "supported_encodings": []string{"v1"},

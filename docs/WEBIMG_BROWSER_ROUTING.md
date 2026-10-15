@@ -48,6 +48,28 @@ With this profile, the three Codex Browser routing headers and matching
 `local.continue_in_work` is deliberately not advertised. The driver also does
 not claim support for the capture's compressed SSE extension.
 
+## Timezone
+
+Web Images uses `America/New_York` by default. Set the dedicated environment
+variable to the IANA timezone for the actual egress, for example:
+
+```yaml
+environment:
+  GATEWAY_OPENAI_WEB_IMAGES_TIMEZONE: America/New_York
+  # Alternatives: America/Los_Angeles, UTC, Asia/Shanghai
+```
+
+This controls quota probe, conversation prepare, generation/edit and Sentinel
+date fingerprints together. Offsets use the request date and timezone database,
+including daylight saving time, with JavaScript's UTC-minus-local sign. An
+invalid value fails the Web Images operation before any upstream request.
+Changing the container's `TZ` alone does not override this setting. The setting
+does not alter text/Codex requests, application timestamps or billing.
+
+No external IP geolocation lookup is performed. A country alone cannot select
+a timezone for countries with multiple zones, and different bound proxies may
+have different egress. Configure the actual egress timezone deliberately.
+
 ## Validation Boundary
 
 Regression tests inspect the final outbound JSON and headers for generation,
@@ -60,3 +82,13 @@ These offline tests verify the emitted protocol and response handling. They
 are not live single-variable experiments against ChatGPT and do not guarantee
 that the same account, subscription, proxy or client surface receives the same
 model. Production deployment and live acceptance must be reported separately.
+
+On 2026-10-16 (Asia/Shanghai), a bounded comparison on the previously authorized
+account used its current production credential, the same server egress,
+ordinary web profile, prompt and `model: auto`. UTC sent offset `0` and a
+`GMT+0000` Sentinel date; New York sent offset `240` and `GMT-0400`. Both reached
+quota probe, Sentinel prepare/finalize and conversation prepare with HTTP 200,
+then received HTTP 404 `Model not found` at the formal conversation request.
+These results verify timezone propagation, but do not establish that UTC works
+or that timezone alignment alone resolves the 404. No production settings or
+stored credentials were changed by the comparison.
