@@ -3418,11 +3418,7 @@ func (s *AccountTestService) testOpenAIImageWeb(c *gin.Context, ctx context.Cont
 	}
 	genCtx, cancel := context.WithTimeout(ctx, genTimeout)
 	defer cancel()
-	result, err := s.webImages.Driver().Generate(genCtx, webdriver.Auth{
-		AccessToken: authToken,
-		ProxyURL:    proxyURL,
-		UserAgent:   strings.TrimSpace(account.GetOpenAIUserAgent()),
-	}, webdriver.GenerateRequest{
+	result, err := s.webImages.Driver().Generate(genCtx, openAIWebImagesAuth(account, authToken, proxyURL), webdriver.GenerateRequest{
 		Prompt:         prompt,
 		Model:          sel.UpstreamModel,
 		ThinkingEffort: sel.ThinkingEffort,
