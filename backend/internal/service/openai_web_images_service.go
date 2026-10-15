@@ -656,7 +656,7 @@ func (s *OpenAIWebImagesService) ProbeAccount(ctx context.Context, accountID int
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	quota, err := s.driver.ProbeQuota(ctx, webdriver.Auth{AccessToken: token, ProxyURL: proxyURL})
+	quota, err := s.driver.ProbeQuota(ctx, openAIWebImagesAuth(account, token, proxyURL))
 	if err != nil {
 		return nil, err
 	}
@@ -665,6 +665,22 @@ func (s *OpenAIWebImagesService) ProbeAccount(ctx context.Context, accountID int
 		s.setCooldown(ctx, accountID, *quota.ResetAt)
 	}
 	return s.GetStatus(ctx, account)
+}
+
+func openAIWebImagesAuth(account *Account, token, proxyURL string) webdriver.Auth {
+	auth := webdriver.Auth{AccessToken: token, ProxyURL: proxyURL}
+	if account == nil {
+		return auth
+	}
+	auth.AccountID = account.GetChatGPTAccountID()
+	auth.UserAgent = account.GetOpenAIUserAgent()
+	auth.DeviceID = account.GetOpenAIDeviceID()
+	if auth.DeviceID == "" {
+		auth.DeviceID = uuid.NewSHA1(uuid.NameSpaceURL, []byte("sub2api:webimg:"+strconv.FormatInt(account.ID, 10))).String()
+	}
+	auth.SessionID = account.GetOpenAISessionID()
+	auth.ClientProfile = account.GetExtraString("openai_web_images_client_profile")
+	return auth
 }
 
 func (s *OpenAIWebImagesService) getAccessToken(ctx context.Context, account *Account) (string, string, error) {
@@ -1251,6 +1267,9 @@ func (s *OpenAIWebImagesService) ResolveUpstream(account *Account) WebImageUpstr
 		UpstreamModel: presetModel, ThinkingEffort: presetEffort, Source: "auto_plan",
 	}
 	if mode != "fixed" {
+		if strings.EqualFold(sel.UpstreamModel, "auto") {
+			sel.ThinkingEffort = ""
+		}
 		return sel
 	}
 
@@ -1270,6 +1289,9 @@ func (s *OpenAIWebImagesService) ResolveUpstream(account *Account) WebImageUpstr
 	}
 	sel.UpstreamModel = model
 	sel.ThinkingEffort = effort
+	if strings.EqualFold(model, "auto") {
+		sel.ThinkingEffort = ""
+	}
 	if strings.TrimSpace(cfg.Model) != "" || strings.TrimSpace(cfg.ThinkingEffort) != "" {
 		sel.Source = "account_fixed"
 	} else {

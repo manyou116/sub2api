@@ -218,11 +218,17 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 	}
 	model := imageModelSlug(genReq.Model)
 	effort := normalizeThinkingEffort(genReq.ThinkingEffort)
+	if model == "auto" {
+		// Let the upstream selector choose the model and its reasoning mode.
+		effort = ""
+	}
 	// Align with chatgpt2api build_image_prompt: force-generate + size/quality hints.
 	finalPrompt := BuildImagePrompt(genReq.Prompt, genReq.Size, genReq.Quality, genReq.N)
 	requireDownloadAttachment := shouldRequireDownloadAttachment(finalPrompt)
 	stageLog("prepare", "model="+model+" effort="+effort+" size="+strings.TrimSpace(genReq.Size)+" quality="+strings.TrimSpace(genReq.Quality))
-	conduit, err := d.prepareConversation(ctx, client, headers, requirements, finalPrompt, model)
+	parentID := uuid.NewString()
+	headers["X-Oai-Turn-Trace-Id"] = uuid.NewString()
+	conduit, err := d.prepareConversation(ctx, client, headers, requirements, finalPrompt, model, parentID)
 	if err != nil {
 		stageLog("prepare", err.Error())
 		return nil, err
@@ -230,7 +236,7 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 	stageLog("prepare", "conduit_len="+fmt.Sprintf("%d", len(conduit)))
 	excludeInputs := inputAssetExcludeSet(refs)
 	stageLog("sse", "start")
-	conversationID, fileIDs, sedimentIDs, err := d.startConversation(ctx, client, headers, requirements, conduit, finalPrompt, model, effort, refs, excludeInputs)
+	conversationID, fileIDs, sedimentIDs, err := d.startConversation(ctx, client, headers, requirements, conduit, finalPrompt, model, effort, parentID, refs, excludeInputs)
 	if err != nil {
 		stageLog("sse", err.Error())
 		return nil, err
@@ -299,15 +305,25 @@ func (d *Driver) session(auth Auth) (*req.Client, map[string]string, error) {
 	}
 	headers := browserHeaders(ua)
 	headers["Authorization"] = "Bearer " + auth.AccessToken
-	if auth.DeviceID != "" {
-		headers["Oai-Device-Id"] = auth.DeviceID
-	} else {
-		headers["Oai-Device-Id"] = uuid.NewString()
+	deviceID := strings.TrimSpace(auth.DeviceID)
+	if deviceID == "" {
+		deviceID = uuid.NewString()
 	}
-	headers["OAI-Session-Id"] = uuid.NewString()
+	headers["Oai-Did"] = deviceID
+	headers["Oai-Device-Id"] = deviceID
+	headers["OAI-Session-Id"] = strings.TrimSpace(auth.SessionID)
+	if headers["OAI-Session-Id"] == "" {
+		headers["OAI-Session-Id"] = uuid.NewString()
+	}
+	if accountID := strings.TrimSpace(auth.AccountID); accountID != "" {
+		headers["ChatGPT-Account-Id"] = accountID
+	}
+	if auth.ClientProfile == "codex_browser" {
+		headers["Originator"] = "Codex Browser"
+		headers["X-OpenAI-Web-Frontend"] = "codex_webview"
+		headers["X-OpenAI-Codex-Window-Type"] = "browser"
+	}
 	headers["Oai-Language"] = "zh-CN"
-	headers["Oai-Client-Version"] = "prod-de97061a1c9aff3931a7342defd6241031cd316a"
-	headers["Oai-Client-Build-Number"] = "8160987"
 	return client, headers, nil
 }
 
@@ -318,8 +334,6 @@ func browserHeaders(ua string) map[string]string {
 	return map[string]string{
 		"User-Agent": ua, "Accept": "application/json, text/plain, */*", "Accept-Language": "en-US,en;q=0.9",
 		"Origin": baseURL, "Referer": baseURL + "/",
-		"Sec-Ch-Ua":        `"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"`,
-		"Sec-Ch-Ua-Mobile": "?0", "Sec-Ch-Ua-Platform": `"Windows"`,
 		"Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "same-origin",
 	}
 }
@@ -352,7 +366,7 @@ func (d *Driver) chatRequirements(ctx context.Context, client *req.Client, heade
 	}
 	fin, err := client.R().SetContext(ctx).SetHeaders(cloneHeaders(headers)).SetHeader("Content-Type", "application/json").
 		SetHeader("X-OpenAI-Target-Path", basePath+"/finalize").SetHeader("X-OpenAI-Target-Route", basePath+"/finalize").
-		SetBody(map[string]any{"prepare_token": gjson.GetBytes(prep.Bytes(), "prepare_token").String(), "proof_token": proofToken, "turnstile_token": ""}).
+		SetBody(map[string]any{"prepare_token": gjson.GetBytes(prep.Bytes(), "prepare_token").String(), "proofofwork": proofToken, "turnstile": ""}).
 		Post(baseURL + basePath + "/finalize")
 	if err != nil {
 		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
@@ -412,14 +426,12 @@ func (d *Driver) uploadImage(ctx context.Context, client *req.Client, headers ma
 	return map[string]any{"file_id": fileID, "file_name": name, "file_size": len(img.Data), "mime_type": ct, "width": 1024, "height": 1024}, nil
 }
 
-func (d *Driver) prepareConversation(ctx context.Context, client *req.Client, headers map[string]string, reqs *chatRequirements, prompt, model string) (string, error) {
+func (d *Driver) prepareConversation(ctx context.Context, client *req.Client, headers map[string]string, reqs *chatRequirements, prompt, model, parentID string) (string, error) {
 	stage := "prepare"
 	path := "/backend-api/f/conversation/prepare"
-	// Align with chatgpt.com capture (Tools → Create image): empty system_hints, no picture_v2.
 	payload := map[string]any{
-		"action": "next", "fork_from_shared_post": false, "parent_message_id": "client-created-root", "model": model,
-		"client_prepare_state": "none", "timezone_offset_min": -480, "timezone": "Asia/Shanghai",
-		"conversation_mode": map[string]any{"kind": "primary_assistant"}, "system_hints": []any{},
+		"action": "next", "is_do_not_remember": false, "parent_message_id": parentID, "model": model,
+		"client_prepare_state": "sent", "timezone_offset_min": -480, "timezone": "Asia/Shanghai",
 		"partial_query": map[string]any{
 			"id": uuid.NewString(), "author": map[string]any{"role": "user"},
 			"content": map[string]any{"content_type": "text", "parts": []string{prompt}},
@@ -428,7 +440,6 @@ func (d *Driver) prepareConversation(ctx context.Context, client *req.Client, he
 	}
 	h := cloneHeaders(headers)
 	h["Content-Type"] = "application/json"
-	h["X-Conduit-Token"] = "no-token"
 	h["OpenAI-Sentinel-Chat-Requirements-Token"] = reqs.Token
 	if reqs.ProofToken != "" {
 		h["OpenAI-Sentinel-Proof-Token"] = reqs.ProofToken
@@ -445,7 +456,7 @@ func (d *Driver) prepareConversation(ctx context.Context, client *req.Client, he
 	return gjson.GetBytes(resp.Bytes(), "conduit_token").String(), nil
 }
 
-func (d *Driver) startConversation(ctx context.Context, client *req.Client, headers map[string]string, reqs *chatRequirements, conduitToken, prompt, model, thinkingEffort string, refs []map[string]any, excludeInputs map[string]struct{}) (string, []string, []string, error) {
+func (d *Driver) startConversation(ctx context.Context, client *req.Client, headers map[string]string, reqs *chatRequirements, conduitToken, prompt, model, thinkingEffort, parentID string, refs []map[string]any, excludeInputs map[string]struct{}) (string, []string, []string, error) {
 	stage := "sse"
 	parts := make([]any, 0, len(refs)+1)
 	attachments := make([]map[string]any, 0, len(refs))
@@ -469,19 +480,25 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 		metadata["attachments"] = attachments
 	}
 	now := float64(time.Now().UnixNano()) / 1e9
+	prepareState := "none"
+	if conduitToken != "" {
+		prepareState = "success"
+	}
+	clientInfo := map[string]any{"app_name": "chatgpt.com", "has_web_push_capabilities": true, "web_push_notification_permission": "default"}
+	if headers["X-OpenAI-Web-Frontend"] == "codex_webview" {
+		clientInfo["app_surface"] = "codex_browser"
+	}
 	payload := map[string]any{
 		"action":            "next",
 		"messages":          []map[string]any{{"id": uuid.NewString(), "author": map[string]any{"role": "user"}, "create_time": now, "content": content, "metadata": metadata}},
-		"parent_message_id": "client-created-root", "model": model, "client_prepare_state": "none", "timezone_offset_min": -480, "timezone": "Asia/Shanghai",
-		"conversation_mode": map[string]any{"kind": "primary_assistant"}, "enable_message_followups": true, "system_hints": []any{},
+		"parent_message_id": parentID, "model": model, "client_prepare_state": prepareState, "timezone_offset_min": -480, "timezone": "Asia/Shanghai",
+		"is_do_not_remember": false, "turn_attribution": map[string]any{"turn_trigger": "composer"},
+		"local_function_names": []any{}, "genui_state_snapshots": []any{},
 		"supports_buffering": true, "supported_encodings": []string{"v1"},
-		"client_contextual_info": map[string]any{
-			"is_dark_mode": false, "time_since_loaded": 16, "page_height": 851, "page_width": 1442, "pixel_ratio": 2,
-			"screen_height": 1080, "screen_width": 1920, "app_name": "chatgpt.com",
-			"has_web_push_capabilities": true, "web_push_notification_permission": "default",
-		},
-		"paragen_cot_summary_display_override": "allow", "force_parallel_switch": "auto",
-		"thinking_effort": thinkingEffort,
+		"client_contextual_info": clientInfo,
+	}
+	if thinkingEffort != "" {
+		payload["thinking_effort"] = thinkingEffort
 	}
 	if isWorkModeModel(model) {
 		payload["conversation_origin"] = "tpp"
@@ -497,10 +514,7 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 	}
 	if conduitToken != "" {
 		h["X-Conduit-Token"] = conduitToken
-	} else {
-		h["X-Conduit-Token"] = "no-token"
 	}
-	h["X-Oai-Turn-Trace-Id"] = uuid.NewString()
 	h["X-OpenAI-Target-Path"] = path
 	h["X-OpenAI-Target-Route"] = path
 	resp, err := client.R().SetContext(ctx).SetHeaders(h).SetBody(payload).DisableAutoReadResponse().Post(baseURL + path)

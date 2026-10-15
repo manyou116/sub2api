@@ -1,0 +1,15 @@
+{
+  "turn_attribution": {"turn_trigger": "composer"},
+  "action": "next",
+  "is_do_not_remember": false,
+  "model": "auto",
+  "client_contextual_info": {
+    "app_name": "chatgpt.com",
+    "app_surface": "codex_browser",
+    "has_web_push_capabilities": true,
+    "web_push_notification_permission": "default"
+  },
+  "supported_encodings": ["v1"],
+  "genui_state_snapshots": [],
+  "client_prepare_state": "success"
+}

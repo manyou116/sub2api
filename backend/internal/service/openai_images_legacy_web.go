@@ -170,11 +170,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 		retries = 0
 	}
 	logger.LegacyPrintf("service.openai_web_images", "web image resolve account=%d plan=%s mode=%s upstream=%s effort=%s source=%s", account.ID, sel.PlanType, sel.ModelMode, sel.UpstreamModel, sel.ThinkingEffort, sel.Source)
+	auth := openAIWebImagesAuth(account, token, proxyURL)
 	for attempt := 0; attempt <= retries; attempt++ {
 		if parsed.IsEdits() {
-			result, lastErr = s.webImages.Driver().Edit(ctx, webdriver.Auth{AccessToken: token, ProxyURL: proxyURL}, genReq)
+			result, lastErr = s.webImages.Driver().Edit(ctx, auth, genReq)
 		} else {
-			result, lastErr = s.webImages.Driver().Generate(ctx, webdriver.Auth{AccessToken: token, ProxyURL: proxyURL}, genReq)
+			result, lastErr = s.webImages.Driver().Generate(ctx, auth, genReq)
 		}
 		if lastErr == nil {
 			break

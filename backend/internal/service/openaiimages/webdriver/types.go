@@ -10,6 +10,10 @@ type Auth struct {
 	ProxyURL    string
 	UserAgent   string
 	DeviceID    string
+	AccountID   string
+	SessionID   string
+	// ClientProfile is opt-in; empty uses the ordinary web context.
+	ClientProfile string
 }
 
 type InputImage struct {
@@ -20,7 +24,7 @@ type InputImage struct {
 
 type GenerateRequest struct {
 	Prompt, Model, Size, Quality, ResponseFormat string
-	// ThinkingEffort is ChatGPT web thinking_effort (extended/high/medium/...). Empty => driver default.
+	// ThinkingEffort applies to explicit models; auto delegates reasoning to upstream.
 	ThinkingEffort string
 	N              int
 	Images         []InputImage

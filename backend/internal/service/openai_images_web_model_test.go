@@ -1,14 +1,12 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/imroc/req/v3"
@@ -29,6 +27,11 @@ func TestOpenAIWebImagesOutboundModelAndBilling(t *testing.T) {
 		} {
 			t.Run(endpoint+"/"+tt.name, func(t *testing.T) {
 				account := webImageCapacityAccount(42)
+				account.Credentials["chatgpt_account_id"] = "current-account"
+				account.Credentials["user_agent"] = "current-account-agent"
+				account.Extra["openai_device_id"] = "current-device"
+				account.Extra["openai_session_id"] = "current-session"
+				account.Extra["openai_web_images_client_profile"] = "codex_browser"
 				if tt.accountModel != "" {
 					account.Extra["openai_web_images"] = map[string]any{
 						"enabled": true, "max_inflight": 1, "model_mode": "fixed", "model": tt.accountModel,
@@ -39,7 +42,6 @@ func TestOpenAIWebImagesOutboundModelAndBilling(t *testing.T) {
 				cfg.Gateway.OpenAIWebImages.DefaultModelMode = tt.globalMode
 				cfg.Gateway.OpenAIWebImages.DefaultUpstreamModel = tt.globalModel
 				web := NewOpenAIWebImagesService(cfg, nil, repo)
-				web.setQuotaCache(context.Background(), account.ID, webImageQuotaCache{Remaining: 3, ProbedAt: time.Now()})
 				web.Driver().KeepConversation = true
 				calls := map[string]int{}
 				web.Driver().ClientFactory = func(string) (*req.Client, error) {
@@ -47,9 +49,18 @@ func TestOpenAIWebImagesOutboundModelAndBilling(t *testing.T) {
 					client.GetTransport().WrapRoundTripFunc(func(http.RoundTripper) req.HttpRoundTripFunc {
 						return func(r *http.Request) (*http.Response, error) {
 							calls[r.URL.Path]++
+							if r.URL.Host == "chatgpt.com" {
+								require.Equal(t, "current-account", r.Header.Get("ChatGPT-Account-Id"))
+								require.Equal(t, "current-device", r.Header.Get("Oai-Did"))
+								require.Equal(t, "current-session", r.Header.Get("Oai-Session-Id"))
+								require.Equal(t, "current-account-agent", r.Header.Get("User-Agent"))
+								require.Equal(t, "codex_webview", r.Header.Get("X-OpenAI-Web-Frontend"))
+							}
 							body := `{}`
 							status := http.StatusOK
 							switch r.URL.Path {
+							case "/backend-api/conversation/init":
+								body = `{"limits_progress":[{"feature_name":"image_gen","remaining":3}]}`
 							case "/backend-api/sentinel/chat-requirements/prepare", "/backend-api/sentinel/chat-requirements/finalize":
 								body = `{"token":"mock","proofofwork":{"required":false}}`
 							case "/backend-api/files":
@@ -74,7 +85,11 @@ func TestOpenAIWebImagesOutboundModelAndBilling(t *testing.T) {
 								if r.URL.Path == "/backend-api/f/conversation/prepare" {
 									body = `{"conduit_token":"mock-conduit"}`
 								} else {
-									require.Equal(t, "extended", payload.ThinkingEffort)
+									if tt.wantModel == "auto" {
+										require.Empty(t, payload.ThinkingEffort)
+									} else {
+										require.Equal(t, "extended", payload.ThinkingEffort)
+									}
 									if tt.wantModel == "gpt-5.6-luna-wm" {
 										require.Equal(t, "tpp", payload.ConversationOrigin)
 										require.Equal(t, "fast", payload.ServiceTier)
@@ -114,6 +129,7 @@ func TestOpenAIWebImagesOutboundModelAndBilling(t *testing.T) {
 				require.Equal(t, tt.wantModel, result.UpstreamModel, "record the model actually sent upstream")
 				require.Equal(t, 1, result.ImageCount)
 				require.Equal(t, "1K", result.ImageSize)
+				require.Equal(t, 1, calls["/backend-api/conversation/init"], "probe uses the same account context as generation/edit")
 				require.Equal(t, 1, calls["/backend-api/f/conversation/prepare"])
 				require.Equal(t, 1, calls["/backend-api/f/conversation"])
 				if parsed.IsEdits() {
@@ -122,4 +138,17 @@ func TestOpenAIWebImagesOutboundModelAndBilling(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestOpenAIWebImagesAuthUsesSelectedAccountContext(t *testing.T) {
+	a := webImageCapacityAccount(42)
+	b := webImageCapacityAccount(43)
+	first := openAIWebImagesAuth(a, "fresh-token", "http://proxy.invalid")
+	require.Equal(t, "fresh-token", first.AccessToken)
+	require.Equal(t, "http://proxy.invalid", first.ProxyURL)
+	require.Empty(t, first.AccountID)
+	require.Empty(t, first.ClientProfile, "Codex Browser context must be opt-in")
+	require.NotEmpty(t, first.DeviceID)
+	require.Equal(t, first.DeviceID, openAIWebImagesAuth(a, "refreshed-token", "").DeviceID)
+	require.NotEqual(t, first.DeviceID, openAIWebImagesAuth(b, "other-token", "").DeviceID)
 }
