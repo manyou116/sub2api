@@ -459,9 +459,7 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 	if len(refs) > 0 {
 		content = map[string]any{"content_type": "multimodal_text", "parts": parts}
 	}
-	// Official web Tools→Create image capture (2026-07-13):
-	// model=gpt-5-6-thinking, system_hints=[], thinking_effort=extended, client_prepare_state=none.
-	// Using picture_v2 + gpt-5-3 often creates a conversation that never actually generates images.
+	// Keep the configured model, including the browser's auto selector.
 	metadata := map[string]any{
 		"selected_connector_ids": []any{},
 		"selected_sources":       []any{},
@@ -1246,8 +1244,11 @@ func (d *Driver) deleteConversationBestEffort(client *req.Client, headers map[st
 
 func imageModelSlug(model string) string {
 	m := strings.ToLower(strings.TrimSpace(model))
+	if m == "auto" {
+		return "auto"
+	}
 	// Browser Create-image path uses the thinking chat model, not a dedicated gpt-image slug.
-	if m == "" || m == "auto" || m == "gpt-image-2" || m == "gpt-image-1" || strings.Contains(m, "gpt-image") {
+	if m == "" || m == "gpt-image-2" || m == "gpt-image-1" || strings.Contains(m, "gpt-image") {
 		return "gpt-5-6-thinking"
 	}
 	// Already an upstream ChatGPT model slug (from resolver / admin fixed config).

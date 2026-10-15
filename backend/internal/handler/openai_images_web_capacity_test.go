@@ -76,6 +76,7 @@ func TestImagesWebCapacityReselect(t *testing.T) {
 				repo := webImagesCapacityRepo{openAIImagesFailoverAccountRepo{accounts: accounts}}
 				cfg := &config.Config{RunMode: config.RunModeSimple, Gateway: config.GatewayConfig{OpenAIWebImages: config.OpenAIWebImagesConfig{
 					InflightBackend: "redis", DefaultMaxInflight: 3, UnknownQuotaPolicy: "optimistic", RedisKeyPrefix: "test:webimg:", InflightTTLSeconds: 900,
+					DefaultUpstreamModel: "auto",
 				}}}
 				mr := miniredis.RunT(t)
 				client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
@@ -101,6 +102,11 @@ func TestImagesWebCapacityReselect(t *testing.T) {
 							if id > 0 && id <= scenario.faults {
 								status, body = 403, "<html><head><style global></style></head><body>blocked</body></html>"
 							} else {
+								if r.URL.Path == "/backend-api/f/conversation/prepare" || r.URL.Path == "/backend-api/f/conversation" {
+									payload, err := io.ReadAll(r.Body)
+									require.NoError(t, err)
+									require.Equal(t, "auto", gjson.GetBytes(payload, "model").String())
+								}
 								switch {
 								case strings.HasSuffix(r.URL.Path, "/conversation/init"):
 									body = `{"limits_progress":[{"feature_name":"image_gen","remaining":3}]}`
