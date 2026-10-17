@@ -145,7 +145,7 @@ func (d *Driver) ProbeQuota(ctx context.Context, auth Auth) (*Quota, error) {
 	var resetAt *time.Time
 	found := false
 	for _, item := range gjson.GetBytes(resp.Bytes(), "limits_progress").Array() {
-		if item.Get("feature_name").String() == "image_gen" {
+		if item.Get("feature_name").String() == "image_gen" && item.Get("remaining").Type == gjson.Number {
 			found = true
 			remaining = int(item.Get("remaining").Int())
 			if raw := strings.TrimSpace(item.Get("reset_after").String()); raw != "" {
@@ -156,13 +156,7 @@ func (d *Driver) ProbeQuota(ctx context.Context, auth Auth) (*Quota, error) {
 			break
 		}
 	}
-	if !found {
-		// Paid tiers sometimes omit image_gen in limits_progress. Do not treat as remaining=0.
-		// Callers may still attempt generation; local cache stays "unknown" only if this errors.
-		// Prefer a high remaining so strict policy does not hard-block after a successful probe.
-		remaining = 999
-	}
-	return &Quota{Remaining: remaining, ResetAt: resetAt, ProbedAt: time.Now().UTC(), Raw: resp.String()}, nil
+	return &Quota{Known: found, Remaining: remaining, ResetAt: resetAt, ProbedAt: time.Now().UTC(), Raw: resp.String()}, nil
 }
 
 func stageLog(stage string, msg string) {

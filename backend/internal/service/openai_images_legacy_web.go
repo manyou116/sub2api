@@ -134,7 +134,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 	// ProbeOnSchedule=false still probes here; it only mattered when defaulted off and
 	// left brand-new accounts stuck in quota_unknown under strict policy.
 	if _, known := s.webImages.getQuotaCache(ctx, account.ID); !known {
-		if _, err := s.webImages.ProbeAccount(ctx, account.ID, true); err != nil {
+		if _, err := s.webImages.ProbeAccount(ctx, account.ID, false); err != nil {
 			logger.LegacyPrintf("service.openai_web_images", "web image probe failed account=%d err=%v policy=%s", account.ID, err, s.webImages.cfgOrDefault().UnknownQuotaPolicy)
 			var webErr *webdriver.Error
 			if asWebErr(err, &webErr) && webErr.Kind == webdriver.ErrorKindAuth {

@@ -47,6 +47,7 @@ type GenerateResult struct {
 	Meta    Meta
 }
 type Quota struct {
+	Known     bool
 	Remaining int
 	ResetAt   *time.Time
 	ProbedAt  time.Time

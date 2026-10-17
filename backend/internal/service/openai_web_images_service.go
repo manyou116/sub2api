@@ -48,6 +48,7 @@ type OpenAIWebImagesService struct {
 }
 
 type webImageQuotaCache struct {
+	Unknown   bool
 	Remaining int
 	ResetAt   *time.Time
 	ProbedAt  time.Time
@@ -637,7 +638,7 @@ func (s *OpenAIWebImagesService) ProbeAccount(ctx context.Context, accountID int
 		return nil, err
 	}
 	if !force {
-		if _, ok := s.getQuotaCache(ctx, accountID); ok {
+		if q, ok := s.getQuotaCache(ctx, accountID); ok || (!q.ProbedAt.IsZero() && time.Since(q.ProbedAt) < time.Duration(s.cfgOrDefault().QuotaCacheTTLSeconds)*time.Second) {
 			return s.GetStatus(ctx, account)
 		}
 	}
@@ -660,8 +661,8 @@ func (s *OpenAIWebImagesService) ProbeAccount(ctx context.Context, accountID int
 	if err != nil {
 		return nil, err
 	}
-	s.setQuotaCache(ctx, accountID, webImageQuotaCache{Remaining: quota.Remaining, ResetAt: quota.ResetAt, ProbedAt: quota.ProbedAt})
-	if quota.Remaining <= 0 && quota.ResetAt != nil {
+	s.setQuotaCache(ctx, accountID, webImageQuotaCache{Unknown: !quota.Known, Remaining: quota.Remaining, ResetAt: quota.ResetAt, ProbedAt: quota.ProbedAt})
+	if quota.Known && quota.Remaining <= 0 && quota.ResetAt != nil {
 		s.setCooldown(ctx, accountID, *quota.ResetAt)
 	}
 	return s.GetStatus(ctx, account)
@@ -864,7 +865,7 @@ func (s *OpenAIWebImagesService) getQuotaCache(ctx context.Context, accountID in
 		if err != nil || len(m) == 0 {
 			return webImageQuotaCache{}, false
 		}
-		q := webImageQuotaCache{}
+		q := webImageQuotaCache{Unknown: m["known"] == "0"}
 		q.Remaining, _ = strconv.Atoi(m["remaining"])
 		if v := m["probed_at"]; v != "" {
 			if t, e := time.Parse(time.RFC3339, v); e == nil {
@@ -879,7 +880,7 @@ func (s *OpenAIWebImagesService) getQuotaCache(ctx context.Context, accountID in
 		if q.ProbedAt.IsZero() || time.Since(q.ProbedAt) > ttl {
 			return q, false
 		}
-		return q, true
+		return q, !q.Unknown
 	}
 	s.memMu.Lock()
 	defer s.memMu.Unlock()
@@ -887,14 +888,18 @@ func (s *OpenAIWebImagesService) getQuotaCache(ctx context.Context, accountID in
 	if !ok || q.ProbedAt.IsZero() || time.Since(q.ProbedAt) > ttl {
 		return webImageQuotaCache{}, false
 	}
-	return q, true
+	return q, !q.Unknown
 }
 
 func (s *OpenAIWebImagesService) setQuotaCache(ctx context.Context, accountID int64, q webImageQuotaCache) {
 	ttl := time.Duration(s.cfgOrDefault().QuotaCacheTTLSeconds) * time.Second
 	if s.useRedis() {
 		key := s.prefix() + "quota:" + strconv.FormatInt(accountID, 10)
-		fields := map[string]any{"remaining": q.Remaining, "probed_at": q.ProbedAt.UTC().Format(time.RFC3339)}
+		known := "1"
+		if q.Unknown {
+			known = "0"
+		}
+		fields := map[string]any{"remaining": q.Remaining, "known": known, "reset_at": "", "probed_at": q.ProbedAt.UTC().Format(time.RFC3339)}
 		if q.ResetAt != nil {
 			fields["reset_at"] = q.ResetAt.UTC().Format(time.RFC3339)
 		}
