@@ -913,20 +913,19 @@ func (s *OpenAIWebImagesService) getCooldown(ctx context.Context, accountID int6
 	}
 	now := time.Now()
 	// 1) Hot cache (Redis / memory) — may be missing after restart; never sole truth.
-	if t, ok := s.getCooldownCache(ctx, accountID); ok && now.Before(t) {
-		return t, true
-	}
+	until, _ := s.getCooldownCache(ctx, accountID)
 	// 2) Durable Postgres columns (source of truth).
 	if s.accountRepo != nil {
 		if acc, err := s.accountRepo.GetByID(ctx, accountID); err == nil && acc != nil {
 			if acc.WebImageRateLimitResetAt != nil && now.Before(*acc.WebImageRateLimitResetAt) {
-				until := acc.WebImageRateLimitResetAt.UTC()
-				s.setCooldownCache(ctx, accountID, until)
-				return until, true
+				if durable := acc.WebImageRateLimitResetAt.UTC(); durable.After(until) {
+					until = durable
+					s.setCooldownCache(ctx, accountID, until)
+				}
 			}
 		}
 	}
-	return time.Time{}, false
+	return until, now.Before(until)
 }
 
 func (s *OpenAIWebImagesService) getCooldownCache(ctx context.Context, accountID int64) (time.Time, bool) {
@@ -959,11 +958,20 @@ func (s *OpenAIWebImagesService) setCooldownCache(ctx context.Context, accountID
 		if ttl <= 0 {
 			return
 		}
-		_ = s.rdb.Set(ctx, s.prefix()+"cooldown:"+strconv.FormatInt(accountID, 10), until.UTC().Format(time.RFC3339), ttl).Err()
+		// Fixed-width UTC deadlines compare lexically; normalize the previous seconds-only format.
+		_, _ = s.rdb.Eval(ctx, `
+local old = redis.call("GET", KEYS[1])
+if old and string.len(old) == 20 then old = string.sub(old, 1, 19) .. ".000000000Z" end
+if not old or old < ARGV[1] then
+  redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
+end
+return 1`, []string{s.prefix() + "cooldown:" + strconv.FormatInt(accountID, 10)}, until.UTC().Format("2006-01-02T15:04:05.000000000Z"), ttl.Milliseconds()+1).Result()
 		return
 	}
 	s.memMu.Lock()
-	s.memCooldown[accountID] = until
+	if until.After(s.memCooldown[accountID]) {
+		s.memCooldown[accountID] = until
+	}
 	s.memMu.Unlock()
 }
 
@@ -1105,6 +1113,21 @@ func (s *OpenAIWebImagesService) MarkHTMLForbidden(ctx context.Context, account 
 	}
 	s.MarkFail(ctx, account, "ChatGPT Web returned an HTML 403 page", false)
 	s.setCooldownCache(ctx, account.ID, time.Now().Add(webImageHTMLForbiddenCooldown))
+}
+
+func (s *OpenAIWebImagesService) MarkRateLimitFailure(ctx context.Context, account *Account, err *webdriver.Error) {
+	if account == nil || err == nil || ctx.Err() != nil {
+		return
+	}
+	imageQuota := !strings.EqualFold(err.Code, "work_usage_limit_exceeded") && webdriver.IsImageQuotaLimitedMessage(err.Message)
+	s.MarkFail(ctx, account, err.Message, imageQuota)
+	until := time.Now().Add(90 * time.Second)
+	if err.ResetAt != nil && err.ResetAt.After(time.Now()) {
+		until = *err.ResetAt
+		s.setCooldown(ctx, account.ID, until)
+	} else if !imageQuota {
+		s.setCooldownCache(ctx, account.ID, until)
+	}
 }
 
 func (s *OpenAIWebImagesService) MarkTransientFailure(ctx context.Context, account *Account, message string) {

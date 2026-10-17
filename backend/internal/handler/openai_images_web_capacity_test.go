@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -54,12 +55,17 @@ func TestImagesWebCapacityReselect(t *testing.T) {
 			count, faults, raceAccount int
 			busy                       []int64
 			status                     int
+			quotaFaults                bool
+			limitedWork                int
 		}{
 			{name: "A busy B free", count: 2, busy: []int64{1}, status: 200},
 			{name: "A loses atomic race B free", count: 2, raceAccount: 1, status: 200},
 			{name: "five faults then race then healthy", count: 7, faults: 5, raceAccount: 6, status: 200},
 			{name: "all busy", count: 2, busy: []int64{1, 2}, status: 503},
 			{name: "race exhausts capacity", count: 1, raceAccount: 1, status: 503},
+			{name: "three quota errors then healthy", count: 4, faults: 3, quotaFaults: true, status: 200},
+			{name: "limited work account then healthy", count: 2, limitedWork: 1, status: 200},
+			{name: "all work accounts limited", count: 2, limitedWork: 2, status: 503},
 		} {
 			t.Run(endpoint+"/"+scenario.name, func(t *testing.T) {
 				t.Setenv("SUB2API_SCHEDULER_BOUNDED_PROBE", "true")
@@ -71,6 +77,11 @@ func TestImagesWebCapacityReselect(t *testing.T) {
 						Status: service.StatusActive, Schedulable: true, Concurrency: 10, Priority: i, GroupIDs: []int64{groupID},
 						Credentials: map[string]any{"access_token": fmt.Sprintf("test-%d", i+1)},
 						Extra:       map[string]any{"openai_web_images": map[string]any{"enabled": true, "max_inflight": 1, "require_download_attachment": false}},
+					}
+					if i < scenario.limitedWork {
+						until := time.Now().Add(time.Hour)
+						accounts[i].RateLimitResetAt = &until
+						accounts[i].Extra["openai_web_images"] = map[string]any{"enabled": true, "max_inflight": 1, "model_mode": "fixed", "model": "gpt-5.6-luna-wm"}
 					}
 				}
 				repo := webImagesCapacityRepo{openAIImagesFailoverAccountRepo{accounts: accounts}}
@@ -88,6 +99,7 @@ func TestImagesWebCapacityReselect(t *testing.T) {
 					require.True(t, ok)
 				}
 				upstreamCalls := make(map[int]int)
+				conversationCalls := make(map[int]int)
 				web.Driver().KeepConversation = true
 				web.Driver().ClientFactory = func(string) (*req.Client, error) {
 					c := req.C()
@@ -99,7 +111,7 @@ func TestImagesWebCapacityReselect(t *testing.T) {
 							}
 							body := `{}`
 							status := 200
-							if id > 0 && id <= scenario.faults {
+							if id > 0 && id <= scenario.faults && !scenario.quotaFaults {
 								status, body = 403, "<html><head><style global></style></head><body>blocked</body></html>"
 							} else {
 								if r.URL.Path == "/backend-api/f/conversation/prepare" || r.URL.Path == "/backend-api/f/conversation" {
@@ -115,7 +127,11 @@ func TestImagesWebCapacityReselect(t *testing.T) {
 								case r.URL.Path == "/backend-api/files":
 									body = `{"file_id":"file_input","upload_url":"https://mock.invalid/upload"}`
 								case r.URL.Path == "/backend-api/f/conversation":
+									conversationCalls[id]++
 									body = "data: {\"conversation_id\":\"test-conversation\",\"asset_pointer\":\"file-service://file_00000000aaaaaaaaaaaaaaaaaaaaaaaa\"}\n\n"
+									if scenario.quotaFaults && id <= scenario.faults {
+										body = "data: {\"v\":{\"message\":{\"author\":{\"role\":\"assistant\"},\"metadata\":{\"error_metadata\":{\"error_code\":\"work_usage_limit_exceeded\",\"error_message\":\"The usage limit has been reached\"}}}}}\n\n"
+									}
 								case strings.HasSuffix(r.URL.Path, "/download"):
 									body = `{"download_url":"https://mock.invalid/image"}`
 								case r.URL.Path == "/image":
@@ -184,6 +200,9 @@ func TestImagesWebCapacityReselect(t *testing.T) {
 				for _, id := range scenario.busy {
 					require.Zero(t, upstreamCalls[int(id)])
 				}
+				for id := 1; id <= scenario.limitedWork; id++ {
+					require.Zero(t, upstreamCalls[id], "shared quota gate must run before any upstream request")
+				}
 				if scenario.status == 200 {
 					require.Equal(t, "aW1hZ2UtYnl0ZXM=", gjson.GetBytes(recorder.Body.Bytes(), "data.0.b64_json").String())
 					require.False(t, web.IsInflightFull(context.Background(), &accounts[len(accounts)-1]))
@@ -192,7 +211,11 @@ func TestImagesWebCapacityReselect(t *testing.T) {
 				}
 				require.Len(t, logs.FilterMessage("openai.images.upstream_failover_switching").All(), scenario.faults, "only actual upstream failures consume switches")
 				for id := 1; id <= scenario.faults; id++ {
-					require.Equal(t, 1, upstreamCalls[id])
+					if scenario.quotaFaults {
+						require.Equal(t, 1, conversationCalls[id], "quota error must not regenerate on the same account")
+					} else {
+						require.Equal(t, 1, upstreamCalls[id])
+					}
 					require.True(t, web.IsWebRateLimited(context.Background(), int64(id)))
 				}
 			})

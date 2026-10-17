@@ -1472,7 +1472,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 			filterStats.exclude("not_schedulable")
 			continue
 		}
-		if s.service.isOpenAIAccountRuntimeBlockedForRequest(account, req.RequiredImageCapability, req.RequestedModel) {
+		if s.service.isOpenAIAccountRuntimeBlockedForRequest(ctx, account, req.RequiredImageCapability, req.RequestedModel) {
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
@@ -1805,7 +1805,7 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if s != nil && s.service != nil && s.service.isWebImageInflightFullForRequest(ctx, account, req.RequiredImageCapability, req.RequestedModel) {
 		return false, "web_image_inflight_full"
 	}
-	if s != nil && s.service != nil && s.service.isOpenAIAccountRuntimeBlockedForRequest(account, req.RequiredImageCapability, req.RequestedModel) {
+	if s != nil && s.service != nil && s.service.isOpenAIAccountRuntimeBlockedForRequest(ctx, account, req.RequiredImageCapability, req.RequestedModel) {
 		return false, "runtime_blocked"
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(ctx, account) {

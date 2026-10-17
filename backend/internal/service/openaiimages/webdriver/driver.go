@@ -511,7 +511,7 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 	if thinkingEffort != "" {
 		payload["thinking_effort"] = thinkingEffort
 	}
-	if isWorkModeModel(model) {
+	if IsWorkModeModel(model) {
 		payload["conversation_origin"] = "tpp"
 		payload["service_tier"] = "fast"
 	}
@@ -676,8 +676,8 @@ loop:
 								appendSediment(strings.TrimPrefix(p, "sediment://"))
 							}
 						}
-						if rl := extractTaskRateLimitError([]byte(d2)); rl != "" {
-							return conversationID, fileIDs, sedimentIDs, NewError(ErrorKindRateLimited, stage, rl, http.StatusTooManyRequests, true)
+						if rl := extractTaskRateLimitError(stage, []byte(d2)); rl != nil {
+							return conversationID, fileIDs, sedimentIDs, rl
 						}
 						if policy := extractTaskPolicyError([]byte(d2)); policy != "" {
 							return conversationID, fileIDs, sedimentIDs, NewError(ErrorKindPolicy, stage, policy, http.StatusBadRequest, false)
@@ -712,8 +712,8 @@ loop:
 				stageLog("sse", fmt.Sprintf("asset_from_sse files=%d sediment=%d", len(fileIDs), len(sedimentIDs)))
 				break loop
 			}
-			if rl := extractTaskRateLimitError([]byte(data)); rl != "" {
-				return conversationID, fileIDs, sedimentIDs, NewError(ErrorKindRateLimited, stage, rl, http.StatusTooManyRequests, true)
+			if rl := extractTaskRateLimitError(stage, []byte(data)); rl != nil {
+				return conversationID, fileIDs, sedimentIDs, rl
 			}
 			if policy := extractTaskPolicyError([]byte(data)); policy != "" {
 				return conversationID, fileIDs, sedimentIDs, NewError(ErrorKindPolicy, stage, policy, http.StatusBadRequest, false)
@@ -878,6 +878,9 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 				} else {
 					stageLog("poll", fmt.Sprintf("waiting attempt=%d/%d elapsed=%s", attempt+1, len(offsets), elapsed.Round(time.Millisecond)))
 				}
+			}
+			if rl := extractTaskRateLimitError(stage, body); rl != nil {
+				return rl
 			}
 			if rl := findConversationRateLimitError(body); rl != "" {
 				return NewError(ErrorKindRateLimited, stage, rl, http.StatusTooManyRequests, true)
@@ -1283,7 +1286,8 @@ func imageModelSlug(model string) string {
 	return "gpt-5-6-thinking"
 }
 
-func isWorkModeModel(model string) bool {
+// IsWorkModeModel identifies the explicit browser Work Mode model suffix.
+func IsWorkModeModel(model string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(model)), "-wm")
 }
 
@@ -1308,14 +1312,16 @@ func classifyHTTP(stage string, status int, body string) *Error {
 	if IsHTMLForbiddenResponse(status, []byte(body)) {
 		return newHTTPError(ErrorKindUpstream, "ChatGPT Web returned an HTML 403 page", true)
 	}
+	if rl := extractTaskRateLimitError(stage, []byte(body)); rl != nil {
+		return rl
+	}
 	if looksLikeRateLimitMessage(body) && IsImageQuotaLimitedMessage(body) {
 		err := newHTTPError(ErrorKindRateLimited, truncate(body, 500), true)
 		err.StatusCode = statusOr(status, http.StatusTooManyRequests)
 		return err
 	}
 	if status == http.StatusTooManyRequests {
-		// HTTP 429 without quota phrasing = temporary throttle (conversation/read), not image quota.
-		return newHTTPError(ErrorKindTransport, truncate(body, 500), true)
+		return newHTTPError(ErrorKindRateLimited, truncate(body, 500), true)
 	}
 	if looksLikePolicyMessage(body) {
 		return newHTTPError(ErrorKindPolicy, truncate(body, 300), false)
@@ -1363,10 +1369,6 @@ func IsImageQuotaLimitedMessage(text string) bool {
 		"image generation limit",
 		"image generations",
 		"limit for image",
-		"you've hit the",
-		"you have hit the",
-		"resets in",
-		"limit resets",
 		"免费版额度",
 		"免费计划",
 		"生成次数已达",
@@ -1848,26 +1850,6 @@ func extractTaskPolicyError(body []byte) string {
 		if msg != "" && looksLikePolicyMessage(msg) {
 			return msg
 		}
-	}
-	return ""
-}
-
-func extractTaskRateLimitError(body []byte) string {
-	for _, path := range []string{
-		"items.0.error.message",
-		"0.error.message",
-		"error.message",
-		"detail",
-		"message",
-	} {
-		msg := strings.TrimSpace(gjson.GetBytes(body, path).String())
-		if msg != "" && looksLikeRateLimitMessage(msg) {
-			return msg
-		}
-	}
-	// SSE event bodies may embed limit text without structured error fields.
-	if looksLikeRateLimitMessage(string(body)) {
-		return truncate(string(body), 500)
 	}
 	return ""
 }

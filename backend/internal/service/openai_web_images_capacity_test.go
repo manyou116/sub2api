@@ -185,8 +185,8 @@ func TestWebImageTransientFailureBackoffAndRecovery(t *testing.T) {
 	var failover *UpstreamFailoverError
 	require.ErrorAs(t, err, &failover)
 	require.True(t, svc.IsWebRateLimited(context.Background(), 42))
-	require.True(t, gw.isOpenAIAccountRuntimeBlockedForRequest(account, OpenAIImagesCapabilityBasic, "gpt-image-2"))
-	require.False(t, gw.isOpenAIAccountRuntimeBlockedForRequest(account, "", "gpt-5.4"), "web backoff must not block text")
+	require.True(t, gw.isOpenAIAccountRuntimeBlockedForRequest(context.Background(), account, OpenAIImagesCapabilityBasic, "gpt-image-2"))
+	require.False(t, gw.isOpenAIAccountRuntimeBlockedForRequest(context.Background(), account, "", "gpt-5.4"), "web backoff must not block text")
 	require.False(t, svc.IsInflightFull(context.Background(), account))
 	require.Nil(t, account.WebImageRateLimitResetAt)
 	q, known := svc.getQuotaCache(context.Background(), 42)
@@ -194,7 +194,7 @@ func TestWebImageTransientFailureBackoffAndRecovery(t *testing.T) {
 	require.Equal(t, 3, q.Remaining)
 	mr.FastForward(31 * time.Second)
 	require.False(t, svc.IsWebRateLimited(context.Background(), 42), "expiry permits recovery")
-	require.False(t, gw.isOpenAIAccountRuntimeBlockedForRequest(account, OpenAIImagesCapabilityBasic, "gpt-image-2"))
+	require.False(t, gw.isOpenAIAccountRuntimeBlockedForRequest(context.Background(), account, OpenAIImagesCapabilityBasic, "gpt-image-2"))
 }
 
 func TestWebImageDeadlineReleasesSlot(t *testing.T) {

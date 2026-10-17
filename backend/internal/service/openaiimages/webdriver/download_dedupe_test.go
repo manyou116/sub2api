@@ -162,7 +162,7 @@ func TestNormalizeThinkingEffortAllowsMin(t *testing.T) {
 	if got := normalizeThinkingEffort("min"); got != "min" {
 		t.Fatalf("got %q", got)
 	}
-	if !isWorkModeModel("gpt-5.6-luna-wm") {
+	if !IsWorkModeModel("gpt-5.6-luna-wm") {
 		t.Fatalf("expected -wm model to enable work-mode payload")
 	}
 }

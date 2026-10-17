@@ -67,10 +67,12 @@ const (
 
 type Error struct {
 	Kind       ErrorKind
+	Code       string
 	Message    string
 	StatusCode int
 	Retryable  bool
 	Stage      string
+	ResetAt    *time.Time
 	// ResponseBody preserves the upstream error payload for callers that need
 	// to apply account-state policy without treating all HTTP 401s alike.
 	ResponseBody []byte

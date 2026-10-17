@@ -32,8 +32,8 @@ func (s *OpenAIGatewayService) isAccountSchedulableForOpenAIRequest(ctx context.
 	if account == nil {
 		return false
 	}
-	if s.shouldBypassTextRateLimitForWebImages(account, imageCap, "") {
-		if !account.IsSchedulableIgnoringTextRateLimit() {
+	if s.shouldUseOpenAILegacyWebImages(account) && imageCap != "" {
+		if !account.IsSchedulableIgnoringTextRateLimit() || s.webImageSharedQuotaBlocked(ctx, account) {
 			return false
 		}
 		if s.webImages != nil && s.webImages.IsWebRateLimited(ctx, account.ID) {
@@ -53,6 +53,9 @@ func (s *OpenAIGatewayService) shouldBypassTextRateLimitForWebImages(account *Ac
 	if !s.webImages.ShouldUseWebPath(account) {
 		return false
 	}
+	if webdriver.IsWorkModeModel(s.webImages.ResolveUpstream(account).UpstreamModel) {
+		return false
+	}
 	if imageCap != "" {
 		return true
 	}
@@ -60,12 +63,24 @@ func (s *OpenAIGatewayService) shouldBypassTextRateLimitForWebImages(account *Ac
 }
 
 // isOpenAIAccountRuntimeBlockedForRequest skips the text/Codex in-memory 429 fuse for web-image path.
-func (s *OpenAIGatewayService) isOpenAIAccountRuntimeBlockedForRequest(account *Account, imageCap OpenAIImagesCapability, requestedModel string) bool {
-	if s.shouldBypassTextRateLimitForWebImages(account, imageCap, requestedModel) {
-		_, blocked := s.webImages.getCooldownCache(context.Background(), account.ID)
-		return blocked || account.IsWebImageRateLimited()
+func (s *OpenAIGatewayService) isOpenAIAccountRuntimeBlockedForRequest(ctx context.Context, account *Account, imageCap OpenAIImagesCapability, requestedModel string) bool {
+	if s.shouldUseOpenAILegacyWebImages(account) && (imageCap != "" || isOpenAIImageGenerationModel(requestedModel)) {
+		_, blocked := s.webImages.getCooldownCache(ctx, account.ID)
+		return blocked || account.IsWebImageRateLimited() || s.webImageSharedQuotaBlocked(ctx, account)
 	}
 	return s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel)
+}
+
+func (s *OpenAIGatewayService) webImageSharedQuotaBlocked(ctx context.Context, account *Account) bool {
+	model := s.webImages.ResolveUpstream(account).UpstreamModel
+	if !webdriver.IsWorkModeModel(model) {
+		return false
+	}
+	if !account.IsSchedulableForModelWithContext(ctx, model) || s.isOpenAIAccountRequestRuntimeBlocked(account, model) {
+		return true
+	}
+	paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, account)
+	return paused
 }
 
 func (s *OpenAIGatewayService) shouldUseOpenAILegacyWebImages(account *Account) bool {
@@ -90,6 +105,17 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 	}
 	start := time.Now()
 	requestID := uuid.NewString()
+	// Recheck the selected account before uploads/probes; its quota may have changed after selection.
+	if s.webImages.accountRepo != nil {
+		fresh, err := s.webImages.accountRepo.GetByID(ctx, account.ID)
+		if err != nil {
+			return nil, err
+		}
+		account = fresh
+	}
+	if account == nil || !s.shouldUseOpenAILegacyWebImages(account) || !account.IsSchedulableIgnoringTextRateLimit() || s.webImageSharedQuotaBlocked(ctx, account) {
+		return nil, &OpenAIWebImagesCapacityError{Reason: "account_quota_unavailable"}
+	}
 	cfg := s.webImages.ParseAccountConfig(account)
 	if until, ok := s.webImages.getCooldownCache(ctx, account.ID); ok && time.Now().Before(until) {
 		return nil, &OpenAIWebImagesCapacityError{Reason: "cooldown"}
@@ -113,6 +139,10 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 			var webErr *webdriver.Error
 			if asWebErr(err, &webErr) && webErr.Kind == webdriver.ErrorKindAuth {
 				return nil, s.openAIWebImageAuthFailover(ctx, account, webErr, channelMappedModel)
+			}
+			if asWebErr(err, &webErr) && webErr.Kind == webdriver.ErrorKindRateLimited {
+				s.webImages.MarkRateLimitFailure(ctx, account, webErr)
+				return nil, &UpstreamFailoverError{StatusCode: http.StatusTooManyRequests, ResponseBody: []byte(fmt.Sprintf(`{"error":{"message":%q}}`, webErr.Message))}
 			}
 			if asWebErr(err, &webErr) && webdriver.IsHTMLForbiddenResponse(webErr.StatusCode, webErr.ResponseBody) {
 				s.webImages.MarkHTMLForbidden(ctx, account)
@@ -189,7 +219,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 		break
 	}
 	if lastErr != nil {
-		rateLimited := false
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		status := http.StatusBadGateway
 		msg := lastErr.Error()
 		var we *webdriver.Error
@@ -210,26 +242,26 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesLegacyWeb(
 			case webdriver.ErrorKindAuth:
 				return nil, s.openAIWebImageAuthFailover(ctx, account, we, businessModel)
 			case webdriver.ErrorKindRateLimited:
-				// Only Free-plan / image-quota text should arm web cooldown + remaining=0.
-				// Conversation GET HTTP 429 is transport throttle and must not burn the account.
-				rateLimited = webdriver.IsImageQuotaLimitedMessage(msg)
+				s.webImages.MarkRateLimitFailure(ctx, account, we)
 			case webdriver.ErrorKindPolicy:
 				s.webImages.MarkFail(ctx, account, msg, false)
 				writeOpenAIWebImagesJSONError(c, status, "invalid_request_error", msg)
 				return nil, &OpenAIImagesUpstreamError{StatusCode: status, ErrorType: "invalid_request_error", Message: msg}
 			}
 			if we.Retryable && we.Kind != webdriver.ErrorKindPolicy {
-				if !rateLimited && (status >= 500 || we.Kind == webdriver.ErrorKindTransport) {
-					s.webImages.MarkTransientFailure(ctx, account, msg)
-				} else {
-					s.webImages.MarkFail(ctx, account, msg, rateLimited)
+				if we.Kind != webdriver.ErrorKindRateLimited {
+					if status >= 500 || we.Kind == webdriver.ErrorKindTransport {
+						s.webImages.MarkTransientFailure(ctx, account, msg)
+					} else {
+						s.webImages.MarkFail(ctx, account, msg, false)
+					}
 				}
 				return nil, &UpstreamFailoverError{
 					StatusCode: status, ResponseBody: []byte(fmt.Sprintf(`{"error":{"message":%q}}`, msg)), RetryableOnSameAccount: false,
 				}
 			}
 		}
-		s.webImages.MarkFail(ctx, account, msg, rateLimited)
+		s.webImages.MarkFail(ctx, account, msg, false)
 		writeOpenAIWebImagesJSONError(c, status, "upstream_error", msg)
 		return nil, &OpenAIImagesUpstreamError{StatusCode: status, ErrorType: "upstream_error", Message: msg}
 	}

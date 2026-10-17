@@ -28,13 +28,13 @@ func TestWebImagesBypassTextRateLimitForScheduling(t *testing.T) {
 	// Simulate text 429 memory fuse.
 	svc.BlockAccountScheduling(acc, time.Now().Add(time.Hour), "429")
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(acc))
-	require.False(t, svc.isOpenAIAccountRuntimeBlockedForRequest(acc, OpenAIImagesCapabilityBasic, "gpt-image-2"))
+	require.False(t, svc.isOpenAIAccountRuntimeBlockedForRequest(context.Background(), acc, OpenAIImagesCapabilityBasic, "gpt-image-2"))
 	require.True(t, svc.shouldBypassTextRateLimitForWebImages(acc, OpenAIImagesCapabilityBasic, "gpt-image-2"))
 	require.True(t, svc.isAccountSchedulableForOpenAIRequest(context.Background(), acc, OpenAIImagesCapabilityBasic))
 
 	// Chat must still be blocked.
 	require.False(t, svc.isAccountSchedulableForOpenAIRequest(context.Background(), acc, ""))
-	require.True(t, svc.isOpenAIAccountRuntimeBlockedForRequest(acc, "", "gpt-5.4"))
+	require.True(t, svc.isOpenAIAccountRuntimeBlockedForRequest(context.Background(), acc, "", "gpt-5.4"))
 }
 
 func TestImageEligibilityIgnoresCodexQuotaAutoPause(t *testing.T) {
