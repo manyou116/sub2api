@@ -41,24 +41,41 @@ Prefer control-plane:
 
 - Store **reset timestamp**, not “keep N days”.
 - Expired when `now >= reset_at` (auto-schedulable again).
-- Text 429 does **not** block web images; web image cooldown does **not** block text.
+- Ordinary Web images keep their independent quota. Explicit Work Mode models
+  ending in `-wm` also honor account/model limits and quota auto-pause, using the
+  final resolved upstream model. Both modes keep independent image concurrency.
+- Web image cooldown does **not** block text.
 - Daily Free-plan cap → parse “resets in …” → durable pin (often ~24h, cap ~48h).
 - Soft poll/CF 429 → reason `soft`, Redis-only ~90s (no durable pin).
 - Stats: `last_rate_limit_reason` = `quota_daily` | `rate_limit` | `soft`.
+- Parse structured HTTP/SSE/poll errors before truncating log messages.
+  `work_usage_limit_exceeded` and generic usage limits back off the image route
+  without zeroing image quota. Use an explicit upstream `reset_at` when present;
+  otherwise use the existing 90-second soft backoff. Expiry permits recovery.
+- Concurrent failures may only extend cooldowns. Durable and cached windows are
+  both honored; a shorter transport backoff cannot replace a longer quota block.
 
 ## Quota remaining
 
-- Redis cache `quota:{id}` (`remaining`, optional `reset_at`, `probed_at`), TTL `quota_cache_ttl_seconds`.
+- Redis cache `quota:{id}` (`known`, `remaining`, optional `reset_at`, `probed_at`), TTL `quota_cache_ttl_seconds`.
+- Missing `image_gen.remaining` stays unknown, including successful probes;
+  unknown results are cached for the same TTL without fabricating a quota.
 - Not a ledger; re-probe after reset. `unknown_quota_policy=optimistic` recommended for large pools.
 - No full-fleet high-frequency probe.
+- Force-probe bypasses cached results but still requires the shared probe lock;
+  a busy forced probe returns `WEBIMG_PROBE_BUSY`. Only its owner may release
+  the lease, including after cancellation or expiry and replacement.
 
 ## Scheduling
 
 1. Filter `web_image_rate_limit_reset_at > now`
 2. Skip text concurrency slot when web path
-3. Bypass text rate-limit for web image models when configured
+3. Bypass text rate-limit for ordinary Web images; check shared quota for `-wm`
 4. `evaluateSchedulable`: enabled, cooldown, inflight, remaining
-5. `Acquire` inflight → generate → success decrement / fail classify
+5. Recheck the selected account, atomically `Acquire` inflight, then probe/generate
+6. Local capacity exclusions do not spend the upstream switch budget. Web Images
+   use the configured image switch budget without the text OAuth three-account
+   limit; each failed account is excluded for the rest of the request.
 
 ## Config example
 

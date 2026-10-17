@@ -642,12 +642,29 @@ func (s *OpenAIWebImagesService) ProbeAccount(ctx context.Context, accountID int
 			return s.GetStatus(ctx, account)
 		}
 	}
+	// Finish upstream work before the 45-second probe lease expires.
+	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	defer cancel()
 	if s.useRedis() {
-		ok, _ := s.rdb.SetNX(ctx, s.prefix()+"probe:lock:"+strconv.FormatInt(accountID, 10), "1", 45*time.Second).Result()
-		if !ok && !force {
+		key := s.prefix() + "probe:lock:" + strconv.FormatInt(accountID, 10)
+		owner := uuid.NewString()
+		ok, err := s.rdb.SetNX(ctx, key, owner, 45*time.Second).Result()
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			if force {
+				return nil, infraerrors.Conflict("WEBIMG_PROBE_BUSY", "quota probe already in progress")
+			}
 			return s.GetStatus(ctx, account)
 		}
-		defer s.rdb.Del(ctx, s.prefix()+"probe:lock:"+strconv.FormatInt(accountID, 10))
+		defer func() {
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_, _ = s.rdb.Eval(releaseCtx, `
+if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end
+return 0`, []string{key}, owner).Result()
+		}()
 	}
 	token, _, err := s.getAccessToken(ctx, account)
 	if err != nil {
