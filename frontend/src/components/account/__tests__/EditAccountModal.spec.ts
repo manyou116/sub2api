@@ -1843,8 +1843,8 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
     expect(parent.find('[data-testid="auto-reset-credit-settings"]').exists()).toBe(true)
     expect(parent.get('[data-testid="auto-reset-credit-5h-enabled"]').attributes('aria-checked')).toBe('false')
     expect(parent.get('[data-testid="auto-reset-credit-7d-enabled"]').attributes('aria-checked')).toBe('false')
-    expect(parent.find('[data-testid="auto-reset-credit-5h-threshold"]').exists()).toBe(false)
-    expect(parent.find('[data-testid="auto-reset-credit-7d-threshold"]').exists()).toBe(false)
+    expect((parent.get('[data-testid="auto-reset-credit-5h-threshold"]').element as HTMLInputElement).value).toBe('100')
+    expect((parent.get('[data-testid="auto-reset-credit-7d-threshold"]').element as HTMLInputElement).value).toBe('100')
     parent.unmount()
     for (const account of [buildAccount(), buildOpenAISetupTokenAccount(), buildOpenAISparkShadowAccount()]) {
       const wrapper = mountModal(account)
@@ -1853,7 +1853,7 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
     }
   })
 
-  it('独立保存窗口开关，迁移旧开关仅为 7d，并清理旧配置与运行态', async () => {
+  it('独立保存窗口开关和百分比，旧开关仅迁移为 7d，并清理运行态', async () => {
     const account = buildOpenAIOAuthParentAccount()
     account.extra = {
       auto_reset_credit_enabled: true,
@@ -1864,14 +1864,25 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
     const wrapper = mountModal(account)
     expect(wrapper.get('[data-testid="auto-reset-credit-5h-enabled"]').attributes('aria-checked')).toBe('false')
     expect(wrapper.get('[data-testid="auto-reset-credit-7d-enabled"]').attributes('aria-checked')).toBe('true')
+    expect((wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').element as HTMLInputElement).value).toBe('50')
     await wrapper.get('[data-testid="auto-reset-credit-5h-enabled"]').trigger('click')
+    await wrapper.get('[data-testid="auto-reset-credit-7d-threshold"]').setValue('95.5')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
     expect(extra).toMatchObject({ auto_reset_credit_5h_enabled: true, auto_reset_credit_7d_enabled: true })
     expect(extra).not.toHaveProperty('auto_reset_credit_enabled')
-    expect(extra).not.toHaveProperty('auto_reset_credit_5h_threshold')
+    expect(extra).toMatchObject({ auto_reset_credit_5h_threshold: 0.5, auto_reset_credit_7d_threshold: 0.955 })
     expect(extra).not.toHaveProperty('codex_auto_reset_credit_state')
+    wrapper.unmount()
+  })
+
+  it.each(['0', '100.1', ''])('拒绝无效自动用卡百分比 %s', async value => {
+    const wrapper = mountModal(buildOpenAIOAuthParentAccount())
+    await wrapper.get('[data-testid="auto-reset-credit-5h-enabled"]').trigger('click')
+    await wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').setValue(value)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

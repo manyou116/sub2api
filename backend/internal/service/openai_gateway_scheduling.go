@@ -541,19 +541,19 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 	if account == nil || !account.IsOpenAI() {
 		return false, openAIQuotaAutoPauseDecision{}
 	}
-	// 只有启用的窗口在实际用量满额时退出调度并申请用卡；未启用的窗口
+	// 只有启用的窗口在实际用量达到用卡阈值时退出调度并申请用卡；未启用的窗口
 	// 沿用普通暂停。启用窗口达到普通暂停阈值时，仅明确有卡才继续放行。
 	if config := ResolveOpenAIAutoResetCreditConfig(account); config.Enabled {
 		now := time.Now()
 		utilization5h, has5h := resolveOpenAIQuotaUtilization(account.Extra, "5h", now)
 		utilization7d, has7d := resolveOpenAIQuotaUtilization(account.Extra, "7d", now)
-		if config.Enabled5h && has5h && utilization5h >= 1 {
+		if config.Enabled5h && has5h && utilization5h >= config.Threshold5h {
 			notifyOpenAIAutoResetFromScheduler(account.ID)
-			return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: 1, utilization: utilization5h, reason: "quota_auto_reset_pending_5h"}
+			return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: config.Threshold5h, utilization: utilization5h, reason: "quota_auto_reset_pending_5h"}
 		}
-		if config.Enabled7d && has7d && utilization7d >= 1 {
+		if config.Enabled7d && has7d && utilization7d >= config.Threshold7d {
 			notifyOpenAIAutoResetFromScheduler(account.ID)
-			return true, openAIQuotaAutoPauseDecision{window: "7d", threshold: 1, utilization: utilization7d, reason: "quota_auto_reset_pending_7d"}
+			return true, openAIQuotaAutoPauseDecision{window: "7d", threshold: config.Threshold7d, utilization: utilization7d, reason: "quota_auto_reset_pending_7d"}
 		}
 
 		disabled5h := resolveAccountExtraBool(account.Extra, "auto_pause_5h_disabled")

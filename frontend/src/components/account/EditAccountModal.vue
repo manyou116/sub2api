@@ -2792,6 +2792,18 @@
             ]" />
           </button>
         </div>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label class="input-label" for="auto-reset-credit-5h-threshold">{{ t('admin.accounts.autoResetCredit.threshold5h') }}</label>
+            <input id="auto-reset-credit-5h-threshold" v-model.number="autoResetCredit5hThreshold" type="number" min="0.1" max="100" step="0.1"
+              class="input" :disabled="!autoResetCredit5hEnabled" data-testid="auto-reset-credit-5h-threshold" />
+          </div>
+          <div>
+            <label class="input-label" for="auto-reset-credit-7d-threshold">{{ t('admin.accounts.autoResetCredit.threshold7d') }}</label>
+            <input id="auto-reset-credit-7d-threshold" v-model.number="autoResetCredit7dThreshold" type="number" min="0.1" max="100" step="0.1"
+              class="input" :disabled="!autoResetCredit7dEnabled" data-testid="auto-reset-credit-7d-threshold" />
+          </div>
+        </div>
       </div>
 
       <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->
@@ -3859,6 +3871,8 @@ const autoPause5hDisabled = ref(false)
 const autoPause7dDisabled = ref(false)
 const autoResetCredit5hEnabled = ref(false)
 const autoResetCredit7dEnabled = ref(false)
+const autoResetCredit5hThreshold = ref(100)
+const autoResetCredit7dThreshold = ref(100)
 const upstreamBillingAutoProbeEnabled = ref(false)
 const upstreamBillingRateSyncEnabled = ref(false)
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
@@ -4427,6 +4441,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	autoResetCredit5hEnabled.value = extra?.auto_reset_credit_5h_enabled === true
 	autoResetCredit7dEnabled.value = typeof extra?.auto_reset_credit_7d_enabled === 'boolean'
 		? extra.auto_reset_credit_7d_enabled : extra?.auto_reset_credit_enabled === true
+	autoResetCredit5hThreshold.value = typeof extra?.auto_reset_credit_5h_threshold === 'number' ? extra.auto_reset_credit_5h_threshold * 100 : 100
+	autoResetCredit7dThreshold.value = typeof extra?.auto_reset_credit_7d_threshold === 'number' ? extra.auto_reset_credit_7d_threshold * 100 : 100
 	upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
   upstreamBillingRateSyncEnabled.value =
     upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
@@ -5464,6 +5480,11 @@ const handleSubmit = async () => {
   }
 
   const updatePayload: Record<string, unknown> = { ...form }
+  if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value &&
+      [autoResetCredit5hThreshold.value, autoResetCredit7dThreshold.value].some(value => !Number.isFinite(value) || value < 0.1 || value > 100)) {
+    appStore.showError(t('admin.accounts.autoResetCredit.thresholdInvalid'))
+    return
+  }
   try {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
     if (updatePayload.proxy_id === null) {
@@ -6083,9 +6104,9 @@ const handleSubmit = async () => {
 		if (props.account.type === 'oauth' && !isSparkShadow.value) {
 			newExtra.auto_reset_credit_5h_enabled = autoResetCredit5hEnabled.value
 			newExtra.auto_reset_credit_7d_enabled = autoResetCredit7dEnabled.value
+			newExtra.auto_reset_credit_5h_threshold = autoResetCredit5hThreshold.value / 100
+			newExtra.auto_reset_credit_7d_threshold = autoResetCredit7dThreshold.value / 100
 			delete newExtra.auto_reset_credit_enabled
-			delete newExtra.auto_reset_credit_5h_threshold
-			delete newExtra.auto_reset_credit_7d_threshold
 		}
 		// 运行态只允许后端服务更新，账号编辑不得回写旧状态。
 		delete newExtra.codex_auto_reset_credit_state
