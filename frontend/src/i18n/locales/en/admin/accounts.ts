@@ -1001,9 +1001,12 @@ export default {
 	  },
       autoResetCredit: {
 	    title: 'Automatically use reset credits',
-	    hint: 'Uses the earliest-expiring credit when an enabled window reaches 100% actual upstream usage. Both switches are off by default; a 5h limit can consume a credit only if you explicitly enable it.',
-	    enable5h: 'Redeem on 5h limit',
-	    enable7d: 'Redeem on 7d limit'
+	    hint: 'Uses the earliest-expiring credit when actual upstream usage reaches the enabled window\'s threshold. Both switches are off by default; thresholds default to 100%.',
+	    enable5h: '5h automatic reset credits',
+	    enable7d: '7d automatic reset credits',
+        threshold5h: '5h threshold (%)',
+        threshold7d: '7d threshold (%)',
+        thresholdInvalid: 'Reset-credit thresholds must be between 0.1% and 100%.'
 	  },
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {

@@ -10,20 +10,22 @@ const (
 	OpenAIAutoResetCreditEnabledExtraKey     = "auto_reset_credit_enabled" // legacy: migrate to 7d only
 	OpenAIAutoResetCredit5hEnabledExtraKey   = "auto_reset_credit_5h_enabled"
 	OpenAIAutoResetCredit7dEnabledExtraKey   = "auto_reset_credit_7d_enabled"
-	OpenAIAutoResetCredit5hThresholdExtraKey = "auto_reset_credit_5h_threshold" // legacy
-	OpenAIAutoResetCredit7dThresholdExtraKey = "auto_reset_credit_7d_threshold" // legacy
+	OpenAIAutoResetCredit5hThresholdExtraKey = "auto_reset_credit_5h_threshold"
+	OpenAIAutoResetCredit7dThresholdExtraKey = "auto_reset_credit_7d_threshold"
 	OpenAIAutoResetCreditStateExtraKey       = "codex_auto_reset_credit_state"
 )
 
 // Each window must be explicitly enabled; legacy settings only opt in to the 7d window.
 type OpenAIAutoResetCreditConfig struct {
-	Enabled   bool
-	Enabled5h bool
-	Enabled7d bool
+	Enabled     bool
+	Enabled5h   bool
+	Enabled7d   bool
+	Threshold5h float64
+	Threshold7d float64
 }
 
 func ResolveOpenAIAutoResetCreditConfig(account *Account) OpenAIAutoResetCreditConfig {
-	var config OpenAIAutoResetCreditConfig
+	config := OpenAIAutoResetCreditConfig{Threshold5h: 1, Threshold7d: 1}
 	if !isOpenAIAutoResetCreditAccount(account) || account.Extra == nil {
 		return config
 	}
@@ -34,6 +36,12 @@ func ResolveOpenAIAutoResetCreditConfig(account *Account) OpenAIAutoResetCreditC
 		config.Enabled7d = resolveAccountExtraBool(account.Extra, OpenAIAutoResetCreditEnabledExtraKey)
 	}
 	config.Enabled = config.Enabled5h || config.Enabled7d
+	if value, ok := resolveAccountExtraNumber(account.Extra, OpenAIAutoResetCredit5hThresholdExtraKey); ok && isValidOpenAIAutoResetThreshold(value) {
+		config.Threshold5h = value
+	}
+	if value, ok := resolveAccountExtraNumber(account.Extra, OpenAIAutoResetCredit7dThresholdExtraKey); ok && isValidOpenAIAutoResetThreshold(value) {
+		config.Threshold7d = value
+	}
 	return config
 }
 
@@ -41,7 +49,21 @@ func isOpenAIAutoResetCreditAccount(account *Account) bool {
 	return account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth && !account.IsShadow()
 }
 
-// Accept legacy fields for migration, but never use legacy thresholds to redeem early.
+func isValidOpenAIAutoResetThreshold(value float64) bool {
+	return value >= 0.001 && value <= 1
+}
+
+func hasOpenAIAutoResetCreditConfig(extra map[string]any) bool {
+	for _, key := range []string{OpenAIAutoResetCreditEnabledExtraKey, OpenAIAutoResetCredit5hEnabledExtraKey,
+		OpenAIAutoResetCredit7dEnabledExtraKey, OpenAIAutoResetCredit5hThresholdExtraKey, OpenAIAutoResetCredit7dThresholdExtraKey} {
+		if _, ok := extra[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// Preserve absent keys so the same validation supports partial bulk updates.
 func normalizeOpenAIAutoResetCreditExtra(platform, accountType string, isShadow bool, extra map[string]any) (map[string]any, error) {
 	if extra == nil {
 		return nil, nil
@@ -50,13 +72,18 @@ func normalizeOpenAIAutoResetCreditExtra(platform, accountType string, isShadow 
 	delete(normalized, OpenAIAutoResetCreditStateExtraKey)
 	keys := []string{OpenAIAutoResetCredit5hEnabledExtraKey, OpenAIAutoResetCredit7dEnabledExtraKey}
 	_, legacy := normalized[OpenAIAutoResetCreditEnabledExtraKey]
-	hasConfig := legacy
-	for _, key := range keys {
-		_, ok := normalized[key]
-		hasConfig = hasConfig || ok
-	}
-	if hasConfig && (platform != PlatformOpenAI || accountType != AccountTypeOAuth || isShadow) {
+	if hasOpenAIAutoResetCreditConfig(normalized) && (platform != PlatformOpenAI || accountType != AccountTypeOAuth || isShadow) {
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_AUTO_RESET_CREDIT_ACCOUNT_INVALID", "automatic reset credits are only supported for OpenAI OAuth parent accounts")
+	}
+	for _, key := range []string{OpenAIAutoResetCredit5hThresholdExtraKey, OpenAIAutoResetCredit7dThresholdExtraKey} {
+		if _, present := normalized[key]; !present {
+			continue
+		}
+		value, ok := resolveAccountExtraNumber(normalized, key)
+		if !ok || !isValidOpenAIAutoResetThreshold(value) {
+			return nil, infraerrors.Newf(http.StatusBadRequest, "OPENAI_AUTO_RESET_CREDIT_THRESHOLD_INVALID", "%s must be between 0.001 and 1.0", key)
+		}
+		normalized[key] = value
 	}
 	for _, key := range keys {
 		if value, ok := normalized[key]; ok {
@@ -74,8 +101,6 @@ func normalizeOpenAIAutoResetCreditExtra(platform, accountType string, isShadow 
 		}
 	}
 	delete(normalized, OpenAIAutoResetCreditEnabledExtraKey)
-	delete(normalized, OpenAIAutoResetCredit5hThresholdExtraKey)
-	delete(normalized, OpenAIAutoResetCredit7dThresholdExtraKey)
 	return normalized, nil
 }
 

@@ -109,6 +109,92 @@ describe('BulkEditAccountModal', () => {
     )
   })
 
+  it('只批量更新勾选窗口的开关和百分比', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-5h-apply"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-5h-enabled"]').setValue('enabled')
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-5h-threshold"]').setValue('75.5')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: { auto_reset_credit_5h_enabled: true, auto_reset_credit_5h_threshold: 0.755 }
+    })
+    wrapper.unmount()
+  })
+
+  it('批量关闭窗口时保留原有百分比', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-7d-apply"]').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: { auto_reset_credit_7d_enabled: false }
+    })
+    wrapper.unmount()
+  })
+
+  it('批量修改其他字段时不提交用卡配置', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+    await wrapper.get('#bulk-edit-status-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], { status: 'active' })
+    wrapper.unmount()
+  })
+
+  it.each(['0', '100.1', ''])('无效批量用卡百分比 %s 不提交请求', async value => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-5h-apply"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-5h-enabled"]').setValue('enabled')
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-5h-threshold"]').setValue(value)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenLastCalledWith('admin.accounts.autoResetCredit.thresholdInvalid')
+    wrapper.unmount()
+  })
+
+  it('支持对当前筛选的全部账号批量设置用卡阈值', async () => {
+    const filters = { platform: 'openai', type: 'oauth', group: '12' }
+    const wrapper = mountModal({
+      accountIds: [],
+      target: { mode: 'filtered', filters, previewCount: 25, selectedPlatforms: ['openai'], selectedTypes: ['oauth'] }
+    })
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-7d-apply"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-7d-enabled"]').setValue('enabled')
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-7d-threshold"]').setValue('95')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith({
+      filters, extra: { auto_reset_credit_7d_enabled: true, auto_reset_credit_7d_threshold: 0.95 }
+    })
+    wrapper.unmount()
+  })
+
+  it('目标类型变化后不提交失效的用卡选项', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-5h-apply"]').setValue(true)
+    await wrapper.setProps({ selectedTypes: ['apikey'] } as any)
+    expect(wrapper.find('[data-testid="bulk-auto-reset-credit-settings"]').exists()).toBe(false)
+    await wrapper.get('#bulk-edit-status-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], { status: 'active' })
+    wrapper.unmount()
+  })
+
+  it('重新打开弹窗时清除用卡修改选项', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-5h-apply"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-5h-enabled"]').setValue('enabled')
+    await wrapper.get('[data-testid="bulk-auto-reset-credit-5h-threshold"]').setValue('80')
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    expect((wrapper.get('[data-testid="bulk-auto-reset-credit-5h-apply"]').element as HTMLInputElement).checked).toBe(false)
+    expect((wrapper.get('[data-testid="bulk-auto-reset-credit-5h-threshold"]').element as HTMLInputElement).value).toBe('100')
+    wrapper.unmount()
+  })
+
   it('后端拒绝修改同步账号倍率时展示专用错误', async () => {
     vi.mocked(adminAPI.accounts.bulkUpdate).mockRejectedValueOnce({
       status: 409,

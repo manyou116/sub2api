@@ -850,6 +850,23 @@
       </div>
 
       <!-- OpenAI OAuth WS mode -->
+      <div v-if="allOpenAIOAuthOnly" class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-600" data-testid="bulk-auto-reset-credit-settings">
+        <label class="input-label">{{ t('admin.accounts.autoResetCredit.title') }}</label>
+        <div v-for="window in (['5h', '7d'] as const)" :key="window" class="grid gap-3 sm:grid-cols-[1fr_8rem_8rem] sm:items-center">
+          <label class="flex items-center gap-2">
+            <input v-model="autoResetCredit[window].apply" type="checkbox" class="checkbox" :data-testid="`bulk-auto-reset-credit-${window}-apply`" />
+            <span>{{ t(`admin.accounts.autoResetCredit.enable${window}`) }}</span>
+          </label>
+          <Select v-model="autoResetCredit[window].enabled" :options="autoResetCreditOptions"
+            :disabled="!autoResetCredit[window].apply" :data-testid="`bulk-auto-reset-credit-${window}-enabled`" />
+          <div>
+            <label class="input-label text-xs" :for="`bulk-auto-reset-credit-${window}-threshold`">{{ t(`admin.accounts.autoResetCredit.threshold${window}`) }}</label>
+            <input :id="`bulk-auto-reset-credit-${window}-threshold`" v-model.number="autoResetCredit[window].threshold" type="number" min="0.1" max="100" step="0.1" class="input"
+              :disabled="!autoResetCredit[window].apply || autoResetCredit[window].enabled !== 'enabled'" :data-testid="`bulk-auto-reset-credit-${window}-threshold`" />
+          </div>
+        </div>
+      </div>
+
       <div v-if="allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <label
@@ -1671,6 +1688,14 @@ const enableCodexCLIOnlyAppServer = ref(false)
 const enableOpenAICompactMode = ref(false)
 const enableOpenAICompactModelMapping = ref(false)
 const enableRpmLimit = ref(false)
+const autoResetCredit = ref({
+  '5h': { apply: false, enabled: 'disabled', threshold: 100 },
+  '7d': { apply: false, enabled: 'disabled', threshold: 100 }
+})
+const autoResetCreditOptions = computed(() => [
+  { value: 'enabled', label: t('common.enabled') },
+  { value: 'disabled', label: t('common.disabled') }
+])
 
 // State - field values
 const submitting = ref(false)
@@ -1941,6 +1966,18 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   if (enableProxy.value) {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
     updates.proxy_id = proxyId.value === null ? 0 : proxyId.value
+  }
+
+  if (allOpenAIOAuthOnly.value) {
+    for (const window of ['5h', '7d'] as const) {
+      const setting = autoResetCredit.value[window]
+      if (!setting.apply) continue
+      const extra = ensureExtra()
+      extra[`auto_reset_credit_${window}_enabled`] = setting.enabled === 'enabled'
+      if (setting.enabled === 'enabled') {
+        extra[`auto_reset_credit_${window}_threshold`] = setting.threshold / 100
+      }
+    }
   }
 
   if (enableConcurrency.value) {
@@ -2228,6 +2265,7 @@ const handleSubmit = async () => {
     enableOpenAICompactMode.value ||
     enableOpenAICompactModelMapping.value ||
     enableRpmLimit.value ||
+    (allOpenAIOAuthOnly.value && Object.values(autoResetCredit.value).some(setting => setting.apply)) ||
     userMsgQueueMode.value !== null
 
   if (!hasAnyFieldEnabled) {
@@ -2260,6 +2298,12 @@ const handleSubmit = async () => {
   }
 
   const built = buildUpdatePayload()
+  if (allOpenAIOAuthOnly.value && Object.values(autoResetCredit.value).some(setting =>
+    setting.apply && setting.enabled === 'enabled' &&
+    (!Number.isFinite(setting.threshold) || setting.threshold < 0.1 || setting.threshold > 100))) {
+    appStore.showError(t('admin.accounts.autoResetCredit.thresholdInvalid'))
+    return
+  }
   if (!built) {
     appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
     return
@@ -2380,6 +2424,11 @@ watch(
       enableOpenAICompactMode.value = false
       enableOpenAICompactModelMapping.value = false
       enableRpmLimit.value = false
+      for (const setting of Object.values(autoResetCredit.value)) {
+        setting.apply = false
+        setting.enabled = 'disabled'
+        setting.threshold = 100
+      }
 
       // Reset all values
       baseUrl.value = ''

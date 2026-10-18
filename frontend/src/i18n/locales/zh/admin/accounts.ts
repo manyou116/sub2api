@@ -1103,9 +1103,12 @@ export default {
 	  },
       autoResetCredit: {
 	    title: '自动使用重置卡',
-	    hint: '仅在已启用窗口的上游实际用量达到 100% 时使用最早到期的可用卡；默认均关闭。5h 达限仅在单独开启后才会耗卡。',
-	    enable5h: '5h 达限时使用重置卡',
-	    enable7d: '7d 达限时使用重置卡'
+	    hint: '已启用窗口的上游实际用量达到设定比例时，使用最早到期的可用卡；两个开关默认关闭，阈值默认 100%。',
+	    enable5h: '5h 自动使用重置卡',
+	    enable7d: '7d 自动使用重置卡',
+        threshold5h: '5h 用卡阈值 (%)',
+        threshold7d: '7d 用卡阈值 (%)',
+        thresholdInvalid: '自动用卡阈值必须在 0.1% 到 100% 之间。'
 	  },
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
