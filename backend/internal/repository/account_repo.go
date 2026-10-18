@@ -538,6 +538,7 @@ func (r *accountRepository) updateLockedAccount(
 		SetNillableNotes(account.Notes).
 		SetPlatform(account.Platform).
 		SetType(account.Type).
+		SetCredentials(normalizeJSONMap(account.Credentials)).
 		SetExtra(extra).
 		SetConcurrency(account.Concurrency).
 		SetPriority(account.Priority).
@@ -546,9 +547,6 @@ func (r *accountRepository) updateLockedAccount(
 		SetSchedulable(schedulable).
 		SetAutoPauseOnExpired(account.AutoPauseOnExpired)
 
-	if !service.PreservesOpenAICredentials(ctx) {
-		builder.SetCredentials(normalizeJSONMap(account.Credentials))
-	}
 	if explicitRateMultiplier != nil {
 		builder.SetRateMultiplier(*explicitRateMultiplier)
 	}

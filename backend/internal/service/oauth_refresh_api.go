@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -184,46 +183,29 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	requestPath := isOAuthRefreshRequestPath(ctx)
 	cacheKey := executor.CacheKey(account)
 
-	var checkOpenAILease func() error
-	if account.Platform == PlatformOpenAI {
-		if _, ok := api.accountRepo.(OpenAIOAuthCredentialsRepository); !ok {
-			return nil, oauthCoordinationUnavailable()
-		}
-		bounded, check, release, err := api.acquireOpenAIRefreshLease(ctx, account)
-		if err != nil {
-			if infraerrors.Reason(err) == "OAUTH_REFRESH_BUSY" {
-				return &OAuthRefreshResult{LockHeld: true}, nil
-			}
-			return nil, err
-		}
-		defer release()
-		ctx, checkOpenAILease = bounded, check
-	} else {
-		// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）
-		localMu := api.getLocalLock(cacheKey)
-		if err := localMu.Lock(ctx); err != nil {
-			return nil, fmt.Errorf("oauth refresh local lock: %w", err)
-		}
-		defer localMu.Unlock()
+	// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）
+	localMu := api.getLocalLock(cacheKey)
+	if err := localMu.Lock(ctx); err != nil {
+		return nil, fmt.Errorf("oauth refresh local lock: %w", err)
+	}
+	defer localMu.Unlock()
 
-		// 1. 获取分布式锁
-		if api.tokenCache != nil {
-			acquired, lockErr := api.tokenCache.AcquireRefreshLock(ctx, cacheKey, api.lockTTL)
-			if lockErr != nil {
-				// Redis 错误，降级为无锁刷新（进程内互斥锁仍生效）
-				slog.Warn("oauth_refresh_lock_failed_degraded",
-					"account_id", account.ID,
-					"cache_key", cacheKey,
-					"error", lockErr,
-				)
-			} else if !acquired {
-				// 锁被其他 worker 持有
-				return &OAuthRefreshResult{LockHeld: true}, nil
-			} else {
-				defer api.releaseRefreshLock(ctx, cacheKey)
-			}
+	// 1. 获取分布式锁
+	if api.tokenCache != nil {
+		acquired, lockErr := api.tokenCache.AcquireRefreshLock(ctx, cacheKey, api.lockTTL)
+		if lockErr != nil {
+			// Redis 错误，降级为无锁刷新（进程内互斥锁仍生效）
+			slog.Warn("oauth_refresh_lock_failed_degraded",
+				"account_id", account.ID,
+				"cache_key", cacheKey,
+				"error", lockErr,
+			)
+		} else if !acquired {
+			// 锁被其他 worker 持有
+			return &OAuthRefreshResult{LockHeld: true}, nil
+		} else {
+			defer api.releaseRefreshLock(ctx, cacheKey)
 		}
-
 	}
 
 	// 2. 从 DB 重读最新 account（锁保护下，确保使用最新的 refresh_token）
@@ -272,26 +254,14 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	}
 
 	// 4. 执行平台特定刷新逻辑
-	if freshAccount.Platform == PlatformOpenAI {
-		if err := api.prepareOpenAIRefresh(ctx, checkOpenAILease, freshAccount); err != nil {
-			return nil, err
-		}
-	}
 	attemptedAccount := snapshotOAuthRefreshAccount(freshAccount)
-	exchangeCtx := ctx
-	if freshAccount.Platform == PlatformOpenAI {
-		exchangeCtx = context.WithValue(ctx, openAIExchangeOnlyKey{}, true)
-	}
-	newCredentials, refreshErr := executor.Refresh(exchangeCtx, freshAccount)
+	newCredentials, refreshErr := executor.Refresh(ctx, freshAccount)
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		// A provider implementation may ignore cancellation and return late
 		// credentials. Never persist them after the attempt/cycle boundary.
 		return nil, ctxErr
 	}
 	if refreshErr != nil {
-		if freshAccount.Platform == PlatformOpenAI {
-			api.finishKnownOpenAIRefreshFailure(ctx, checkOpenAILease, freshAccount, refreshErr)
-		}
 		// 竞争恢复：invalid_grant 可能是另一个 worker 已消费了旧 refresh_token
 		// 重新读取 DB，如果 refresh_token 已更新则说明是竞争，返回成功
 		if isInvalidGrantError(refreshErr) {
@@ -380,25 +350,6 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			// while the provider call was in flight. Return the durable row so
 			// post-refresh cache publication cannot restore that stale snapshot.
 			freshAccount = durableAccount
-		} else if freshAccount.Platform == PlatformOpenAI {
-			delete(newCredentials, "_oauth_refresh_pending")
-			if err := checkOpenAILease(); err != nil {
-				return nil, err
-			}
-			applied, updateErr := api.accountRepo.(OpenAIOAuthCredentialsRepository).UpdateOpenAIOAuthCredentialsIfUnchanged(
-				ctx, freshAccount.ID, attemptedAccount.Credentials, attemptedAccount.ProxyID, newCredentials)
-			if updateErr != nil {
-				return nil, fmt.Errorf("%w: %v", errOAuthRefreshCredentialPersist, updateErr)
-			}
-			if !applied {
-				return nil, oauthCredentialConflict()
-			}
-			// 只更新凭据的 CAS 不拥有调度状态；发布缓存前重读当前行。
-			durable, readErr := api.accountRepo.GetByID(ctx, freshAccount.ID)
-			if readErr != nil || durable == nil {
-				return nil, fmt.Errorf("%w: durable account read failed", errOAuthRefreshCredentialPersist)
-			}
-			freshAccount = durable
 		} else if updateErr := persistAccountCredentials(ctx, api.accountRepo, freshAccount, newCredentials); updateErr != nil {
 			slog.Error("oauth_refresh_update_failed",
 				"account_id", freshAccount.ID,

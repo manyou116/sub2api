@@ -396,7 +396,6 @@ type UpdateGroupInput struct {
 }
 
 type CreateAccountInput struct {
-	Schedulable        *bool // nil 保持旧客户端默认启用，false 支持先交付后验收。
 	Name               string
 	Notes              *string
 	Platform           string
