@@ -188,3 +188,29 @@ func TestOllamaCloudUsageSessionRouteOmitsAuditBody(t *testing.T) {
 	require.Equal(t, "<credential-bearing body omitted>", logs[0].RequestBody)
 	require.NotContains(t, logs[0].RequestBody, "audit-canary")
 }
+
+func TestOpenAIOAuthDeliveryAuditDoesNotStoreCredentialPayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &auditCaptureRepository{}
+	audit := service.NewAuditLogService(repo, nil)
+	audit.Start()
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(audit)))
+	router.GET("/api/v1/admin/accounts/:id/oauth-credentials", func(c *gin.Context) {
+		c.JSON(200, gin.H{"credentials": map[string]any{"refresh_token": "secret-response"}})
+	})
+	router.PUT("/api/v1/admin/accounts/:id/oauth-credentials", func(c *gin.Context) { c.Status(200) })
+	for _, method := range []string{"GET", "PUT"} {
+		request := httptest.NewRequest(method, "/api/v1/admin/accounts/7/oauth-credentials", bytes.NewBufferString(`{"credentials":{"refresh_token":"secret-request"}}`))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(httptest.NewRecorder(), request)
+	}
+	audit.Stop()
+	require.Len(t, repo.logs, 2)
+	for _, entry := range repo.logs {
+		require.NotContains(t, entry.RequestBody, "secret-request")
+		require.NotContains(t, entry.RequestBody, "secret-response")
+	}
+	require.Equal(t, "admin.accounts.oauth_credentials.read", repo.logs[0].Action)
+	require.Equal(t, "<credential-bearing body omitted>", repo.logs[1].RequestBody)
+}

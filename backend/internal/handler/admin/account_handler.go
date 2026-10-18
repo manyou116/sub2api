@@ -49,6 +49,7 @@ func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 
 // AccountHandler handles admin account management
 type AccountHandler struct {
+	oauthRefreshAPI         *service.OAuthRefreshAPI
 	claudeResetCredits      claudeResetReader
 	adminService            service.AdminService
 	oauthService            *service.OAuthService
@@ -128,6 +129,7 @@ func NewAccountHandler(
 
 // CreateAccountRequest represents create account request
 type CreateAccountRequest struct {
+	Schedulable             *bool          `json:"schedulable"`
 	Name                    string         `json:"name" binding:"required"`
 	Notes                   *string        `json:"notes"`
 	Platform                string         `json:"platform" binding:"required"`
@@ -1050,6 +1052,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 
 	result, err := executeAdminIdempotent(c, "admin.accounts.create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		account, execErr := h.adminService.CreateAccount(ctx, &service.CreateAccountInput{
+			Schedulable:           req.Schedulable,
 			Name:                  req.Name,
 			Notes:                 req.Notes,
 			Platform:              req.Platform,
@@ -1181,6 +1184,22 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
 
+	// 旧通用 PUT 仍接受凭据，但普通 OpenAI OAuth 写入必须与刷新共用锁和 CAS。
+	if h.oauthRefreshAPI != nil && len(req.Credentials) > 0 {
+		existing, readErr := h.adminService.GetAccount(c.Request.Context(), accountID)
+		if readErr != nil {
+			response.ErrorFrom(c, readErr)
+			return
+		}
+		if existing.IsOpenAI() && existing.Type == service.AccountTypeOAuth && !existing.IsOpenAIPersonalAccessToken() &&
+			(req.Type == "" || req.Type == service.AccountTypeOAuth) {
+			if _, err := h.oauthRefreshAPI.UpdateOpenAIOAuthCredentialSettings(c.Request.Context(), accountID, req.Credentials); err != nil {
+				response.ErrorFrom(c, err)
+				return
+			}
+			req.Credentials = nil
+		}
+	}
 	account, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{
 		Name:                  req.Name,
 		Notes:                 req.Notes,
@@ -1423,6 +1442,11 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	var newCredentials map[string]any
 
 	if account.IsOpenAI() {
+		if h.oauthRefreshAPI != nil && !account.IsOpenAIPersonalAccessToken() {
+			updated, err := h.oauthRefreshAPI.MutateOpenAIOAuthCredentials(ctx, account.ID, "", nil,
+				service.NewOpenAITokenRefresher(h.openaiOAuthService, nil))
+			return updated, "", err
+		}
 		tokenInfo, err := h.openaiOAuthService.RefreshAccountToken(ctx, account)
 		if err != nil {
 			// 刷新失败但 access_token 可能仍有效，尝试设置隐私
@@ -1640,14 +1664,18 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 	// Re-auth only returns authentication fields. Preserve account configuration
 	// stored alongside them (for example model_mapping), while allowing the new
 	// OAuth values to replace their existing counterparts.
-	req.Credentials = service.MergeCredentials(existing.Credentials, req.Credentials)
-	// Drop SSO/password residue; re-auth must leave only OAuth tokens on disk.
-	req.Credentials = service.SanitizeStoredCredentials(existing.Platform, req.Credentials)
+	var updatedAccount *service.Account
+	if existing.IsOpenAI() && existing.Type == service.AccountTypeOAuth && h.oauthRefreshAPI != nil && !existing.IsOpenAIPersonalAccessToken() {
+		updatedAccount, err = h.oauthRefreshAPI.MutateOpenAIOAuthCredentials(ctx, accountID, "", req.Credentials, nil)
+	} else {
+		req.Credentials = service.MergeCredentials(existing.Credentials, req.Credentials)
+		// Drop SSO/password residue; re-auth must leave only OAuth tokens on disk.
+		req.Credentials = service.SanitizeStoredCredentials(existing.Platform, req.Credentials)
 
-	updatedAccount, err := h.adminService.UpdateAccount(ctx, accountID, &service.UpdateAccountInput{
-		Type:        req.Type,
-		Credentials: req.Credentials,
-	})
+		updatedAccount, err = h.adminService.UpdateAccount(ctx, accountID, &service.UpdateAccountInput{
+			Type: req.Type, Credentials: req.Credentials,
+		})
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

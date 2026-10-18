@@ -212,6 +212,7 @@ func ProvideAccountHandler(
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	grokQuotaService *service.GrokQuotaService,
+	oauthRefreshAPI *service.OAuthRefreshAPI,
 ) *AccountHandler {
 	handler := NewAccountHandler(
 		adminService,
@@ -229,6 +230,7 @@ func ProvideAccountHandler(
 		rpmCache,
 		tokenCacheInvalidator,
 	)
+	handler.oauthRefreshAPI = oauthRefreshAPI
 	handler.grokImportProber = grokQuotaService
 	handler.cfg = cfg
 	handler.SetKiroModelDiscovery(kiroModelDiscovery)

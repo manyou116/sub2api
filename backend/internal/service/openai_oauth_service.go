@@ -249,7 +249,10 @@ func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 		tokenInfo.PlanType = userInfo.PlanType
 	}
 
-	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
+	// 协调刷新先保存新 RT；网页套餐/隐私补全由独立维护执行，不能消耗凭据提交租约。
+	if !openAIExchangeOnly(ctx) {
+		s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
+	}
 
 	return tokenInfo, nil
 }
