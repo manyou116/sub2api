@@ -2183,7 +2183,7 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 // zeroing out capacity. The retry re-runs the exact same selection with the
 // quarantine checks bypassed, so healthy proxies always win the first pass
 // and quarantined ones only serve when nothing else can.
-func (s *OpenAIGatewayService) selectAccountWithScheduler(
+func (s *OpenAIGatewayService) selectAccountWithSchedulerBase(
 	ctx context.Context,
 	groupID *int64,
 	previousResponseID string,
@@ -2542,6 +2542,7 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(account *Accoun
 		return false
 	}
 	accountID := account.ID
+	observeOpenAICapacityResult(account, success, observedErr...)
 	healthTripped := false
 	if s != nil && s.rateLimitService != nil {
 		if success {
@@ -2568,6 +2569,7 @@ func (s *OpenAIGatewayService) ObserveOpenAIAccountHealthFailure(ctx context.Con
 	if s == nil || s.rateLimitService == nil || account == nil || observedErr == nil {
 		return false
 	}
+	observeOpenAICapacityResult(account, false, observedErr)
 	return s.rateLimitService.ObserveOpenAIAPIKeyHealthFailure(ctx, account, observedErr)
 }
 

@@ -1066,6 +1066,22 @@ export default {
         saved: 'Overload cooldown settings saved',
         saveFailed: 'Failed to save overload cooldown settings'
       },
+      capacityCooldown: {
+        title: 'OpenAI repeated overload cooldown',
+        description: 'Temporarily avoid repeatedly overloaded OAuth text accounts per model, independently of 429 quotas. Disabled by default.',
+        enabled: 'Enable repeated overload protection',
+        switchAccount: 'Prefer another account on overload',
+        switchHint: 'Switch only before meaningful output, using the existing account-switch limit. Requests with output are not replayed.',
+        window_seconds: 'Observation window (seconds, 1–300)',
+        failure_threshold: 'Minimum overloaded requests (2–100)',
+        failure_rate_percent: 'Overload threshold (%, 1–100)',
+        cooldown_seconds: 'Initial cooldown (seconds)',
+        max_cooldown_seconds: 'Maximum cooldown (seconds, up to 7200)',
+        recoveryHint: 'Retries count once per request. Cooldowns grow by 1, 2, 5 and 10 times the initial duration with slight jitter. Afterward, verify three real requests sequentially before restoring traffic; another overload restarts the cooldown.',
+        loadFailed: 'Failed to load overload cooldown settings',
+        saved: 'Overload cooldown settings saved',
+        saveFailed: 'Failed to save overload cooldown settings'
+      },
       rateLimit429Cooldown: {
         title: '429 Default Cooldown',
         description: 'Configure the default account cooldown when upstream returns 429 without an explicit reset time',
