@@ -24,7 +24,9 @@ func capacityTestStore(t *testing.T) (*tempUnschedCache, *miniredis.Miniredis) {
 
 func capacityRecord(t *testing.T, c *tempUnschedCache, id string, generation int64, outcome int) service.OpenAICapacityDecision {
 	t.Helper()
-	d, err := c.ObserveOpenAICapacity(context.Background(), 42, "model-a", id, generation, outcome, service.DefaultOpenAICapacityCooldownSettings())
+	settings := service.DefaultOpenAICapacityCooldownSettings()
+	settings.FailureThreshold = 3
+	d, err := c.ObserveOpenAICapacity(context.Background(), 42, "model-a", id, generation, outcome, settings)
 	require.NoError(t, err)
 	return d
 }
@@ -53,24 +55,47 @@ func TestCapacityCooldownDeduplicatesRetriesAndSSEFrames(t *testing.T) {
 	require.EqualValues(t, 3, d.Failures)
 }
 
-func TestCapacityCooldownRequiresFailureRatioAndExpiresOldEvents(t *testing.T) {
+func TestCapacityCooldownTripsOnCountRegardlessOfSuccesses(t *testing.T) {
 	c, _ := capacityTestStore(t)
-	for i := range 4 {
+	for i := range 20 {
 		capacityRecord(t, c, fmt.Sprintf("ok-%d", i), 0, 2)
 	}
 	for i := range 3 {
 		d := capacityRecord(t, c, fmt.Sprintf("bad-%d", i), 0, 1)
-		require.False(t, d.Tripped, "three errors out of seven are below 50%%")
+		require.Equal(t, i == 2, d.Tripped, "the third overload trips even with twenty successful requests")
+		require.EqualValues(t, i+1, d.Failures)
 	}
-	d := capacityRecord(t, c, "bad-3", 0, 1)
-	require.True(t, d.Tripped, "four errors out of eight reach 50%%")
+}
 
-	c2, server2 := capacityTestStore(t)
-	capacityRecord(t, c2, "old", 0, 1)
-	server2.SetTime(time.Unix(1_800_000_061, 0))
-	d = capacityRecord(t, c2, "new", 0, 1)
+func TestCapacityCooldownSingleOverloadTripsImmediately(t *testing.T) {
+	c, _ := capacityTestStore(t)
+	settings := service.DefaultOpenAICapacityCooldownSettings()
+	require.Equal(t, 1, settings.FailureThreshold)
+	ctx := context.Background()
+	for i := range 20 {
+		d, err := c.ObserveOpenAICapacity(ctx, 42, "model-a", fmt.Sprintf("ok-%d", i), 0, i%2*2, settings)
+		require.NoError(t, err)
+		require.False(t, d.Tripped, "successful and inconclusive requests do not count as overloads")
+	}
+	d, err := c.ObserveOpenAICapacity(ctx, 42, "model-a", "first-overload", 0, 1, settings)
+	require.NoError(t, err)
+	require.True(t, d.Tripped)
+	require.EqualValues(t, 1, d.Failures)
+	require.EqualValues(t, 21, d.Total)
+	admission, err := c.AdmitOpenAICapacity(ctx, 42, "model-a", "next-request", 60)
+	require.NoError(t, err)
+	require.False(t, admission.Allowed, "the very next request must avoid this account and model")
+}
+
+func TestCapacityCooldownExpiresOverloadsOutsideWindow(t *testing.T) {
+	c, server := capacityTestStore(t)
+	capacityRecord(t, c, "old-1", 0, 1)
+	capacityRecord(t, c, "old-2", 0, 1)
+	server.SetTime(time.Unix(1_800_000_061, 0))
+	d := capacityRecord(t, c, "new", 0, 1)
 	require.EqualValues(t, 1, d.Total)
 	require.EqualValues(t, 1, d.Failures)
+	require.False(t, d.Tripped, "expired overloads must not contribute to the threshold")
 }
 
 func TestCapacityCooldownRecoveredRetryCannotBecomeFailureAgain(t *testing.T) {

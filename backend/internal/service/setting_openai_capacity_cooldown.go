@@ -16,20 +16,19 @@ type OpenAICapacityCooldownSettings struct {
 	SwitchAccountOnOverload bool `json:"switch_account_on_overload"`
 	WindowSeconds           int  `json:"window_seconds"`
 	FailureThreshold        int  `json:"failure_threshold"`
-	FailureRatePercent      int  `json:"failure_rate_percent"`
 	CooldownSeconds         int  `json:"cooldown_seconds"`
 	MaxCooldownSeconds      int  `json:"max_cooldown_seconds"`
 }
 
 func DefaultOpenAICapacityCooldownSettings() OpenAICapacityCooldownSettings {
-	return OpenAICapacityCooldownSettings{SwitchAccountOnOverload: true, WindowSeconds: 60, FailureThreshold: 3, FailureRatePercent: 50, CooldownSeconds: 60, MaxCooldownSeconds: 600}
+	return OpenAICapacityCooldownSettings{SwitchAccountOnOverload: true, WindowSeconds: 60, FailureThreshold: 1, CooldownSeconds: 60, MaxCooldownSeconds: 600}
 }
 
 func (v OpenAICapacityCooldownSettings) Validate() error {
-	if v.WindowSeconds < 1 || v.WindowSeconds > 300 || v.FailureThreshold < 2 || v.FailureThreshold > 100 ||
-		v.FailureRatePercent < 1 || v.FailureRatePercent > 100 || v.CooldownSeconds < 1 ||
+	if v.WindowSeconds < 1 || v.WindowSeconds > 300 || v.FailureThreshold < 1 || v.FailureThreshold > 100 ||
+		v.CooldownSeconds < 1 ||
 		v.MaxCooldownSeconds < v.CooldownSeconds || v.MaxCooldownSeconds > 7200 {
-		return errors.New("invalid capacity cooldown: window 1-300s, threshold 2-100, rate 1-100%, cooldown 1-max, max <=7200s")
+		return errors.New("invalid capacity cooldown: window 1-300s, threshold 1-100, cooldown 1-max, max <=7200s")
 	}
 	return nil
 }

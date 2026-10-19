@@ -5,7 +5,6 @@ export interface OpenAICapacityCooldownSettings {
   switch_account_on_overload: boolean
   window_seconds: number
   failure_threshold: number
-  failure_rate_percent: number
   cooldown_seconds: number
   max_cooldown_seconds: number
 }

@@ -61,8 +61,13 @@ func TestCapacityCooldownAdminSettingsContract(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, decode(call(http.MethodPut, string(body))))
 	require.JSONEq(t, string(body), repo.raw)
-	require.Equal(t, want, decode(call(http.MethodGet, "")))
-	for _, bad := range []string{`{`, `{"window_seconds":0}`, `{"failure_threshold":1}`, `{"failure_rate_percent":0}`, `{"cooldown_seconds":601,"max_cooldown_seconds":600}`, `{"max_cooldown_seconds":7201}`} {
+	get := call(http.MethodGet, "")
+	require.Equal(t, want, decode(get))
+	require.NotContains(t, get.Body.String(), "failure_rate_percent")
+	legacyBody := strings.TrimSuffix(string(body), "}") + `,"failure_rate_percent":50}`
+	require.Equal(t, want, decode(call(http.MethodPut, legacyBody)), "old clients may still send an ignored ratio")
+	require.JSONEq(t, string(body), repo.raw)
+	for _, bad := range []string{`{`, `{"window_seconds":0}`, `{"failure_threshold":0}`, `{"failure_threshold":101}`, `{"cooldown_seconds":601,"max_cooldown_seconds":600}`, `{"max_cooldown_seconds":7201}`} {
 		rec := call(http.MethodPut, bad)
 		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 		require.JSONEq(t, string(body), repo.raw, "invalid input must not overwrite persisted settings")

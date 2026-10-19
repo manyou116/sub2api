@@ -66,9 +66,10 @@ func TestCapacityCooldownSettingDefaultsValidationAndImmediateUpdate(t *testing.
 	v, err := svc.GetOpenAICapacityCooldownSettings(context.Background())
 	require.NoError(t, err)
 	require.False(t, v.Enabled)
+	require.Equal(t, 1, v.FailureThreshold)
 	for _, change := range []func(*OpenAICapacityCooldownSettings){
 		func(v *OpenAICapacityCooldownSettings) { v.WindowSeconds = 0 }, func(v *OpenAICapacityCooldownSettings) { v.WindowSeconds = 301 },
-		func(v *OpenAICapacityCooldownSettings) { v.FailureThreshold = 1 }, func(v *OpenAICapacityCooldownSettings) { v.FailureRatePercent = 101 },
+		func(v *OpenAICapacityCooldownSettings) { v.FailureThreshold = 0 }, func(v *OpenAICapacityCooldownSettings) { v.FailureThreshold = 101 },
 		func(v *OpenAICapacityCooldownSettings) { v.CooldownSeconds = 0 }, func(v *OpenAICapacityCooldownSettings) { v.MaxCooldownSeconds = 1 },
 		func(v *OpenAICapacityCooldownSettings) { v.MaxCooldownSeconds = 7201 },
 	} {
@@ -86,6 +87,29 @@ func TestCapacityCooldownSettingDefaultsValidationAndImmediateUpdate(t *testing.
 	got, err = NewSettingService(repo2, &config.Config{}).GetOpenAICapacityCooldownSettings(context.Background())
 	require.NoError(t, err)
 	require.False(t, got.Enabled)
+}
+
+func TestCapacityCooldownLegacyRatioIsIgnoredAndSavedCountsArePreserved(t *testing.T) {
+	for _, threshold := range []int{1, 3} {
+		repo := newMockSettingRepo()
+		raw, err := json.Marshal(map[string]any{
+			"enabled": true, "switch_account_on_overload": true, "window_seconds": 120,
+			"failure_threshold": threshold, "failure_rate_percent": 0,
+			"cooldown_seconds": 600, "max_cooldown_seconds": 7200,
+		})
+		require.NoError(t, err)
+		repo.data[openAICapacityCooldownSettingKey] = string(raw)
+		svc := NewSettingService(repo, &config.Config{})
+		got, err := svc.GetOpenAICapacityCooldownSettings(context.Background())
+		require.NoError(t, err)
+		require.True(t, got.Enabled, "an obsolete ratio must not disable valid count-based protection")
+		require.Equal(t, threshold, got.FailureThreshold)
+		require.Equal(t, 120, got.WindowSeconds)
+		require.Equal(t, 600, got.CooldownSeconds)
+		require.Equal(t, 7200, got.MaxCooldownSeconds)
+		require.NoError(t, svc.SetOpenAICapacityCooldownSettings(context.Background(), got))
+		require.NotContains(t, repo.data[openAICapacityCooldownSettingKey], "failure_rate_percent")
+	}
 }
 
 func TestCapacityCooldownAdmissionClonesAndPreservesLogicalRequest(t *testing.T) {

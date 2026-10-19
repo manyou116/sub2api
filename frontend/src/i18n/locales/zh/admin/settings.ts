@@ -1061,17 +1061,16 @@ export default {
         saveFailed: '保存过载冷却设置失败'
       },
       capacityCooldown: {
-        title: 'OpenAI 连续过载回避',
-        description: 'OAuth 文本请求持续过载时，按账号和模型临时回避，独立于 429 配额限流。默认关闭。',
-        enabled: '启用连续过载保护',
+        title: 'OpenAI 过载回避',
+        description: 'OAuth 文本请求在窗口内过载次数达到阈值时，按账号和模型临时回避，独立于 429 配额限流。默认关闭。',
+        enabled: '启用过载保护',
         switchAccount: '过载时优先换账号重试',
         switchHint: '仅在尚未输出有效内容时换号，沿用现有换号次数上限；不重复提交已经输出内容的请求。',
         window_seconds: '统计窗口（秒，1–300）',
-        failure_threshold: '最少过载请求数（2–100）',
-        failure_rate_percent: '触发过载比例（%，1–100）',
+        failure_threshold: '过载次数阈值（1–100）',
         cooldown_seconds: '首次回避时长（秒）',
         max_cooldown_seconds: '最大回避时长（秒，不超过 7200）',
-        recoveryHint: '同一请求的重试只计一次。冷却按首次时长的 1、2、5、10 倍递增并略微错开；到期后逐个验证三个真实请求再恢复，未恢复则继续冷却。',
+        recoveryHint: '设为 1 时，一次过载即回避；同一请求的重试只计一次，成功请求不稀释其他过载次数。冷却按首次时长的 1、2、5、10 倍递增并略微错开；到期后逐个验证三个真实请求再恢复，未恢复则继续冷却。',
         loadFailed: '加载过载回避设置失败',
         saved: '过载回避设置已保存',
         saveFailed: '保存过载回避设置失败'
