@@ -60,12 +60,11 @@ const loadFailed = ref(false)
 const saving = ref(false)
 const form = reactive({
   enabled: false, switch_account_on_overload: true, window_seconds: 60,
-  failure_threshold: 3, failure_rate_percent: 50, cooldown_seconds: 60, max_cooldown_seconds: 600
+  failure_threshold: 1, cooldown_seconds: 60, max_cooldown_seconds: 600
 })
 const fields = [
   { key: 'window_seconds', min: 1, max: 300 },
-  { key: 'failure_threshold', min: 2, max: 100 },
-  { key: 'failure_rate_percent', min: 1, max: 100 },
+  { key: 'failure_threshold', min: 1, max: 100 },
   { key: 'cooldown_seconds', min: 1, max: 7200 },
   { key: 'max_cooldown_seconds', min: 1, max: 7200 }
 ] as const

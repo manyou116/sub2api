@@ -129,13 +129,12 @@ func TestCapacityCooldownHandlerSwitchesBeforeOutput(t *testing.T) {
 					require.Empty(t, repo.rateLimitIDs, "overload is independent of quota/429")
 					blocked, err := store.BlockedOpenAICapacityAccounts(context.Background(), "gpt-5.4")
 					require.NoError(t, err)
-					require.Empty(t, blocked, "one logical overload must not reach the three-request threshold")
-					for i := range 2 {
-						d, err := store.ObserveOpenAICapacity(context.Background(), 801, "gpt-5.4", fmt.Sprintf("extra-%d", i), 0, 1, service.DefaultOpenAICapacityCooldownSettings())
-						require.NoError(t, err)
-						require.EqualValues(t, i+2, d.Total, "the handler must record exactly one failure, including error and failed SSE frames")
-						require.Equal(t, i == 1, d.Tripped)
-					}
+					require.Equal(t, []int64{801}, blocked, "one overload must immediately cool the account at the default threshold")
+					d, err := store.AdmitOpenAICapacity(context.Background(), 801, "gpt-5.4", "next-admission", 60)
+					require.NoError(t, err)
+					require.False(t, d.Allowed)
+					require.EqualValues(t, 1, d.Generation, "duplicate observations must not open additional cooldowns")
+					require.EqualValues(t, 1, d.Level)
 					next := httptest.NewRecorder()
 					nextReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","input":"next","stream":false}`))
 					nextReq.Header.Set("Content-Type", "application/json")
@@ -169,12 +168,9 @@ func TestCapacityCooldownHandlerDoesNotReplayAfterOutput(t *testing.T) {
 			require.Contains(t, rec.Body.String(), "already sent")
 			require.NotContains(t, rec.Body.String(), "resp_healthy")
 			require.Equal(t, []int64{801}, upstream.hits)
-			for i := range 2 {
-				d, err := store.ObserveOpenAICapacity(context.Background(), 801, "gpt-5.4", fmt.Sprintf("extra-%d", i), 0, 1, service.DefaultOpenAICapacityCooldownSettings())
-				require.NoError(t, err)
-				require.EqualValues(t, i+2, d.Failures, "post-output overload must count even though replay is forbidden")
-				require.Equal(t, i == 1, d.Tripped)
-			}
+			blocked, err := store.BlockedOpenAICapacityAccounts(context.Background(), "gpt-5.4")
+			require.NoError(t, err)
+			require.Equal(t, []int64{801}, blocked, "post-output overload must trigger cooldown even though replay is forbidden")
 		})
 	}
 }

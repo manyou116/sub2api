@@ -12,7 +12,7 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 const defaults = {
   enabled: false, switch_account_on_overload: true, window_seconds: 60,
-  failure_threshold: 3, failure_rate_percent: 50, cooldown_seconds: 60, max_cooldown_seconds: 600
+  failure_threshold: 1, cooldown_seconds: 60, max_cooldown_seconds: 600
 }
 
 describe('OpenAI capacity cooldown settings', () => {
@@ -31,16 +31,34 @@ describe('OpenAI capacity cooldown settings', () => {
     await wrapper.get('#capacity-switch').trigger('click')
     await wrapper.get('#capacity-window_seconds').setValue(120)
     await wrapper.get('#capacity-failure_threshold').setValue(5)
-    await wrapper.get('#capacity-failure_rate_percent').setValue(80)
+    expect(wrapper.find('#capacity-failure_rate_percent').exists()).toBe(false)
     await wrapper.get('#capacity-cooldown_seconds').setValue(90)
     await wrapper.get('#capacity-max_cooldown_seconds').setValue(900)
     await wrapper.get('[data-testid="capacity-save"]').trigger('click')
     await flushPromises()
     expect(mocks.save).toHaveBeenCalledWith({
       enabled: true, switch_account_on_overload: false, window_seconds: 120,
-      failure_threshold: 5, failure_rate_percent: 80, cooldown_seconds: 90, max_cooldown_seconds: 900
+      failure_threshold: 5, cooldown_seconds: 90, max_cooldown_seconds: 900
     })
     expect(mocks.success).toHaveBeenCalledOnce()
+  })
+
+  it('accepts a single overload and rejects thresholds outside 1–100', async () => {
+    mocks.load.mockResolvedValue({ ...defaults, enabled: true })
+    const wrapper = mount(OpenAICapacityCooldownSettings)
+    await flushPromises()
+    const threshold = wrapper.get('#capacity-failure_threshold')
+    expect((threshold.element as HTMLInputElement).value).toBe('1')
+    expect(threshold.attributes('min')).toBe('1')
+    for (const invalid of [0, 101]) {
+      await threshold.setValue(invalid)
+      await wrapper.get('[data-testid="capacity-save"]').trigger('click')
+      expect(mocks.save).not.toHaveBeenCalled()
+    }
+    await threshold.setValue(1)
+    await wrapper.get('[data-testid="capacity-save"]').trigger('click')
+    await flushPromises()
+    expect(mocks.save).toHaveBeenCalledWith({ ...defaults, enabled: true })
   })
 
   it('loads current values and constrains the maximum cooldown to at least the initial value', async () => {

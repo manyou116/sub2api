@@ -89,11 +89,11 @@ elseif outcome == 1 and not redis.call('ZSCORE',successes,id) then
 end
 for _,key in ipairs({events,failures,successes}) do redis.call('PEXPIRE',key,window+60000) end
 local n, f = redis.call('ZCARD',events), redis.call('ZCARD',failures)
-if phase == 1 or (f >= tonumber(ARGV[7]) and f*100 >= n*tonumber(ARGV[8])) then
+if phase == 1 or f >= tonumber(ARGV[7]) then
   level = math.min(level+1,4)
   local scale = ({1,2,5,10})[level]
   local jitter = (90 + tonumber(string.sub(redis.sha1hex(state..tostring(now)),1,6),16)%21)/100
-  local duration = math.min(tonumber(ARGV[10]),tonumber(ARGV[9])*scale*jitter)*1000
+  local duration = math.min(tonumber(ARGV[9]),tonumber(ARGV[8])*scale*jitter)*1000
   until_ms = now + math.max(1000,math.floor(duration))
   generation = generation+1
   redis.call('HSET',state,'phase',1,'until',until_ms,'generation',generation,'level',level,'recovered',0)
@@ -124,7 +124,7 @@ func (c *tempUnschedCache) AdmitOpenAICapacity(ctx context.Context, accountID in
 }
 
 func (c *tempUnschedCache) ObserveOpenAICapacity(ctx context.Context, accountID int64, model, id string, generation int64, outcome int, v service.OpenAICapacityCooldownSettings) (service.OpenAICapacityDecision, error) {
-	return c.capacityDecision(ctx, accountID, model, "record", id, generation, outcome, v.WindowSeconds, v.FailureThreshold, v.FailureRatePercent, v.CooldownSeconds, v.MaxCooldownSeconds)
+	return c.capacityDecision(ctx, accountID, model, "record", id, generation, outcome, v.WindowSeconds, v.FailureThreshold, v.CooldownSeconds, v.MaxCooldownSeconds)
 }
 
 func (c *tempUnschedCache) ReleaseOpenAICapacity(ctx context.Context, accountID int64, model, id string, generation int64) error {
