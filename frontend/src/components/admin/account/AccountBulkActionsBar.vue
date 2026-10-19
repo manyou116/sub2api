@@ -53,6 +53,8 @@
         <button type="button" @click="$emit('probe-upstream-billing')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.probeUpstreamBilling') }}</button>
         <button type="button" @click="$emit('toggle-schedulable', true)" class="btn btn-success btn-sm">{{ t('admin.accounts.bulkActions.enableScheduling') }}</button>
         <button type="button" @click="$emit('toggle-schedulable', false)" class="btn btn-warning btn-sm">{{ t('admin.accounts.bulkActions.disableScheduling') }}</button>
+        <button type="button" :disabled="rateLimitReconcileBusy" :title="t('admin.accounts.rateLimitReconcile.help')" @click="$emit('toggle-rate-limit-reconcile', true)" class="btn btn-success btn-sm">{{ t('admin.accounts.bulkActions.enableRateLimitReconcile') }}</button>
+        <button type="button" :disabled="rateLimitReconcileBusy" :title="t('admin.accounts.rateLimitReconcile.help')" @click="$emit('toggle-rate-limit-reconcile', false)" class="btn btn-warning btn-sm">{{ t('admin.accounts.bulkActions.disableRateLimitReconcile') }}</button>
         <button type="button" @click="$emit('edit-selected')" class="btn btn-primary btn-sm">{{ t('admin.accounts.bulkActions.edit') }}</button>
       </template>
       <button type="button" @click="$emit('edit-filtered')" class="btn btn-primary btn-sm">
@@ -70,6 +72,7 @@ defineProps<{
   totalResults: number
   selectingAll: boolean
   allResultsSelected: boolean
+  rateLimitReconcileBusy?: boolean
 }>()
 
 defineEmits([
@@ -80,6 +83,7 @@ defineEmits([
   'select-page',
   'select-all-results',
   'toggle-schedulable',
+  'toggle-rate-limit-reconcile',
   'reset-status',
   'refresh-token',
   'probe-upstream-billing'

@@ -273,6 +273,7 @@ export default {
         schedulerScore: 'Scheduler Score',
         status: 'Status',
         schedulable: 'Schedulable',
+        rateLimitReconcile: 'Quota Reconcile',
         todayStats: 'Today Stats',
         groups: 'Groups',
         usageWindows: 'Usage Windows',
@@ -521,6 +522,15 @@ export default {
       bulkSchedulableDisabled: 'Successfully disabled scheduling for {count} account(s)',
       bulkSchedulablePartial: 'Scheduling updated partially: {success} succeeded, {failed} failed',
       bulkSchedulableResultUnknown: 'Bulk scheduling result incomplete. Please retry or refresh.',
+      rateLimitReconcile: {
+        enabled: 'Enabled',
+        disabled: 'Off',
+        help: 'Off by default. OpenAI OAuth parent accounts only. Checks opted-in accounts while rate limited without consuming reset credits. At least 10 minutes between checks; failures back off.',
+        limited: 'Still limited',
+        failed: 'Check failed; retry later',
+        recovered: 'Recovered',
+        state_changed: 'Account changed; awaiting recheck'
+      },
       bulkActions: {
         webImagesEnableShort: 'Web On',
         webImagesDisableShort: 'Web Off',
@@ -543,11 +553,15 @@ export default {
         deleteSuccess: 'Deleted {count} account(s)',
         enableScheduling: 'Enable Scheduling',
         disableScheduling: 'Disable Scheduling',
+        enableRateLimitReconcile: 'Enable Quota Reconcile',
+        disableRateLimitReconcile: 'Disable Quota Reconcile',
         resetStatus: 'Reset Status',
         refreshToken: 'Refresh Token',
         probeUpstreamBilling: 'Probe Upstream Rate',
         resetStatusSuccess: 'Successfully reset {count} account(s) status',
         refreshTokenSuccess: 'Successfully refreshed {count} account(s) token',
+        rateLimitReconcileEnabled: 'Enabled quota reconciliation for {count} account(s)',
+        rateLimitReconcileDisabled: 'Disabled quota reconciliation for {count} account(s)',
         partialSuccess: 'Partially completed: {success} succeeded, {failed} failed'
       },
       bulkEdit: {

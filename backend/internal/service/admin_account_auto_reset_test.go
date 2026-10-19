@@ -77,3 +77,48 @@ func TestBulkUpdateAccountsAutoResetRejectsInvalidThresholdBeforeWrite(t *testin
 		require.Empty(t, repo.bulkUpdates)
 	}
 }
+
+func TestBulkUpdateAccountsRateLimitReconcileWritesAccountOptIn(t *testing.T) {
+	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		2: {ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+	}}
+	result, err := (&adminServiceImpl{accountRepo: repo}).BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{1, 2},
+		Extra:      map[string]any{OpenAIRateLimitReconcileEnabledExtraKey: true},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Success)
+	require.Len(t, repo.bulkUpdates, 1)
+	require.Equal(t, map[string]any{OpenAIRateLimitReconcileEnabledExtraKey: true, OpenAIRateLimitReconcileStateExtraKey: nil}, repo.bulkUpdates[0].Extra)
+}
+
+func TestBulkUpdateAccountsRateLimitReconcileRejectsInvalidTargets(t *testing.T) {
+	parentID := int64(1)
+	for _, target := range []*Account{
+		{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
+		{ID: 2, Platform: PlatformGrok, Type: AccountTypeOAuth},
+		{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID},
+	} {
+		repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+			1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			2: target,
+		}}
+		_, err := (&adminServiceImpl{accountRepo: repo}).BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+			AccountIDs: []int64{1, 2},
+			Extra:      map[string]any{OpenAIRateLimitReconcileEnabledExtraKey: true},
+		})
+		require.Error(t, err)
+		require.Empty(t, repo.bulkUpdates)
+	}
+
+	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
+		1: {ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+	}}
+	_, err := (&adminServiceImpl{accountRepo: repo}).BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs: []int64{1},
+		Extra:      map[string]any{OpenAIRateLimitReconcileEnabledExtraKey: "true"},
+	})
+	require.Error(t, err)
+	require.Empty(t, repo.bulkUpdates)
+}

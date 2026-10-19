@@ -135,23 +135,25 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"drive_storage_usage":                    {},
 	"drive_tier_updated_at":                  {},
 	// Codex fingerprint convergence uses a per-account random seed, never copied from another account.
-	codexFingerprintSeedExtraKey:           {},
-	"codex_primary_used_percent":           {},
-	"codex_primary_reset_after_seconds":    {},
-	"codex_primary_window_minutes":         {},
-	"codex_secondary_used_percent":         {},
-	"codex_secondary_reset_after_seconds":  {},
-	"codex_secondary_window_minutes":       {},
-	"codex_primary_over_secondary_percent": {},
-	"codex_usage_updated_at":               {},
-	"codex_5h_used_percent":                {},
-	"codex_5h_reset_after_seconds":         {},
-	"codex_5h_window_minutes":              {},
-	"codex_5h_reset_at":                    {},
-	"codex_7d_used_percent":                {},
-	"codex_7d_reset_after_seconds":         {},
-	"codex_7d_window_minutes":              {},
-	"codex_7d_reset_at":                    {},
+	codexFingerprintSeedExtraKey:            {},
+	"codex_primary_used_percent":            {},
+	"codex_primary_reset_after_seconds":     {},
+	"codex_primary_window_minutes":          {},
+	"codex_secondary_used_percent":          {},
+	"codex_secondary_reset_after_seconds":   {},
+	"codex_secondary_window_minutes":        {},
+	"codex_primary_over_secondary_percent":  {},
+	"codex_usage_updated_at":                {},
+	"codex_5h_used_percent":                 {},
+	"codex_5h_reset_after_seconds":          {},
+	"codex_5h_window_minutes":               {},
+	"codex_5h_reset_at":                     {},
+	"codex_7d_used_percent":                 {},
+	"codex_7d_reset_after_seconds":          {},
+	"codex_7d_window_minutes":               {},
+	"codex_7d_reset_at":                     {},
+	OpenAIRateLimitReconcileEnabledExtraKey: {},
+	OpenAIRateLimitReconcileStateExtraKey:   {},
 }
 
 func duplicateAccountExtra(value map[string]any) (map[string]any, error) {
@@ -944,6 +946,16 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
+	if hasOpenAIRateLimitReconcileConfig(updates) {
+		account, err := s.accountRepo.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := normalizeOpenAIRateLimitReconcileExtra(account.Platform, account.Type, account.IsShadow(), updates); err != nil {
+			return err
+		}
+		updates[OpenAIRateLimitReconcileStateExtraKey] = nil // Invalidate in-flight probes on every explicit toggle.
+	}
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
 	delete(updates, UpstreamBillingRateSyncEnabledExtraKey)
 	delete(updates, UpstreamBillingProbeExtraKey)
@@ -974,7 +986,8 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, false)
 	resetSettingsRequested := hasOpenAIAutoResetCreditConfig(input.Extra)
-	if resetSettingsRequested {
+	reconcileSettingsRequested := hasOpenAIRateLimitReconcileConfig(input.Extra)
+	if resetSettingsRequested || reconcileSettingsRequested {
 		var err error
 		input.Extra, err = normalizeOpenAIAutoResetCreditExtra(PlatformOpenAI, AccountTypeOAuth, false, input.Extra)
 		if err != nil {
@@ -1024,7 +1037,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || resetSettingsRequested {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || resetSettingsRequested || reconcileSettingsRequested {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1047,6 +1060,20 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 				return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_AUTO_RESET_CREDIT_ACCOUNT_INVALID", "automatic reset credits are only supported for OpenAI OAuth parent accounts")
 			}
 		}
+	}
+	if reconcileSettingsRequested {
+		for _, accountID := range input.AccountIDs {
+			account := targetsByID[accountID]
+			if account == nil {
+				return nil, ErrAccountNotFound
+			}
+			if !isOpenAIAutoResetCreditAccount(account) {
+				return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_RATE_LIMIT_RECONCILE_ACCOUNT_INVALID", "rate-limit reconciliation is only supported for OpenAI OAuth parent accounts")
+			}
+		}
+	}
+	if reconcileSettingsRequested {
+		input.Extra[OpenAIRateLimitReconcileStateExtraKey] = nil
 	}
 	if openAISettings.any() {
 		inheritedCount, err := validateBulkOpenAISettingsTargets(input, openAISettings, targetsByID)
