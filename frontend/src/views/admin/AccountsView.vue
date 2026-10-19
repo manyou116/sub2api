@@ -191,6 +191,8 @@
           @select-page="selectPage"
           @select-all-results="handleSelectAllResults"
           @toggle-schedulable="handleBulkToggleSchedulable"
+          :rate-limit-reconcile-busy="rateLimitReconcileBusy"
+          @toggle-rate-limit-reconcile="handleBulkToggleRateLimitReconcile"
         />
         <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
         <DataTable
@@ -296,6 +298,25 @@
             <button @click="handleToggleSchedulable(row)" :disabled="togglingSchedulable === row.id" class="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:focus:ring-offset-dark-800" :class="[row.schedulable ? 'bg-primary-500 hover:bg-primary-600' : 'bg-gray-200 hover:bg-gray-300 dark:bg-dark-600 dark:hover:bg-dark-500']" :title="row.schedulable ? t('admin.accounts.schedulableEnabled') : t('admin.accounts.schedulableDisabled')">
               <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out" :class="[row.schedulable ? 'translate-x-4' : 'translate-x-0']" />
             </button>
+          </template>
+          <template #cell-rate_limit_reconcile="{ row }">
+            <span
+              v-if="row.platform === 'openai' && row.type === 'oauth' && !row.parent_account_id"
+              :title="t('admin.accounts.rateLimitReconcile.help')"
+              class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium"
+              :class="row.extra?.openai_rate_limit_reconcile_enabled === true
+                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-dark-300'"
+            >
+              {{ row.extra?.openai_rate_limit_reconcile_enabled === true
+                ? t('admin.accounts.rateLimitReconcile.enabled')
+                : t('admin.accounts.rateLimitReconcile.disabled') }}
+            </span>
+            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+            <div v-if="row.extra?.openai_rate_limit_reconcile_state?.checked_at" class="mt-1 text-xs text-gray-500 dark:text-dark-400">
+              {{ t(`admin.accounts.rateLimitReconcile.${row.extra.openai_rate_limit_reconcile_state.status}`) }}
+              · {{ formatDateTime(row.extra.openai_rate_limit_reconcile_state.checked_at) }}
+            </div>
           </template>
           <template #cell-today_stats="{ row }">
             <AccountTodayStatsCell
@@ -1794,6 +1815,7 @@ const allColumns = computed(() => {
     { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
+    { key: 'rate_limit_reconcile', label: t('admin.accounts.columns.rateLimitReconcile'), sortable: false },
     { key: 'today_stats', label: t('admin.accounts.columns.todayStats'), sortable: false }
   ]
   if (!authStore.isSimpleMode) {
@@ -2048,6 +2070,36 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
   } catch (error) {
     console.error('Failed to bulk toggle schedulable:', error)
     appStore.showError(t('common.error'))
+  }
+}
+
+const rateLimitReconcileBusy = ref(false)
+const handleBulkToggleRateLimitReconcile = async (enabled: boolean) => {
+  if (rateLimitReconcileBusy.value) return
+  const accountIds = [...selIds.value]
+  if (accountIds.length === 0) return
+  rateLimitReconcileBusy.value = true
+  try {
+    const result = await adminAPI.accounts.bulkUpdate(accountIds, {
+      extra: { openai_rate_limit_reconcile_enabled: enabled }
+    })
+    if (result.success + result.failed !== accountIds.length) {
+      appStore.showError(t('admin.accounts.bulkSchedulableResultUnknown'))
+    } else if (result.failed > 0) {
+      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
+      setSelectedIds(result.failed_ids?.length ? result.failed_ids : accountIds)
+    } else {
+      appStore.showSuccess(t(enabled
+        ? 'admin.accounts.bulkActions.rateLimitReconcileEnabled'
+        : 'admin.accounts.bulkActions.rateLimitReconcileDisabled', { count: result.success }))
+      clearSelection()
+    }
+    await reload()
+  } catch (error) {
+    console.error('Failed to bulk toggle OpenAI rate-limit reconciliation:', error)
+    appStore.showError(extractApiErrorMessage(error, t('common.error')))
+  } finally {
+    rateLimitReconcileBusy.value = false
   }
 }
 const buildBulkEditFilterSnapshot = () => {

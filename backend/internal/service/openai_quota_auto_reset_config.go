@@ -13,6 +13,10 @@ const (
 	OpenAIAutoResetCredit5hThresholdExtraKey = "auto_reset_credit_5h_threshold"
 	OpenAIAutoResetCredit7dThresholdExtraKey = "auto_reset_credit_7d_threshold"
 	OpenAIAutoResetCreditStateExtraKey       = "codex_auto_reset_credit_state"
+	// OpenAIRateLimitReconcileEnabledExtraKey opts one OpenAI OAuth account into
+	// the read-only background quota reconciliation worker. It is deliberately
+	// account-scoped and absent/false by default.
+	OpenAIRateLimitReconcileEnabledExtraKey = "openai_rate_limit_reconcile_enabled"
 )
 
 // Each window must be explicitly enabled; legacy settings only opt in to the 7d window.
@@ -45,6 +49,41 @@ func ResolveOpenAIAutoResetCreditConfig(account *Account) OpenAIAutoResetCreditC
 	return config
 }
 
+// ResolveOpenAIRateLimitReconcileEnabled reports whether an account opted into
+// the read-only stale rate-limit reconciliation worker.
+func ResolveOpenAIRateLimitReconcileEnabled(account *Account) bool {
+	if !isOpenAIAutoResetCreditAccount(account) || account.Extra == nil {
+		return false
+	}
+	enabled, _ := account.Extra[OpenAIRateLimitReconcileEnabledExtraKey].(bool)
+	return enabled
+}
+
+func hasOpenAIRateLimitReconcileConfig(extra map[string]any) bool {
+	if extra == nil {
+		return false
+	}
+	_, ok := extra[OpenAIRateLimitReconcileEnabledExtraKey]
+	return ok
+}
+
+func normalizeOpenAIRateLimitReconcileExtra(platform, accountType string, isShadow bool, extra map[string]any) error {
+	if extra == nil {
+		return nil
+	}
+	raw, ok := extra[OpenAIRateLimitReconcileEnabledExtraKey]
+	if !ok {
+		return nil
+	}
+	if platform != PlatformOpenAI || accountType != AccountTypeOAuth || isShadow {
+		return infraerrors.New(http.StatusBadRequest, "OPENAI_RATE_LIMIT_RECONCILE_ACCOUNT_INVALID", "rate-limit reconciliation is only supported for OpenAI OAuth parent accounts")
+	}
+	if _, ok := raw.(bool); !ok {
+		return infraerrors.New(http.StatusBadRequest, "OPENAI_RATE_LIMIT_RECONCILE_ENABLED_INVALID", "openai_rate_limit_reconcile_enabled must be a boolean")
+	}
+	return nil
+}
+
 func isOpenAIAutoResetCreditAccount(account *Account) bool {
 	return account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth && !account.IsShadow()
 }
@@ -68,8 +107,12 @@ func normalizeOpenAIAutoResetCreditExtra(platform, accountType string, isShadow 
 	if extra == nil {
 		return nil, nil
 	}
+	if err := normalizeOpenAIRateLimitReconcileExtra(platform, accountType, isShadow, extra); err != nil {
+		return nil, err
+	}
 	normalized := cloneOpenAIAutoResetExtra(extra)
 	delete(normalized, OpenAIAutoResetCreditStateExtraKey)
+	delete(normalized, OpenAIRateLimitReconcileStateExtraKey)
 	keys := []string{OpenAIAutoResetCredit5hEnabledExtraKey, OpenAIAutoResetCredit7dEnabledExtraKey}
 	_, legacy := normalized[OpenAIAutoResetCreditEnabledExtraKey]
 	if hasOpenAIAutoResetCreditConfig(normalized) && (platform != PlatformOpenAI || accountType != AccountTypeOAuth || isShadow) {
@@ -109,6 +152,7 @@ func stripOpenAIAutoResetCreditManagedExtra(extra map[string]any, stripConfig bo
 		return nil
 	}
 	delete(extra, OpenAIAutoResetCreditStateExtraKey)
+	delete(extra, OpenAIRateLimitReconcileStateExtraKey)
 	if stripConfig {
 		delete(extra, OpenAIAutoResetCreditEnabledExtraKey)
 		delete(extra, OpenAIAutoResetCredit5hEnabledExtraKey)

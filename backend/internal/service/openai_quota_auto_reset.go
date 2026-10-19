@@ -144,6 +144,8 @@ func (s *OpenAIQuotaAutoResetService) Start() {
 		}
 		s.wg.Add(1)
 		go s.runScanner()
+		s.wg.Add(1)
+		go s.runRateLimitReconciler()
 	})
 }
 

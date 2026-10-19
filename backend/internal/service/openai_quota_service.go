@@ -164,6 +164,16 @@ func NewOpenAIQuotaService(
 // OAuth account. Returns infraerrors so the handler layer can map them to
 // stable error codes / HTTP statuses.
 func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	return s.queryUsage(ctx, accountID, false)
+}
+
+// QueryUsageForReconciliation performs only the authoritative usage GET. It
+// neither fetches reset-credit details nor consumes credits/model quota.
+func (s *OpenAIQuotaService) QueryUsageForReconciliation(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	return s.queryUsage(ctx, accountID, true)
+}
+
+func (s *OpenAIQuotaService) queryUsage(ctx context.Context, accountID int64, reconcile bool) (*OpenAIQuotaUsage, error) {
 	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -209,10 +219,16 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 			slog.Warn("openai_quota_query_failed", "account_id", accountID, "status", status, "body", body)
 			return nil, infraerrors.Newf(mapUpstreamStatus(status), "OPENAI_QUOTA_UPSTREAM_ERROR", "upstream returned %d: %s", status, body)
 		}
+		if reconcile && !validOpenAIReconcilePayload([]byte(resp.String())) {
+			return nil, infraerrors.New(http.StatusBadGateway, "OPENAI_QUOTA_INVALID_USAGE", "incomplete quota windows")
+		}
 		break
 	}
 
 	payload.FetchedAt = time.Now().Unix()
+	if reconcile {
+		return &payload, nil
+	}
 	details := s.queryResetCreditDetails(callCtx, client, accessToken, chatGPTAccountID, fedRAMP, accountID)
 	if details != nil {
 		payload.autoResetCandidates = details.AutoResetCandidates
