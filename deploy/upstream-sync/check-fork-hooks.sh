@@ -263,6 +263,24 @@ need_rg "swarm caddy routes to task DNS" \
   "tasks.sub2api:8080" \
   deploy/Caddyfile.swarm-local
 
+echo "-- OpenAI capacity cooldown --"
+need_file backend/internal/service/openai_capacity_cooldown.go
+need_file backend/internal/repository/openai_capacity_cooldown_cache.go
+need_rg "capacity scheduler wrapper retains original flow" \
+  "selectAccountWithSchedulerBase" backend/internal/service/openai_account_scheduler.go
+need_rg "capacity admission on scheduler candidates" \
+  "openAICapacityBlocked(ctx, account, requestedModel)" backend/internal/service/openai_images_legacy_web.go
+need_rg "capacity observations on schedule result" \
+  "observeOpenAICapacityResult(account, success" backend/internal/service/openai_account_scheduler.go
+need_rg "capacity switch policy before common failover" \
+  "applyOpenAICapacitySwitchPolicy(account, failoverErr)" backend/internal/service/openai_gateway_upstream_errors.go
+need_rg "capacity switch before passthrough HTTP response" \
+  "s.shouldSwitchOpenAICapacity(account, probeBody)" backend/internal/service/openai_gateway_passthrough.go
+need_rg "capacity settings admin routes" \
+  "openai-capacity-cooldown" backend/internal/server/routes/admin.go
+need_rg "capacity settings card" \
+  "<OpenAICapacityCooldownSettings" frontend/src/views/admin/SettingsView.vue
+
 # VERSION should look like 99.x...-plus.N or at least not pure upstream-only without plus when fork files exist
 if [[ -f backend/cmd/server/VERSION ]]; then
   ver="$(tr -d '[:space:]' < backend/cmd/server/VERSION)"

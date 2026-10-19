@@ -246,3 +246,19 @@ Already extracted (do not re-inline):
 | Account webimg schedule helpers | `service/account_webimg.go` |
 | Scheduler text-slot skip | `service/openai_account_scheduler_webimg.go` |
 | Web driver | `service/openaiimages/**` |
+
+## 8. OpenAI repeated capacity cooldown (default off)
+
+`docs/OPENAI_CAPACITY_COOLDOWN.md` describes the independent setting and runtime
+contract. Keep the Lua state machine in `repository/openai_capacity_cooldown_cache.go`
+and the scheduling adapter in `service/openai_capacity_cooldown.go`. The original
+scheduler remains in `selectAccountWithSchedulerBase`; its wrapper performs
+optional admission and reselects when a probe lease loses a race.
+
+Preserve the runtime-blocked check, result/error observation hooks, and the
+optional capacity switch policy in the common failover constructor. The OAuth
+passthrough HTTP error branch must also consult `shouldSwitchOpenAICapacity`
+before committing a 503 response. Preserve the separate admin GET/PUT routes
+and settings card. Quota, 429, images and WebSocket ingress stay outside this
+capacity circuit. Run `TestCapacityCooldown` in repository/service/admin/handler
+packages, plus the settings component tests, when replaying these hooks.

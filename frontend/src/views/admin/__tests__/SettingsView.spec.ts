@@ -119,6 +119,10 @@ vi.mock("@/api", () => ({
   },
 }));
 
+vi.mock('@/components/admin/settings/OpenAICapacityCooldownSettings.vue', () => ({
+  default: { template: '<div />' }
+}));
+
 vi.mock("@/stores", () => ({
   useAppStore: () => ({
     showError,
