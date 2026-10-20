@@ -34,7 +34,7 @@ func (s *OpenAIWebImageService) generate(ctx context.Context, shadow *Account, p
 	if err != nil {
 		return nil, "", err
 	}
-	if status.ProbedAt == nil {
+	if status.ProbedAt == nil || (status.QuotaKnown && time.Since(*status.ProbedAt) > 30*time.Second) {
 		if _, err = s.Probe(ctx, fresh.ID); errors.Is(err, errWebImageProbeBusy) {
 			err = s.waitForQuotaProbe(ctx, parent.ID)
 		}
@@ -95,14 +95,9 @@ func (s *OpenAIWebImageService) generate(ctx context.Context, shadow *Account, p
 		result, err = s.driver.Generate(ctx, auth, request)
 	}
 	if err != nil {
+		s.redactDriverError(err, parent)
 		s.observeError(ctx, parent, options.Model, err)
-		if ctx.Err() != nil {
-			return result, options.Model, ctx.Err()
-		}
 		return result, options.Model, err
-	}
-	if s.quotaCache != nil && status.QuotaKnown {
-		_ = s.quotaCache.Delete(ctx, parent.ID)
 	}
 	return result, options.Model, nil
 }
@@ -125,7 +120,7 @@ func (s *OpenAIGatewayService) forwardWebImage(ctx context.Context, c *gin.Conte
 	started := time.Now()
 	generated, _, err := s.webImages.generate(ctx, account, parsed)
 	if err != nil {
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() != nil {
 			return nil, err
 		}
 		var upstreamErr *OpenAIImagesUpstreamError
@@ -138,7 +133,30 @@ func (s *OpenAIGatewayService) forwardWebImage(ctx context.Context, c *gin.Conte
 		if errors.As(err, &driverErr) && driverErr.StatusCode >= 400 {
 			status = driverErr.StatusCode
 		}
+		retryHeaders := http.Header{}
+		if driverErr != nil && driverErr.RetryAfter > 0 {
+			retryHeaders.Set("Retry-After", fmt.Sprint(max(1, int(driverErr.RetryAfter.Seconds()+0.999))))
+		}
+		if driverErr != nil && driverErr.MayHaveGenerated() {
+			c.Header("Retry-After", retryHeaders.Get("Retry-After"))
+			upstreamErr = webImageResultUnconfirmed(driverErr)
+			// A definitive rejection in the stream is terminal too, but its known
+			// policy/quota reason is more useful than an uncertain-result message.
+			if driverErr.Kind == webdriver.ErrorKindPolicy || webImageQuotaFailure(driverErr) {
+				status = http.StatusTooManyRequests
+				if driverErr.Kind == webdriver.ErrorKindPolicy {
+					status = http.StatusBadRequest
+				}
+				upstreamErr = &OpenAIImagesUpstreamError{StatusCode: status, ErrorType: "invalid_request_error", Code: driverErr.Code, Message: sanitizeWebImageError(driverErr.Message)}
+			}
+			writeOpenAIImagesUpstreamErrorResponse(c, upstreamErr)
+			return nil, upstreamErr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		if driverErr != nil && !driverErr.Retryable && driverErr.Kind != webdriver.ErrorKindAuth {
+			c.Header("Retry-After", retryHeaders.Get("Retry-After"))
 			errorType := "upstream_error"
 			if driverErr.Kind == webdriver.ErrorKindPolicy || (driverErr.Kind == webdriver.ErrorKindInternal && driverErr.Stage == "edit") {
 				status = http.StatusBadRequest
@@ -146,14 +164,14 @@ func (s *OpenAIGatewayService) forwardWebImage(ctx context.Context, c *gin.Conte
 			if status >= 400 && status < 500 {
 				errorType = "invalid_request_error"
 			}
-			upstreamErr = &OpenAIImagesUpstreamError{StatusCode: status, ErrorType: errorType, Code: driverErr.Code, Message: sanitizeUpstreamErrorMessage(driverErr.Message)}
+			upstreamErr = &OpenAIImagesUpstreamError{StatusCode: status, ErrorType: errorType, Code: driverErr.Code, Message: sanitizeWebImageError(driverErr.Message)}
 			writeOpenAIImagesUpstreamErrorResponse(c, upstreamErr)
 			return nil, upstreamErr
 		}
-		payload, _ := json.Marshal(gin.H{"error": gin.H{"message": sanitizeUpstreamErrorMessage(err.Error()), "type": "web_image_error"}})
+		payload, _ := json.Marshal(gin.H{"error": gin.H{"message": sanitizeWebImageError(err.Error()), "type": "web_image_error"}})
 		// Failover remains bounded by the ordinary Images handler. Never fall back
 		// from this account to another protocol on the same identity.
-		return nil, &UpstreamFailoverError{StatusCode: status, ResponseBody: payload}
+		return nil, &UpstreamFailoverError{StatusCode: status, ResponseBody: payload, ResponseHeaders: retryHeaders}
 	}
 	if generated == nil || len(generated.Data) == 0 {
 		return nil, errors.New("web image generation returned no images")
@@ -206,7 +224,7 @@ func (s *OpenAIGatewayService) webImageSchedulingReason(ctx context.Context, acc
 		return "web_image_service_unavailable"
 	}
 	if _, err := s.webImages.eligible(ctx, account); err != nil {
-		return "web_image_unavailable"
+		return webImageFailureReason(err)
 	}
 	return ""
 }
@@ -264,10 +282,13 @@ func (s *OpenAIGatewayService) openAIRequestPrivacySet(ctx context.Context, acco
 	if !account.IsWebImageShadow() {
 		return account.IsPrivacySet()
 	}
-	parent, err := resolveCredentialAccount(ctx, s.accountRepo, account)
+	if s.webImages == nil {
+		return false
+	}
+	parent, err := s.webImages.parent(ctx, account)
 	return err == nil && parent.IsPrivacySet()
 }
 
 func webImageInputError(err error) *OpenAIImagesUpstreamError {
-	return &OpenAIImagesUpstreamError{StatusCode: http.StatusBadRequest, ErrorType: "invalid_request_error", Message: sanitizeUpstreamErrorMessage(err.Error())}
+	return &OpenAIImagesUpstreamError{StatusCode: http.StatusBadRequest, ErrorType: "invalid_request_error", Message: sanitizeWebImageError(err.Error())}
 }

@@ -85,3 +85,32 @@ func TestWebImageQuotaCacheExhaustionFencesOutstandingProbe(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, status)
 }
+
+func TestWebImageBackoffIsIndependentAndMonotonic(t *testing.T) {
+	cache, server := webImageQuotaTestCache(t)
+	ctx := context.Background()
+	id := int64(7)
+	ok, err := cache.AcquireProbe(ctx, id, "probe", time.Minute)
+	require.NoError(t, err)
+	require.True(t, ok)
+	remaining := 12
+	now := time.Now()
+	ok, err = cache.PublishProbe(ctx, id, "probe", &service.WebImageStatus{ParentAccountID: id, QuotaKnown: true, Remaining: &remaining, ProbedAt: &now})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NoError(t, cache.Backoff(ctx, id, "edge_block", now.Add(time.Minute)))
+	require.NoError(t, cache.Backoff(ctx, id, "network_error", now.Add(10*time.Second)))
+	status, err := cache.Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, "edge_block", status.CooldownReason)
+	require.Equal(t, 12, *status.Remaining)
+	require.NoError(t, cache.Delete(ctx, id))
+	status, err = cache.Get(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, "edge_block", status.CooldownReason)
+	require.False(t, status.QuotaKnown)
+	server.FastForward(61 * time.Second)
+	status, err = cache.Get(ctx, id)
+	require.NoError(t, err)
+	require.Nil(t, status)
+}

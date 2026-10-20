@@ -20,19 +20,60 @@ func NewWebImageQuotaCache(rdb *redis.Client) service.WebImageQuotaCache {
 func webImageQuotaKey(id int64) string { return fmt.Sprintf("web_image:parent:%d:quota", id) }
 func webImageProbeKey(id int64) string { return fmt.Sprintf("web_image:parent:%d:probe", id) }
 
-func (c *webImageQuotaCache) Get(ctx context.Context, parentID int64) (*service.WebImageStatus, error) {
-	raw, err := c.rdb.Get(ctx, webImageQuotaKey(parentID)).Bytes()
-	if err == redis.Nil {
-		return nil, nil
+func webImageBackoffKey(id int64) string { return fmt.Sprintf("web_image:parent:%d:backoff", id) }
+func (c *webImageQuotaCache) Get(ctx context.Context, id int64) (*service.WebImageStatus, error) {
+	values, err := c.GetMany(ctx, []int64{id})
+	return values[id], err
+}
+func (c *webImageQuotaCache) GetMany(ctx context.Context, ids []int64) (map[int64]*service.WebImageStatus, error) {
+	result := make(map[int64]*service.WebImageStatus, len(ids))
+	if len(ids) == 0 {
+		return result, nil
 	}
+	keys := make([]string, 0, len(ids)*2)
+	for _, id := range ids {
+		keys = append(keys, webImageQuotaKey(id), webImageBackoffKey(id))
+	}
+	values, err := c.rdb.MGet(ctx, keys...).Result()
 	if err != nil {
 		return nil, err
 	}
-	var status service.WebImageStatus
-	if err = json.Unmarshal(raw, &status); err != nil {
-		return nil, err
+	for i, id := range ids {
+		var status *service.WebImageStatus
+		if raw, ok := values[2*i].(string); ok {
+			status = &service.WebImageStatus{}
+			if err := json.Unmarshal([]byte(raw), status); err != nil {
+				return nil, err
+			}
+		}
+		if raw, ok := values[2*i+1].(string); ok {
+			var backoff service.WebImageStatus
+			if err := json.Unmarshal([]byte(raw), &backoff); err != nil {
+				return nil, err
+			}
+			if backoff.CooldownUntil != nil && backoff.CooldownUntil.After(time.Now()) {
+				if status == nil {
+					status = &service.WebImageStatus{ParentAccountID: id}
+				}
+				status.CooldownUntil = backoff.CooldownUntil
+				status.CooldownReason = backoff.CooldownReason
+			}
+		}
+		result[id] = status
 	}
-	return &status, nil
+	return result, nil
+}
+func (c *webImageQuotaCache) Backoff(ctx context.Context, id int64, reason string, until time.Time) error {
+	if !until.After(time.Now()) {
+		return nil
+	}
+	raw, err := json.Marshal(service.WebImageStatus{ParentAccountID: id, CooldownUntil: &until, CooldownReason: reason})
+	if err != nil {
+		return err
+	}
+	// Preserve a longer concurrent backoff; quota and its probe lease are independent.
+	ttl := max(int64(1), int64(time.Until(until).Milliseconds()))
+	return c.rdb.Eval(ctx, `local ttl=redis.call('PTTL',KEYS[1]);if ttl<tonumber(ARGV[2]) then redis.call('SET',KEYS[1],ARGV[1],'PX',ARGV[2]) end;return 1`, []string{webImageBackoffKey(id)}, raw, ttl).Err()
 }
 func (c *webImageQuotaCache) AcquireProbe(ctx context.Context, parentID int64, owner string, ttl time.Duration) (bool, error) {
 	return c.rdb.SetNX(ctx, webImageProbeKey(parentID), owner, ttl).Result()

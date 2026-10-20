@@ -1435,6 +1435,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	filterStats := openAISelectionFilterStats{pool: len(accounts)}
 	filtered := make([]*Account, 0, len(accounts))
 	loadReq := make([]AccountWithConcurrency, 0, len(accounts))
+	candidateCtx := s.service.webImageCandidateContext(ctx, accounts)
 	for i := range accounts {
 		account := &accounts[i]
 		if req.ExcludedIDs != nil {
@@ -1458,11 +1459,11 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		// require_privacy_set is a group-scoped eligibility gate. Do not mutate the
 		// shared account: another group may intentionally allow accounts whose
 		// upstream privacy setting has not been confirmed.
-		if schedGroup != nil && schedGroup.RequirePrivacySet && !s.service.openAIRequestPrivacySet(ctx, account) {
+		if schedGroup != nil && schedGroup.RequirePrivacySet && !s.service.openAIRequestPrivacySet(candidateCtx, account) {
 			filterStats.exclude("privacy_not_set")
 			continue
 		}
-		if compatible, reason := s.isAccountRequestCompatibleReason(ctx, account, req); !compatible {
+		if compatible, reason := s.isAccountRequestCompatibleReason(candidateCtx, account, req); !compatible {
 			filterStats.exclude(reason)
 			continue
 		}
@@ -1742,6 +1743,11 @@ func (s *defaultOpenAIAccountScheduler) isAccountTransportCompatible(account *Ac
 }
 
 func (s *defaultOpenAIAccountScheduler) lookupShadowParentAccount(ctx context.Context, id int64) *Account {
+	if state, ok := ctx.Value(webImageCandidateKey{}).(*webImageCandidateState); ok {
+		if parent, exists := state.parents[id]; exists {
+			return parent
+		}
+	}
 	if s == nil || s.service == nil {
 		return nil
 	}

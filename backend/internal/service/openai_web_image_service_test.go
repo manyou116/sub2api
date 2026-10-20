@@ -166,18 +166,20 @@ func TestWebImageUnknownQuotaAndProbeFencing(t *testing.T) {
 }
 
 func TestWebImageExhaustionSurvivesRecreateWithoutConflatingPoll429(t *testing.T) {
-	s, repo, parent, shadow, _ := webImageFixture(t)
+	s, repo, parent, shadow, cache := webImageFixture(t)
 	ctx := context.Background()
 	poll := webdriver.NewError(webdriver.ErrorKindRateLimited, "poll", "conversation poll rate limited (429 x8)", 429, true)
 	s.observeError(ctx, parent, "gpt-5-6-thinking", poll)
-	require.Contains(t, repo.cooldowns, parent.ID)
-	require.Less(t, time.Until(repo.cooldowns[parent.ID]), time.Minute)
-	delete(repo.cooldowns, parent.ID)
+	require.Empty(t, repo.cooldowns)
+	require.Equal(t, "rate_limit", cache.backoffs[parent.ID].CooldownReason)
+	require.Less(t, time.Until(*cache.backoffs[parent.ID].CooldownUntil), time.Minute)
+	delete(cache.backoffs, parent.ID)
 	quota := webdriver.NewError(webdriver.ErrorKindRateLimited, "poll", "You've hit the Free plan limit for image generations requests.", 429, true)
 	s.observeError(ctx, parent, "gpt-5-6-thinking-wm", quota)
-	require.Contains(t, repo.cooldowns, parent.ID)
-	require.Less(t, time.Until(repo.cooldowns[parent.ID]), time.Minute)
-	delete(repo.cooldowns, parent.ID)
+	require.Empty(t, repo.cooldowns)
+	require.Equal(t, "rate_limit", cache.backoffs[parent.ID].CooldownReason)
+	require.Less(t, time.Until(*cache.backoffs[parent.ID].CooldownUntil), time.Minute)
+	delete(cache.backoffs, parent.ID)
 	s.observeError(ctx, parent, "gpt-5-6-thinking", quota)
 	require.Contains(t, repo.cooldowns, parent.ID)
 	delete(repo.accounts, shadow.ID)
@@ -446,12 +448,19 @@ type fakeWebImageQuotaCache struct {
 	mu       sync.Mutex
 	statuses map[int64]WebImageStatus
 	owners   map[int64]string
+	backoffs map[int64]WebImageStatus
 }
 
 func (c *fakeWebImageQuotaCache) Get(_ context.Context, id int64) (*WebImageStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	status, ok := c.statuses[id]
+	if backoff, found := c.backoffs[id]; found && backoff.CooldownUntil.After(time.Now()) {
+		status.ParentAccountID = id
+		status.CooldownUntil = backoff.CooldownUntil
+		status.CooldownReason = backoff.CooldownReason
+		ok = true
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -505,4 +514,23 @@ func (c *fakeWebImageQuotaCache) owner(id int64) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.owners[id]
+}
+
+func (c *fakeWebImageQuotaCache) Backoff(_ context.Context, id int64, reason string, until time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.backoffs == nil {
+		c.backoffs = map[int64]WebImageStatus{}
+	}
+	c.backoffs[id] = WebImageStatus{ParentAccountID: id, CooldownUntil: &until, CooldownReason: reason}
+	return nil
+}
+func (r *webImageTestRepo) GetByIDs(_ context.Context, ids []int64) ([]*Account, error) {
+	result := []*Account{}
+	for _, id := range ids {
+		if a := r.accounts[id]; a != nil {
+			result = append(result, a)
+		}
+	}
+	return result, nil
 }

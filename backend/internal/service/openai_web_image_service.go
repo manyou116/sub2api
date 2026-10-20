@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service/openaiimages/webdriver"
 	"github.com/google/uuid"
-	"github.com/imroc/req/v3"
 )
 
 // WebImageStateRepository extends the account repository without coupling other
@@ -25,6 +23,7 @@ type WebImageStateRepository interface {
 // Get returns nil for a missing snapshot. Exhaust invalidates any older probe.
 type WebImageQuotaCache interface {
 	Get(context.Context, int64) (*WebImageStatus, error)
+	Backoff(context.Context, int64, string, time.Time) error
 	AcquireProbe(context.Context, int64, string, time.Duration) (bool, error)
 	PublishProbe(context.Context, int64, string, *WebImageStatus) (bool, error)
 	ReleaseProbe(context.Context, int64, string) error
@@ -39,12 +38,14 @@ type webImageDriver interface {
 }
 
 type WebImageStatus struct {
-	ParentAccountID int64      `json:"parent_account_id"`
-	QuotaKnown      bool       `json:"quota_known"`
-	Remaining       *int       `json:"remaining"`
-	ResetAt         *time.Time `json:"reset_at"`
-	ProbedAt        *time.Time `json:"probed_at"`
-	CooldownUntil   *time.Time `json:"cooldown_until"`
+	ParentAccountID   int64      `json:"parent_account_id"`
+	QuotaKnown        bool       `json:"quota_known"`
+	Remaining         *int       `json:"remaining"`
+	ResetAt           *time.Time `json:"reset_at"`
+	ProbedAt          *time.Time `json:"probed_at"`
+	CooldownUntil     *time.Time `json:"cooldown_until"`
+	CooldownReason    string     `json:"cooldown_reason,omitempty"`
+	RetryAfterSeconds int        `json:"retry_after_seconds,omitempty"`
 }
 
 type OpenAIWebImageService struct {
@@ -55,13 +56,7 @@ type OpenAIWebImageService struct {
 }
 
 func NewOpenAIWebImageService(accounts AccountRepository, quotaCache WebImageQuotaCache, gateway *OpenAIGatewayService) *OpenAIWebImageService {
-	s := &OpenAIWebImageService{accounts: accounts, quotaCache: quotaCache, gateway: gateway, driver: webdriver.NewDriver(func(proxy string) (*req.Client, error) {
-		client := req.C().ImpersonateChrome().SetTimeout(10 * time.Minute)
-		if proxy != "" {
-			client.SetProxyURL(proxy)
-		}
-		return client, nil
-	})}
+	s := &OpenAIWebImageService{accounts: accounts, quotaCache: quotaCache, gateway: gateway, driver: webdriver.NewDriver(newWebImageClientPool().client)}
 	gateway.webImages = s
 	return s
 }
@@ -71,6 +66,13 @@ var errWebImageProbeBusy = errors.New("web image quota probe already running")
 func (s *OpenAIWebImageService) parent(ctx context.Context, account *Account) (*Account, error) {
 	if account == nil || !account.IsWebImageShadow() {
 		return nil, errors.New("account is not a Web image shadow")
+	}
+	if snapshot, ok := ctx.Value(webImageCandidateKey{}).(*webImageCandidateState); ok {
+		parent := snapshot.parents[*account.ParentAccountID]
+		if err := ValidateWebImageShadowParent(parent); err != nil {
+			return nil, err
+		}
+		return parent, nil
 	}
 	parent, err := resolveCredentialAccount(ctx, s.accounts, account)
 	if err != nil {
@@ -92,31 +94,19 @@ func (s *OpenAIWebImageService) Status(ctx context.Context, id int64) (*WebImage
 }
 
 func (s *OpenAIWebImageService) parentStatus(ctx context.Context, id int64) (*WebImageStatus, error) {
-	status := &WebImageStatus{ParentAccountID: id}
-	if s.quotaCache != nil {
-		cached, err := s.quotaCache.Get(ctx, id)
-		if err != nil {
-			return nil, err
+	if snapshot, ok := ctx.Value(webImageCandidateKey{}).(*webImageCandidateState); ok {
+		if snapshot.err != nil {
+			return nil, snapshot.err
 		}
-		if cached != nil {
-			status = cached
+		if status := snapshot.statuses[id]; status != nil {
+			return status, nil
 		}
 	}
-	if repo, ok := s.accounts.(WebImageStateRepository); ok {
-		until, err := repo.WebImageCooldown(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		if until != nil && until.After(time.Now()) {
-			status.CooldownUntil = until
-		}
+	statuses, err := s.parentStatuses(ctx, []int64{id})
+	if err != nil {
+		return nil, err
 	}
-	if status.ResetAt != nil && !status.ResetAt.After(time.Now()) {
-		status.QuotaKnown = false
-		status.Remaining = nil
-		status.ResetAt = nil
-	}
-	return status, nil
+	return statuses[id], nil
 }
 
 func (s *OpenAIWebImageService) auth(ctx context.Context, parent *Account) (webdriver.Auth, error) {
@@ -152,6 +142,10 @@ func (s *OpenAIWebImageService) Probe(ctx context.Context, id int64) (*WebImageS
 	if s.quotaCache == nil {
 		return nil, errors.New("web image quota cache unavailable")
 	}
+	observed, err := s.readCooldowns(ctx, []int64{parent.ID})
+	if err != nil {
+		return nil, err
+	}
 	owner := uuid.NewString()
 	acquired, err := s.quotaCache.AcquireProbe(ctx, parent.ID, owner, 45*time.Second)
 	if err != nil {
@@ -173,6 +167,7 @@ func (s *OpenAIWebImageService) Probe(ctx context.Context, id int64) (*WebImageS
 	}
 	quota, err := s.driver.ProbeQuota(ctx, auth)
 	if err != nil {
+		s.redactDriverError(err, parent)
 		s.observeError(ctx, parent, resolveWebImageOptions(account).Model, err)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -193,6 +188,13 @@ func (s *OpenAIWebImageService) Probe(ctx context.Context, id int64) (*WebImageS
 	}
 	if !written {
 		return nil, errors.New("web image quota probe lease expired")
+	}
+	if quota.Known && quota.Remaining > 0 {
+		if repo, ok := s.accounts.(webImageCooldownRepository); ok {
+			if err := repo.ClearWebImageCooldownIfObserved(ctx, parent.ID, observed[parent.ID]); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return s.parentStatus(ctx, parent.ID)
 }
@@ -278,49 +280,7 @@ func (s *OpenAIWebImageService) eligible(ctx context.Context, account *Account) 
 		return nil, err
 	}
 	if status.CooldownUntil != nil || (status.QuotaKnown && status.Remaining != nil && *status.Remaining <= 0) {
-		return nil, errors.New("web image quota is exhausted")
+		return nil, webImageUnavailableError(status)
 	}
 	return parent, nil
-}
-
-func (s *OpenAIWebImageService) observeError(ctx context.Context, parent *Account, model string, err error) {
-	if ctx.Err() != nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	var driverErr *webdriver.Error
-	if !errors.As(err, &driverErr) {
-		return
-	}
-	if !webdriver.IsWorkModeModel(model) && strings.EqualFold(strings.TrimSpace(parent.GetCredential("plan_type")), "free") && webdriver.IsImageQuotaLimitedMessage(driverErr.Message) {
-		until := driverErr.ResetAt
-		if until == nil {
-			t := time.Now().Add(24 * time.Hour)
-			until = &t
-		}
-		if repo, ok := s.accounts.(WebImageStateRepository); ok {
-			_ = repo.SetWebImageCooldown(ctx, parent.ID, *until)
-		}
-		if s.quotaCache != nil {
-			zero := 0
-			_ = s.quotaCache.Exhaust(ctx, parent.ID, &WebImageStatus{ParentAccountID: parent.ID, QuotaKnown: true, Remaining: &zero, ResetAt: until})
-		}
-		return
-	}
-	if driverErr.Kind == webdriver.ErrorKindRateLimited || driverErr.StatusCode == http.StatusForbidden {
-		if repo, ok := s.accounts.(WebImageStateRepository); ok {
-			until := time.Now().Add(30 * time.Second)
-			if driverErr.ResetAt != nil && driverErr.ResetAt.After(until) {
-				until = *driverErr.ResetAt
-			}
-			_ = repo.SetWebImageCooldown(ctx, parent.ID, until)
-		}
-	}
-	if driverErr.Kind == webdriver.ErrorKindTransport {
-		s.gateway.tempUnscheduleOpenAITransportError(ctx, parent, sanitizeUpstreamErrorMessage(driverErr.Message))
-	}
-	if driverErr.Kind == webdriver.ErrorKindAuth && s.gateway.rateLimitService != nil {
-		s.gateway.rateLimitService.HandleUpstreamError(ctx, parent, http.StatusUnauthorized, nil, driverErr.ResponseBody)
-	}
 }
