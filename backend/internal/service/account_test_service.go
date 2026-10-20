@@ -813,6 +813,12 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string) error {
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
+	if account.IsWebImageShadow() {
+		if modelID == "" {
+			modelID = "gpt-image-2"
+		}
+		return s.testWebImage(c, account, account.GetMappedModel(modelID), prompt)
+	}
 
 	// Default to openai.DefaultTestModel for OpenAI testing
 	testModelID := modelID

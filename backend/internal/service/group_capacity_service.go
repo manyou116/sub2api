@@ -7,13 +7,15 @@ import (
 
 // GroupCapacitySummary holds aggregated capacity for a single group.
 type GroupCapacitySummary struct {
-	GroupID         int64 `json:"group_id"`
-	ConcurrencyUsed int   `json:"concurrency_used"`
-	ConcurrencyMax  int   `json:"concurrency_max"`
-	SessionsUsed    int   `json:"sessions_used"`
-	SessionsMax     int   `json:"sessions_max"`
-	RPMUsed         int   `json:"rpm_used"`
-	RPMMax          int   `json:"rpm_max"`
+	GroupID              int64 `json:"group_id"`
+	ConcurrencyUsed      int   `json:"concurrency_used"`
+	ConcurrencyMax       int   `json:"concurrency_max"`
+	ImageConcurrencyUsed int   `json:"image_concurrency_used"`
+	ImageConcurrencyMax  int   `json:"image_concurrency_max"`
+	SessionsUsed         int   `json:"sessions_used"`
+	SessionsMax          int   `json:"sessions_max"`
+	RPMUsed              int   `json:"rpm_used"`
+	RPMMax               int   `json:"rpm_max"`
 }
 
 // GroupAccountCapacityRow is the lightweight account projection needed for
@@ -22,6 +24,7 @@ type GroupAccountCapacityRow struct {
 	GroupID             int64
 	AccountID           int64
 	Concurrency         int
+	QuotaDimension      string
 	Extra               map[string]any
 	SessionWindowStart  *time.Time
 	SessionWindowEnd    *time.Time
@@ -109,6 +112,7 @@ func (s *GroupCapacityService) getGroupCapacitiesSequential(ctx context.Context,
 type groupCapacityAccountRef struct {
 	groupID   int64
 	accountID int64
+	image     bool
 }
 
 func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, groupIDs []int64, lister groupCapacityAccountLister) ([]GroupCapacitySummary, error) {
@@ -142,7 +146,7 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 			continue
 		}
 
-		ref := groupCapacityAccountRef{groupID: row.GroupID, accountID: row.AccountID}
+		ref := groupCapacityAccountRef{groupID: row.GroupID, accountID: row.AccountID, image: row.QuotaDimension == QuotaDimensionWebImages}
 		if _, ok := seenGroupAccount[ref]; ok {
 			continue
 		}
@@ -163,6 +167,10 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 			SessionWindowStatus: row.SessionWindowStatus,
 		}
 
+		if ref.image {
+			results[idx].ImageConcurrencyMax += acc.Concurrency
+			continue
+		}
 		results[idx].ConcurrencyMax += acc.Concurrency
 
 		if maxSessions := acc.GetMaxSessions(); maxSessions > 0 {
@@ -206,6 +214,10 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 
 	for _, ref := range refs {
 		idx := groupIndex[ref.groupID]
+		if ref.image {
+			results[idx].ImageConcurrencyUsed += concurrencyMap[ref.accountID]
+			continue
+		}
 		results[idx].ConcurrencyUsed += concurrencyMap[ref.accountID]
 		if sessionsMap != nil && results[idx].SessionsMax > 0 {
 			results[idx].SessionsUsed += sessionsMap[ref.accountID]
@@ -222,7 +234,7 @@ func accountIDsForGroupsWithLimit(refs []groupCapacityAccountRef, groupIndex map
 	accountIDs := make([]int64, 0)
 	for _, ref := range refs {
 		idx, ok := groupIndex[ref.groupID]
-		if !ok || !include(summaries[idx]) {
+		if !ok || ref.image || !include(summaries[idx]) {
 			continue
 		}
 		if _, ok := seen[ref.accountID]; ok {
@@ -246,11 +258,19 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 	// Collect account IDs and config values
 	accountIDs := make([]int64, 0, len(accounts))
 	sessionTimeouts := make(map[int64]time.Duration)
-	var concurrencyMax, sessionsMax, rpmMax int
+	var concurrencyMax, imageConcurrencyMax, sessionsMax, rpmMax int
+	imageAccounts := make(map[int64]bool)
+	textAccountIDs := make([]int64, 0, len(accounts))
 
 	for i := range accounts {
 		acc := &accounts[i]
 		accountIDs = append(accountIDs, acc.ID)
+		if acc.IsWebImageShadow() {
+			imageAccounts[acc.ID] = true
+			imageConcurrencyMax += acc.Concurrency
+			continue
+		}
+		textAccountIDs = append(textAccountIDs, acc.ID)
 		concurrencyMax += acc.Concurrency
 
 		if ms := acc.GetMaxSessions(); ms > 0 {
@@ -268,21 +288,28 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 	}
 
 	// Batch query runtime data from Redis
-	concurrencyMap, _ := s.concurrencyService.GetAccountConcurrencyBatch(ctx, accountIDs)
+	concurrencyMap := map[int64]int{}
+	if s.concurrencyService != nil {
+		concurrencyMap, _ = s.concurrencyService.GetAccountConcurrencyBatch(ctx, accountIDs)
+	}
 
 	var sessionsMap map[int64]int
 	if sessionsMax > 0 && s.sessionLimitCache != nil {
-		sessionsMap, _ = s.sessionLimitCache.GetActiveSessionCountBatch(ctx, accountIDs, sessionTimeouts)
+		sessionsMap, _ = s.sessionLimitCache.GetActiveSessionCountBatch(ctx, textAccountIDs, sessionTimeouts)
 	}
 
 	var rpmMap map[int64]int
 	if rpmMax > 0 && s.rpmCache != nil {
-		rpmMap, _ = s.rpmCache.GetRPMBatch(ctx, accountIDs)
+		rpmMap, _ = s.rpmCache.GetRPMBatch(ctx, textAccountIDs)
 	}
 
 	// Aggregate
-	var concurrencyUsed, sessionsUsed, rpmUsed int
+	var concurrencyUsed, imageConcurrencyUsed, sessionsUsed, rpmUsed int
 	for _, id := range accountIDs {
+		if imageAccounts[id] {
+			imageConcurrencyUsed += concurrencyMap[id]
+			continue
+		}
 		concurrencyUsed += concurrencyMap[id]
 		if sessionsMap != nil {
 			sessionsUsed += sessionsMap[id]
@@ -293,11 +320,13 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 	}
 
 	return GroupCapacitySummary{
-		ConcurrencyUsed: concurrencyUsed,
-		ConcurrencyMax:  concurrencyMax,
-		SessionsUsed:    sessionsUsed,
-		SessionsMax:     sessionsMax,
-		RPMUsed:         rpmUsed,
-		RPMMax:          rpmMax,
+		ConcurrencyUsed:      concurrencyUsed,
+		ConcurrencyMax:       concurrencyMax,
+		ImageConcurrencyUsed: imageConcurrencyUsed,
+		ImageConcurrencyMax:  imageConcurrencyMax,
+		SessionsUsed:         sessionsUsed,
+		SessionsMax:          sessionsMax,
+		RPMUsed:              rpmUsed,
+		RPMMax:               rpmMax,
 	}, nil
 }

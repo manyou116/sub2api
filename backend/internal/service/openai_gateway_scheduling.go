@@ -393,6 +393,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account == nil {
 		return "account_nil"
 	}
+	if account.IsWebImageShadow() && (requestedModel == "" || !OpenAIImageGenerationIntentFromContext(ctx) || !IsGPTImageGenerationModel(account.GetMappedModel(requestedModel))) {
+		return "web_image_only"
+	}
 	// account_model composite routes publish an alias that only accounts with an
 	// explicit model mapping own. Both scheduler modes (advanced and legacy) must
 	// enforce ownership before any priority/sticky/transport consideration; a
@@ -996,7 +999,7 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
-	if s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) || openAICapacityBlocked(ctx, account, requestedModel) {
+	if (s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) || s.webImageSchedulingReason(ctx, account, requestedModel) != "") || openAICapacityBlocked(ctx, account, requestedModel) {
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
@@ -1240,7 +1243,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if !s.openAIAccountMatchesSchedulingGroup(account, groupID) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
-					} else if s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) || openAICapacityBlocked(ctx, account, requestedModel) {
+					} else if (s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) || s.webImageSchedulingReason(ctx, account, requestedModel) != "") || openAICapacityBlocked(ctx, account, requestedModel) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
@@ -1335,7 +1338,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			filterStats.exclude("shadow_parent_unhealthy")
 			continue
 		}
-		if s.isOpenAIAccountRequestRuntimeBlocked(acc, requestedModel) || openAICapacityBlocked(ctx, acc, requestedModel) {
+		if (s.isOpenAIAccountRequestRuntimeBlocked(acc, requestedModel) || s.webImageSchedulingReason(ctx, acc, requestedModel) != "") || openAICapacityBlocked(ctx, acc, requestedModel) {
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
@@ -1624,7 +1627,7 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAIAccountBeforeProfit(
 	if !parentHealthyForShadow(fresh, s.parentAccountLookup(ctx)) {
 		return nil
 	}
-	if s.isOpenAIAccountRequestRuntimeBlocked(fresh, requestedModel) || openAICapacityBlocked(ctx, fresh, requestedModel) {
+	if (s.isOpenAIAccountRequestRuntimeBlocked(fresh, requestedModel) || s.webImageSchedulingReason(ctx, fresh, requestedModel) != "") || openAICapacityBlocked(ctx, fresh, requestedModel) {
 		return nil
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, fresh) {
@@ -1667,7 +1670,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot == nil || s.accountRepo == nil {
-		if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !account.IsPrivacySet() {
+		if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !s.openAIRequestPrivacySet(ctx, account) {
 			return nil
 		}
 		if !isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, account, platform, requestedModel, requireCompact, requiredCapability) {
@@ -1692,7 +1695,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if !s.openAIAccountMatchesSchedulingGroup(latest, groupID) {
 		return nil
 	}
-	if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !latest.IsPrivacySet() {
+	if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !s.openAIRequestPrivacySet(ctx, latest) {
 		return nil
 	}
 	if !isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, latest, platform, requestedModel, requireCompact, requiredCapability) {
@@ -1701,7 +1704,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if !parentHealthyForShadow(latest, s.parentAccountLookup(ctx)) {
 		return nil
 	}
-	if s.isOpenAIAccountRequestRuntimeBlocked(latest, requestedModel) || openAICapacityBlocked(ctx, latest, requestedModel) {
+	if (s.isOpenAIAccountRequestRuntimeBlocked(latest, requestedModel) || s.webImageSchedulingReason(ctx, latest, requestedModel) != "") || openAICapacityBlocked(ctx, latest, requestedModel) {
 		return nil
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, latest) {

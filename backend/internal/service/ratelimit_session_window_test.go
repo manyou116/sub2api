@@ -139,7 +139,6 @@ func (m *sessionWindowMockRepo) ListSchedulableByGroupIDAndPlatforms(context.Con
 	panic("unexpected")
 }
 
-
 func (m *sessionWindowMockRepo) ListSchedulableUngroupedByPlatform(context.Context, string) ([]Account, error) {
 	panic("unexpected")
 }

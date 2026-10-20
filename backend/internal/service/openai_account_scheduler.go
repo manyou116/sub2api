@@ -1458,7 +1458,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		// require_privacy_set is a group-scoped eligibility gate. Do not mutate the
 		// shared account: another group may intentionally allow accounts whose
 		// upstream privacy setting has not been confirmed.
-		if schedGroup != nil && schedGroup.RequirePrivacySet && !account.IsPrivacySet() {
+		if schedGroup != nil && schedGroup.RequirePrivacySet && !s.service.openAIRequestPrivacySet(ctx, account) {
 			filterStats.exclude("privacy_not_set")
 			continue
 		}
@@ -1770,12 +1770,20 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	if account.IsWebImageShadow() {
+		if s == nil || s.service == nil {
+			return false, "web_image_service_unavailable"
+		}
+		if reason := s.service.webImageSchedulingReason(ctx, account, req.RequestedModel); reason != "" {
+			return false, reason
+		}
+	}
 	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
 		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
 			return false, "account_model_not_owned"
 		}
 	}
-	if req.RequirePrivacySet && !account.IsPrivacySet() {
+	if req.RequirePrivacySet && (s == nil || s.service == nil || !s.service.openAIRequestPrivacySet(ctx, account)) {
 		return false, "privacy_not_set"
 	}
 	if (s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel)) || openAICapacityBlocked(ctx, account, req.RequestedModel) {
@@ -3166,27 +3174,4 @@ func calcLoadSkewByMoments(sum float64, sumSquares float64, count int) float64 {
 		variance = 0
 	}
 	return math.Sqrt(variance)
-}
-
-func mergeAccountsByID(base []Account, extra []Account) []Account {
-	if len(extra) == 0 {
-		return base
-	}
-	seen := make(map[int64]struct{}, len(base)+len(extra))
-	out := make([]Account, 0, len(base)+len(extra))
-	for i := range base {
-		if _, ok := seen[base[i].ID]; ok {
-			continue
-		}
-		seen[base[i].ID] = struct{}{}
-		out = append(out, base[i])
-	}
-	for i := range extra {
-		if _, ok := seen[extra[i].ID]; ok {
-			continue
-		}
-		seen[extra[i].ID] = struct{}{}
-		out = append(out, extra[i])
-	}
-	return out
 }

@@ -156,7 +156,6 @@ func (m *groupAwareMockAccountRepo) ListSchedulableByGroupIDAndPlatforms(ctx con
 	return result, nil
 }
 
-
 // accountBelongsToGroup 检查账号是否属于指定分组
 func accountBelongsToGroup(acc Account, groupID int64) bool {
 	for _, ag := range acc.AccountGroups {

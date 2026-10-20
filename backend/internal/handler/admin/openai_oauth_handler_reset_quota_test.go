@@ -504,7 +504,7 @@ func TestOpenAIRefreshQuota_QueryFailureIsReported(t *testing.T) {
 func TestNewOpenAIOAuthHandlerKeepsNilQuotaCapabilitiesGuarded(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	handler := NewOpenAIOAuthHandler(nil, newStubAdminService(), nil, nil)
+	handler := NewOpenAIOAuthHandler(nil, newStubAdminService(), nil, nil, nil)
 	require.Nil(t, handler.quotaService)
 	require.Nil(t, handler.rateLimitService)
 

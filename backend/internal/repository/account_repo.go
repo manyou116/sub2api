@@ -936,7 +936,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				ELSE extra
 			END,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND deleted_at IS NULL AND parent_account_id IS NULL
 	`, string(payload), id)
 	if err != nil {
 		return err
@@ -2064,10 +2064,24 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			}
 			for i := range accounts {
 				acc := &accounts[i]
+				if acc.IsShadow() {
+					parent, err := r.GetByID(ctx, *acc.ParentAccountID)
+					if err != nil || parent == nil || parent.IsShadow() {
+						continue
+					}
+					if acc.IsWebImageShadow() {
+						if service.ValidateWebImageShadowParent(parent) != nil || !parent.IsCredentialUsableForWebImages() {
+							continue
+						}
+					} else if !parent.IsOpenAIOAuth() || !parent.IsCredentialUsableForShadow() {
+						continue
+					}
+				}
 				rows = append(rows, service.GroupAccountCapacityRow{
 					GroupID:             groupID,
 					AccountID:           acc.ID,
 					Concurrency:         acc.Concurrency,
+					QuotaDimension:      acc.QuotaDimensionOrDefault(),
 					Extra:               copyJSONMap(acc.Extra),
 					SessionWindowStart:  acc.SessionWindowStart,
 					SessionWindowEnd:    acc.SessionWindowEnd,
@@ -2083,6 +2097,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			ag.group_id,
 			a.id AS account_id,
 			a.concurrency,
+			a.quota_dimension,
 			COALESCE(a.extra, '{}'::jsonb)::text AS extra,
 			a.session_window_start,
 			a.session_window_end,
@@ -2097,8 +2112,21 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
 			AND (a.overload_until IS NULL OR a.overload_until <= $3)
 			AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= $3)
+			AND (a.parent_account_id IS NULL OR EXISTS (
+				SELECT 1 FROM accounts p WHERE p.id = a.parent_account_id
+				AND p.deleted_at IS NULL AND p.parent_account_id IS NULL AND p.status = $2
+				AND p.platform = 'openai'
+				AND (p.expires_at IS NULL OR p.expires_at > $3 OR p.auto_pause_on_expired = FALSE)
+				AND (p.temp_unschedulable_until IS NULL OR p.temp_unschedulable_until <= $3
+					OR (a.quota_dimension = 'web_images' AND left(COALESCE(p.temp_unschedulable_reason, ''), length($4)) = $4))
+				AND ((a.quota_dimension = 'spark' AND p.type = 'oauth') OR
+					(a.quota_dimension = 'web_images' AND p.type IN ('oauth', 'setup-token')
+					AND trim(COALESCE(p.credentials->>'access_token', '')) <> ''
+					AND lower(trim(COALESCE(p.credentials->>'auth_mode', ''))) <> 'agentidentity'
+					AND (p.web_image_rate_limit_reset_at IS NULL OR p.web_image_rate_limit_reset_at <= $3)))
+			))
 		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC
-	`, pq.Array(groupIDs), service.StatusActive, time.Now())
+	`, pq.Array(groupIDs), service.StatusActive, time.Now(), service.OpenAICapacityCooldownReasonPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -2112,6 +2140,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			&row.GroupID,
 			&row.AccountID,
 			&row.Concurrency,
+			&row.QuotaDimension,
 			&extraRaw,
 			&row.SessionWindowStart,
 			&row.SessionWindowEnd,

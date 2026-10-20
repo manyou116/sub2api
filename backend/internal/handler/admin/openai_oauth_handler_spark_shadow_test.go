@@ -20,7 +20,7 @@ func TestCreateShadow_ReturnsCreatedShadow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	stub := &stubAdminService{}
-	h := NewOpenAIOAuthHandler(nil, stub, nil, nil)
+	h := NewOpenAIOAuthHandler(nil, stub, nil, nil, nil)
 
 	router := gin.New()
 	router.POST("/api/v1/admin/accounts/:id/shadow", h.CreateShadow)
@@ -54,7 +54,7 @@ func TestCreateShadow_ReturnsCreatedShadow(t *testing.T) {
 func TestCreateShadow_InvalidID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	h := NewOpenAIOAuthHandler(nil, &stubAdminService{}, nil, nil)
+	h := NewOpenAIOAuthHandler(nil, &stubAdminService{}, nil, nil, nil)
 
 	router := gin.New()
 	router.POST("/api/v1/admin/accounts/:id/shadow", h.CreateShadow)
@@ -72,7 +72,7 @@ func TestCreateShadow_ServiceError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	stub := &stubAdminService{createSparkShadowErr: errors.New("database unavailable")}
-	h := NewOpenAIOAuthHandler(nil, stub, nil, nil)
+	h := NewOpenAIOAuthHandler(nil, stub, nil, nil, nil)
 
 	router := gin.New()
 	router.POST("/api/v1/admin/accounts/:id/shadow", h.CreateShadow)
@@ -91,7 +91,7 @@ func TestCreateShadow_ServiceError(t *testing.T) {
 func TestCreateShadow_BadBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	h := NewOpenAIOAuthHandler(nil, &stubAdminService{}, nil, nil)
+	h := NewOpenAIOAuthHandler(nil, &stubAdminService{}, nil, nil, nil)
 
 	router := gin.New()
 	router.POST("/api/v1/admin/accounts/:id/shadow", h.CreateShadow)
@@ -107,7 +107,7 @@ func TestCreateShadow_BadBody(t *testing.T) {
 
 func TestWebImageShadowCreationPreservesExplicitValues(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewOpenAIOAuthHandler(nil, &stubAdminService{}, nil, nil)
+	h := NewOpenAIOAuthHandler(nil, &stubAdminService{}, nil, nil, nil)
 	router := gin.New()
 	router.POST("/accounts/:id/web-image-shadow", h.CreateWebImageShadow)
 	rec := httptest.NewRecorder()

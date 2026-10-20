@@ -177,3 +177,25 @@ func TestGetAllGroupCapacityBatchKeepsEmptyGroupRows(t *testing.T) {
 		{GroupID: 20, ConcurrencyMax: 4},
 	}, results)
 }
+
+func TestGetAllGroupCapacitySeparatesWebImagesUsingSharedConcurrency(t *testing.T) {
+	accountRepo := &groupCapacityAccountRepoStub{rows: []GroupAccountCapacityRow{
+		{GroupID: 10, AccountID: 1, Concurrency: 4, Extra: map[string]any{"max_sessions": 3, "base_rpm": 10}},
+		{GroupID: 10, AccountID: 2, Concurrency: 2, QuotaDimension: QuotaDimensionSpark},
+		{GroupID: 10, AccountID: 3, Concurrency: 2, QuotaDimension: QuotaDimensionWebImages, Extra: map[string]any{"max_sessions": 9, "base_rpm": 99}},
+		{GroupID: 20, AccountID: 3, Concurrency: 2, QuotaDimension: QuotaDimensionWebImages},
+	}}
+	cache := &groupCapacityConcurrencyCacheStub{counts: map[int64]int{1: 1, 2: 1, 3: 2}}
+	sessions := &groupCapacitySessionCacheStub{counts: map[int64]int{1: 1, 3: 9}}
+	rpm := &groupCapacityRPMCacheStub{counts: map[int64]int{1: 5, 3: 99}}
+	svc := NewGroupCapacityService(accountRepo, &groupCapacityGroupRepoStub{groupIDs: []int64{10, 20}}, NewConcurrencyService(cache), sessions, rpm)
+	got, err := svc.GetAllGroupCapacity(context.Background())
+	require.NoError(t, err)
+	require.ElementsMatch(t, []int64{1, 2, 3}, cache.requested)
+	require.NotContains(t, sessions.requested, int64(3))
+	require.NotContains(t, rpm.requested, int64(3))
+	require.Equal(t, []GroupCapacitySummary{
+		{GroupID: 10, ConcurrencyUsed: 2, ConcurrencyMax: 6, ImageConcurrencyUsed: 2, ImageConcurrencyMax: 2, SessionsUsed: 1, SessionsMax: 3, RPMUsed: 5, RPMMax: 10},
+		{GroupID: 20, ImageConcurrencyUsed: 2, ImageConcurrencyMax: 2},
+	}, got)
+}
