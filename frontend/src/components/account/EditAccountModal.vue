@@ -26,7 +26,7 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
-      <WebImageShadowSettings v-if="isWebShadow" v-model="webImageSettings" :account-id="account.id" />
+      <WebImageShadowSettings v-if="isWebShadow" v-model="webImageSettings" :account-id="account.id" :mode="imageShadowMode(account)" :parent-id="account.parent_account_id" />
       <template v-if="!isWebShadow">
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
@@ -3249,7 +3249,7 @@ import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestId
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import WebImageShadowSettings from './WebImageShadowSettings.vue'
-import { isWebImageShadow, readWebImageSettings, type WebImageSettings } from './webImageShadow'
+import { isImageShadow, imageShadowMode, readWebImageSettings, type WebImageSettings } from './webImageShadow'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
@@ -3361,7 +3361,7 @@ const selectableGroups = computed(() => {
 
 // Credential shadows inherit parent identity and proxy.
 const isCredentialShadow = computed(() => props.account?.parent_account_id != null)
-const isWebShadow = computed(() => isWebImageShadow(props.account))
+const isWebShadow = computed(() => isImageShadow(props.account))
 const webImageSettings = ref<WebImageSettings>(readWebImageSettings(null))
 
 const hideAccountLongContextBilling = computed(() => {

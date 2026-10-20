@@ -200,7 +200,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/v1/models \
 When debugging web images, always restart/use air so the binary matches source.
 Do not assume an old PID on :8080 has the latest code.
 
-## Fork Feature: Web Image Shadows
+## Fork Feature: Web and WM Image Shadows
 
 The Web image control plane uses dedicated credential-linked shadow accounts. The
 validated `backend/internal/service/openaiimages/webdriver/` protocol package is
@@ -209,9 +209,11 @@ flow and keep changes covered by driver tests. Published migration 177 remains
 immutable for upgrade checksums.
 
 - Read `docs/WEB_IMAGE_SHADOWS.md` for the approved behavior contract.
-- A `web_images` shadow is the sole ChatGPT Web image route; creation enables it.
+- `web_images` and `work_images` are fixed image shadow purposes; creation enables
+  the chosen type. One parent can have Spark, Web and WM children together.
 - Use ordinary account concurrency, priority, groups and schedulable state.
-- Keep credentials and upstream image quota/cooldown tied to the parent identity.
+- Keep credentials and resource state tied to the parent identity. Web uses parent
+  image quota; WM shares parent Codex/model quota without a second quota snapshot.
 - Do not restore the legacy Web enable switches, inflight counters, or slot bypasses.
 - Ordinary image APIs for other account types must continue to work.
 - Batch shadow creation reuses the single-account lifecycle and preserves existing
@@ -219,8 +221,13 @@ immutable for upgrade checksums.
 - Never restart generation after an accepted or uncertain submission; retry only
   the existing conversation's reads/downloads. Keep quota exhaustion separate from
   temporary Web throttling and shared parent credential/proxy failures.
-- Web/Work execution-mode redesign is deferred. Do not infer a new mode from the
-  download-attachment checkbox while implementing reliability fixes.
+- Use the backend model catalog and recommended defaults. Model or attachment
+  settings cannot change the shadow type. WM requires a downloadable attachment.
+- Mixed Web/WM groups require explicit gpt-image-2-web / gpt-image-2-work aliases;
+  generic requests return 400 instead of silently switching quota sources.
+- Migration 247 adds WM lifecycle constraints; published SQL stays immutable.
+- Record actual output dimensions and execution model. Unknown upstream token
+  usage or Codex cost must stay unknown; do not promise exact sizes or 4K.
 
 ## Release speed (this fork)
 

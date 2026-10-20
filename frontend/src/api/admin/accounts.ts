@@ -1034,8 +1034,31 @@ export interface WebImageStatus {
   retry_after_seconds?: number
 }
 
+export type ImageShadowMode = 'web' | 'work'
+
+export interface ImageShadowModel {
+  id: string
+  label: string
+  modes: ImageShadowMode[]
+  thinking_efforts: string[]
+  default_thinking_effort: string
+  recommended?: boolean
+  verified: boolean
+}
+
+export interface ImageShadowModelCatalog {
+  models: ImageShadowModel[]
+  recommended: Record<ImageShadowMode, string>
+}
+
+export async function getImageShadowModels(): Promise<ImageShadowModelCatalog> {
+  const { data } = await apiClient.get<ImageShadowModelCatalog>('/admin/accounts/image-shadow-models')
+  return data
+}
+
 export interface WebImageShadowBatchItem {
   parent_id: number
+  mode: ImageShadowMode
   shadow_id?: number
   status: 'created' | 'existing' | 'skipped' | 'failed'
   code?: string
@@ -1050,9 +1073,9 @@ export interface WebImageShadowBatchResult {
   results: WebImageShadowBatchItem[]
 }
 
-export async function createWebImageShadows(parentIds: number[], concurrency = 1): Promise<WebImageShadowBatchResult> {
+export async function createWebImageShadows(parentIds: number[], concurrency = 1, modes: ImageShadowMode[] = ['web']): Promise<WebImageShadowBatchResult> {
   const { data } = await apiClient.post<WebImageShadowBatchResult>('/admin/accounts/web-image-shadows', {
-    parent_ids: parentIds, concurrency
+    parent_ids: parentIds, concurrency, modes
   })
   return data
 }
@@ -1062,7 +1085,7 @@ export async function getWebImageStatuses(accountIds: number[]): Promise<{ statu
   return data
 }
 
-export async function createWebImageShadow(parentId: number, payload: SparkShadowCreatePayload = {}): Promise<Account> {
+export async function createWebImageShadow(parentId: number, payload: SparkShadowCreatePayload & { mode?: ImageShadowMode } = {}): Promise<Account> {
   const { data } = await apiClient.post<Account>(`/admin/accounts/${parentId}/web-image-shadow`, payload)
   return data
 }
@@ -1239,6 +1262,7 @@ export const accountsAPI = {
   createSparkShadow,
   createWebImageShadow,
   createWebImageShadows,
+  getImageShadowModels,
   getWebImageStatus,
   getWebImageStatuses,
   probeWebImageStatus,

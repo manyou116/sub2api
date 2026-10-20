@@ -353,7 +353,7 @@ const loadAvailableModels = async () => {
       : models
     // Default selection by platform
     if (availableModels.value.length > 0) {
-      if (props.account.quota_dimension === 'web_images' && props.account.parent_account_id != null) {
+      if (['web_images', 'work_images'].includes(props.account.quota_dimension || '') && props.account.parent_account_id != null) {
         selectedModelId.value = availableModels.value.find(m => m.id === 'gpt-image-2')?.id || availableModels.value[0].id
       } else if (props.account.platform === 'gemini') {
         selectedModelId.value = availableModels.value[0].id

@@ -5,6 +5,9 @@ import AccountsView from '../AccountsView.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import BatchWebImageShadowDialog from '@/components/account/BatchWebImageShadowDialog.vue'
+import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
+import WebImageQuotaCell from '@/components/account/WebImageQuotaCell.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 
 // 外审 F2:AccountActionMenu emit 'create-spark-shadow',但 AccountsView 此前未监听,
@@ -80,6 +83,8 @@ const mountView = () =>
         DataTable: true,
         Pagination: true,
         ConfirmDialog: true,
+        BatchWebImageShadowDialog: true,
+        WebImageQuotaCell: true,
         AccountTableActions: { template: '<div><slot name="beforeCreate" /><slot name="after" /></div>' },
         AccountTableFilters: { template: '<div></div>' },
         AccountBulkActionsBar: true,
@@ -193,34 +198,21 @@ describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
     wrapper.unmount()
   })
 
-  it('confirms Web image shadow creation before calling its endpoint', async () => {
-    createWebImageShadow.mockResolvedValue({ id: 1000 })
+  it('opens the unified image-mode dialog for a single parent before any creation', async () => {
     const wrapper = mountView()
     await flushPromises()
     wrapper.findComponent(AccountActionMenu).vm.$emit('create-web-image-shadow', { id: 42, name: 'parent' })
     await flushPromises()
-    expect(createWebImageShadow).not.toHaveBeenCalled()
-    const dialog = wrapper.findAllComponents(ConfirmDialog).find(d => d.props('show'))!
-    expect(dialog.props('title')).toBe('admin.accounts.webImageShadow.create')
-    dialog.vm.$emit('confirm')
-    await flushPromises()
-    expect(createWebImageShadow).toHaveBeenCalledWith(42)
-    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.webImageShadow.created')
-    expect(listAccounts.mock.calls.length).toBeGreaterThan(1)
-    wrapper.unmount()
-  })
-
-  it('shows Web creation errors and keeps the dialog open', async () => {
-    createWebImageShadow.mockRejectedValue({ response: { data: { message: 'Web shadow already exists' } } })
-    const wrapper = mountView()
-    await flushPromises()
-    wrapper.findComponent(AccountActionMenu).vm.$emit('create-web-image-shadow', { id: 42, name: 'parent' })
-    await flushPromises()
-    const dialog = wrapper.findAllComponents(ConfirmDialog).find(d => d.props('show'))!
-    dialog.vm.$emit('confirm')
-    await flushPromises()
-    expect(showError).toHaveBeenCalledWith('Web shadow already exists')
+    const dialog = wrapper.getComponent(BatchWebImageShadowDialog)
     expect(dialog.props('show')).toBe(true)
+    expect(dialog.props('parentIds')).toEqual([42])
+    expect(createWebImageShadow).not.toHaveBeenCalled()
+    dialog.vm.$emit('completed')
+    await flushPromises()
+    expect(listAccounts.mock.calls.length).toBeGreaterThan(1)
+    dialog.vm.$emit('close')
+    await flushPromises()
+    expect(dialog.props('show')).toBe(false)
     wrapper.unmount()
   })
 
@@ -258,11 +250,14 @@ const mountViewWithRow = () =>
             <div v-for="(row, idx) in (data || [])" :key="idx">
               <slot name="cell-name" :row="row" :value="row.name" />
               <slot name="cell-platform_type" :row="row" />
+              <slot name="cell-usage" :row="row" />
             </div>
           </div>`
         },
         Pagination: true,
         ConfirmDialog: true,
+        BatchWebImageShadowDialog: true,
+        WebImageQuotaCell: true,
         AccountTableActions: { template: '<div><slot name="beforeCreate" /><slot name="after" /></div>' },
         AccountTableFilters: { template: '<div></div>' },
         AccountBulkActionsBar: true,
@@ -338,6 +333,21 @@ describe('admin AccountsView — 账号行展示', () => {
     expect(badge.props('privacyMode')).toBe('false')
     expect(badge.props('subscriptionExpiresAt')).toBe('2027-01-01T00:00:00Z')
 
+    wrapper.unmount()
+  })
+
+  it('renders WM with parent Codex usage while Web keeps its image-quota cell', async () => {
+    const work = { id: 300, name: 'WM', platform: 'openai', type: 'oauth', parent_account_id: 1, quota_dimension: 'work_images' }
+    const web = { ...work, id: 301, name: 'Web', quota_dimension: 'web_images' }
+    listAccounts.mockResolvedValue({ items: [work, web], total: 2, page: 1, page_size: 20, pages: 1 })
+    const wrapper = mountViewWithRow()
+    await flushPromises()
+    expect(wrapper.text()).toContain('admin.accounts.webImageShadow.workBadge')
+    expect(wrapper.text()).toContain('admin.accounts.webImageShadow.workParent')
+    const usage = wrapper.findAllComponents(AccountUsageCell)
+    expect(usage).toHaveLength(1)
+    expect(usage[0].props('account').id).toBe(300)
+    expect(wrapper.getComponent(WebImageQuotaCell).props('accountId')).toBe(301)
     wrapper.unmount()
   })
 

@@ -36,21 +36,34 @@ need_rg() {
 
 echo "== Fork hook check (see docs/FORK_HOOKS.md) =="
 
-# --- P1 Web image shadows ---
-echo "-- P1 Web image shadows --"
+# --- P1 Web and WM image shadows ---
+echo "-- P1 Web and WM image shadows --"
 need_file backend/internal/service/openaiimages/webdriver/types.go
 need_file backend/migrations/177_add_web_image_rate_limit.sql
 need_file backend/migrations/246_web_image_shadows.sql
+need_file backend/migrations/247_work_image_shadows.sql
 need_file backend/internal/service/web_image_shadow_lifecycle.go
 need_file backend/internal/service/openai_web_image_service.go
 need_file backend/internal/service/openai_web_image_forward.go
+need_file backend/internal/service/openai_image_shadow_catalog.go
+need_file backend/internal/service/openai_image_shadow_routing.go
+need_file backend/internal/service/openai_work_image_quota.go
 need_rg "shadow quota dimension" 'QuotaDimensionWebImages' backend/internal/service/domain_constants.go
+need_rg "WM shadow quota purpose" 'QuotaDimensionWorkImages' backend/internal/service/domain_constants.go
 need_rg "image-only scheduler gate" 'webImageSchedulingReason' backend/internal/service/openai_account_scheduler.go
-need_rg "Web dispatch uses shadow identity" 'account.IsWebImageShadow()' backend/internal/service/openai_images.go
+need_rg "image dispatch uses typed shadow identity" 'account.IsImageShadow()' backend/internal/service/openai_images.go
+need_rg "fixed mode routing before selection" 'imageShadowRoutingContext' backend/internal/service/openai_account_scheduler.go
+need_rg "mixed pool requires explicit mode" 'ErrImageShadowModeRequired' backend/internal/handler/openai_images.go
+need_rg "driver receives explicit execution mode" 'Mode: imageShadowMode(fresh)' backend/internal/service/openai_web_image_forward.go
+need_rg "WM errors update parent resource" 'observeImageShadowError' backend/internal/service/openai_web_image_forward.go
 need_rg "images use ordinary account slots" 'h.acquireResponsesAccountSlot' backend/internal/handler/openai_images.go
 need_rg "shadow create route" '/:id/web-image-shadow' backend/internal/server/routes/admin.go
+need_rg "shared model catalog route" '/image-shadow-models' backend/internal/server/routes/admin.go
 need_rg "parent resource state" 'WebImageCooldown' backend/internal/repository/account_web_image_state_repo.go
 need_rg "shared concurrency capacity classification" 'QuotaDimensionWebImages' backend/internal/service/group_capacity_service.go
+need_rg "WM shares image concurrency accounting" 'QuotaDimensionWorkImages' backend/internal/service/group_capacity_service.go
+need_rg "WM quota refresh uses parent identity" 'quotaResourceAccountID' backend/internal/handler/admin/openai_oauth_handler.go
+need_rg "WM backup configuration" 'work_image_shadow' backend/internal/handler/admin/account_data.go
 need_rg "frontend creates Web shadows" 'createWebImageShadow' frontend/src/api/admin/accounts.ts
 
 # --- P5 kiro ---

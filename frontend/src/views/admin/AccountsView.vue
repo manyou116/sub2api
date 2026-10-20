@@ -186,7 +186,7 @@
           @refresh-token="handleBulkRefreshToken"
           @probe-upstream-billing="handleBulkProbeUpstreamBilling"
           @edit-selected="openBulkEditSelected"
-          @create-web-image-shadows="showBatchWebImageShadows = true"
+          @create-web-image-shadows="creatingWebImageShadow = null; showBatchWebImageShadows = true"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
           @select-page="selectPage"
@@ -267,8 +267,8 @@
                   :plan-type="getAccountPlanType(row)"
                   :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
                   :subscription-expires-at="row.credentials?.subscription_expires_at || row.parent_subscription_expires_at" />
-                <span v-if="row.quota_dimension === 'web_images' && row.parent_account_id" class="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-300" :title="t('admin.accounts.webImageShadow.parent', { id: row.parent_account_id })">
-                  {{ t('admin.accounts.webImageShadow.badge') }}
+                <span v-if="isImageShadow(row)" class="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-300" :title="t(`admin.accounts.webImageShadow.${isWorkImageShadow(row) ? 'workParent' : 'parent'}`, { id: row.parent_account_id })">
+                  {{ t(`admin.accounts.webImageShadow.${isWorkImageShadow(row) ? 'workBadge' : 'badge'}`) }}
                 </span>
                 <span
                   v-if="getAntigravityTierLabel(row)"
@@ -340,8 +340,9 @@
           </template>
           <template #cell-usage="{ row }">
             <WebImageQuotaCell v-if="isWebImageShadow(row)" :account-id="row.id" :refresh-token="usageManualRefreshToken" />
+            <template v-else>
+            <p v-if="isWorkImageShadow(row)" class="mb-1 text-xs text-sky-600">{{ t('admin.accounts.webImageShadow.workParent', { id: row.parent_account_id }) }}</p>
             <AccountUsageCell
-              v-else
               :account="row"
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
               :today-stats-loading="todayStatsLoading"
@@ -353,6 +354,7 @@
               @account-updated="handleAccountUpdated"
               @usage-loaded="handleAccountUsageLoaded(row.id, $event)"
             />
+            </template>
           </template>
           <template #cell-proxy="{ row }">
             <div class="flex flex-col gap-1">
@@ -504,8 +506,7 @@
     />
     <TempUnschedStatusModal :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
     <ConfirmDialog :show="showDeleteDialog" :title="t('admin.accounts.deleteAccount')" :message="t('admin.accounts.deleteConfirm', { name: deletingAcc?.name })" :confirm-text="t('common.delete')" :cancel-text="t('common.cancel')" :danger="true" @confirm="confirmDelete" @cancel="showDeleteDialog = false" />
-    <ConfirmDialog :show="!!creatingWebImageShadow" :title="t('admin.accounts.webImageShadow.create')" :message="t('admin.accounts.webImageShadow.confirm', { name: creatingWebImageShadow?.name })" @confirm="confirmCreateWebImageShadow" @cancel="creatingWebImageShadow = null" />
-    <BatchWebImageShadowDialog :show="showBatchWebImageShadows" :parent-ids="selIds" @close="showBatchWebImageShadows = false" @completed="reload" />
+    <BatchWebImageShadowDialog :show="showBatchWebImageShadows" :parent-ids="creatingWebImageShadow ? [creatingWebImageShadow.id] : selIds" @close="showBatchWebImageShadows = false; creatingWebImageShadow = null" @completed="reload" />
     <ConfirmDialog :show="showCreateShadowDialog" :title="t('admin.accounts.createSparkShadow')" :message="t('admin.accounts.createSparkShadowConfirm', { name: creatingShadowAcc?.name })" @confirm="confirmCreateSparkShadow" @cancel="showCreateShadowDialog = false" />
     <ConfirmDialog :show="showExportDataDialog" :title="t('admin.accounts.dataExport')" :message="t('admin.accounts.dataExportConfirmMessage')" :confirm-text="t('admin.accounts.dataExportConfirm')" :cancel-text="t('common.cancel')" @confirm="handleExportData" @cancel="showExportDataDialog = false">
       <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
@@ -552,7 +553,7 @@ import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import WebImageQuotaCell from '@/components/account/WebImageQuotaCell.vue'
-import { isWebImageShadow } from '@/components/account/webImageShadow'
+import { isWebImageShadow, isWorkImageShadow, isImageShadow } from '@/components/account/webImageShadow'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
@@ -646,7 +647,6 @@ const tempUnschedAcc = ref<Account | null>(null)
 const deletingAcc = ref<Account | null>(null)
 const creatingShadowAcc = ref<Account | null>(null)
 const creatingWebImageShadow = ref<Account | null>(null)
-const webImageShadowSubmitting = ref(false)
 const reAuthAcc = ref<Account | null>(null)
 const testingAcc = ref<Account | null>(null)
 const statsAcc = ref<Account | null>(null)
@@ -2501,21 +2501,9 @@ const onRevertFallback = async (a: Account) => {
   }
 }
 const showBatchWebImageShadows = ref(false)
-const handleCreateWebImageShadow = (account: Account) => { creatingWebImageShadow.value = account }
-const confirmCreateWebImageShadow = async () => {
-  const account = creatingWebImageShadow.value
-  if (!account || webImageShadowSubmitting.value) return
-  webImageShadowSubmitting.value = true
-  try {
-    await adminAPI.accounts.createWebImageShadow(account.id)
-    creatingWebImageShadow.value = null
-    appStore.showSuccess(t('admin.accounts.webImageShadow.created'))
-    reload()
-  } catch (error: any) {
-    appStore.showError(error?.response?.data?.message || t('admin.accounts.webImageShadow.createFailed'))
-  } finally {
-    webImageShadowSubmitting.value = false
-  }
+const handleCreateWebImageShadow = (account: Account) => {
+  creatingWebImageShadow.value = account
+  showBatchWebImageShadows.value = true
 }
 const handleCreateSparkShadow = (a: Account) => {
   creatingShadowAcc.value = a
