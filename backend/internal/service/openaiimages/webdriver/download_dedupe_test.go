@@ -163,6 +163,19 @@ func TestNormalizeThinkingEffortAllowsMin(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 	if !IsWorkModeModel("gpt-5.6-luna-wm") {
-		t.Fatalf("expected -wm model to enable work-mode payload")
+		t.Fatalf("expected -wm model to be recognized for legacy configuration")
+	}
+	for _, value := range []string{"", "unknown"} {
+		if got := normalizeThinkingEffort(value); got != "" {
+			t.Fatalf("unset/unknown effort must not force a thinking level: %q", got)
+		}
+	}
+}
+
+func TestExtractSandboxDownloadsRejectsUserProvidedLinks(t *testing.T) {
+	body := []byte(`{"mapping":{"input":{"message":{"id":"input","author":{"role":"user"},"content":{"parts":["[input](sandbox:/workspace/input.png)"]}}},"output":{"message":{"id":"output","author":{"role":"assistant"},"content":{"parts":["[output](sandbox:/workspace/output.png)"]}}}}}`)
+	got := extractSandboxDownloads(body, "")
+	if len(got) != 1 || got[0].MessageID != "output" {
+		t.Fatalf("expected only generated attachment, got %#v", got)
 	}
 }

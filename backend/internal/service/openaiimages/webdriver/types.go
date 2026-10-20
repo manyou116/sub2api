@@ -24,6 +24,10 @@ type InputImage struct {
 
 type GenerateRequest struct {
 	Prompt, Model, Size, Quality, ResponseFormat string
+	// Mode is chosen by the account type, never inferred from a model suffix.
+	Mode string
+	// Nil uses the mode default: required for Work, optional for ordinary Web.
+	RequireDownloadAttachment *bool
 	// ThinkingEffort applies to explicit models; auto delegates reasoning to upstream.
 	ThinkingEffort string
 	N              int
@@ -33,12 +37,15 @@ type GenerateRequest struct {
 
 type ImageData struct {
 	B64JSON, URL, RevisedPrompt string
+	Width, Height               int
+	Format                      string
 }
 
 type Usage struct{ InputTokens, OutputTokens, ImageOutputTokens int }
 type Meta struct {
 	ConversationID, Stage string
 	Duration              time.Duration
+	DownloadAttachment    bool
 }
 type GenerateResult struct {
 	Created int64

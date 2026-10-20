@@ -1,12 +1,14 @@
 package webdriver
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image"
 	"io"
 	"net/http"
 	"os"
@@ -119,6 +121,17 @@ func (d *Driver) Edit(ctx context.Context, auth Auth, req GenerateRequest) (*Gen
 
 func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isEdit bool) (*GenerateResult, error) {
 	start := time.Now()
+	mode := strings.ToLower(strings.TrimSpace(genReq.Mode))
+	if mode == "" {
+		mode = "web"
+	}
+	if mode != "web" && mode != "work" {
+		return nil, NewError(ErrorKindInternal, "request", "image execution mode must be web or work", http.StatusBadRequest, false)
+	}
+	requireDownloadAttachment := mode == "work"
+	if genReq.RequireDownloadAttachment != nil {
+		requireDownloadAttachment = *genReq.RequireDownloadAttachment
+	}
 	location, err := loadWebImageTimezone()
 	if err != nil {
 		return nil, err
@@ -167,7 +180,9 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 	}
 	// Align with chatgpt2api build_image_prompt: force-generate + size/quality hints.
 	finalPrompt := BuildImagePrompt(genReq.Prompt, genReq.Size, genReq.Quality, genReq.N)
-	requireDownloadAttachment := shouldRequireDownloadAttachment(finalPrompt)
+	if requireDownloadAttachment {
+		finalPrompt += "\n请提供可下载图片文件/附件。"
+	}
 	stageLog("prepare", "model="+model+" effort="+effort+" size="+strings.TrimSpace(genReq.Size)+" quality="+strings.TrimSpace(genReq.Quality))
 	parentID := uuid.NewString()
 	headers["X-Oai-Turn-Trace-Id"] = uuid.NewString()
@@ -179,7 +194,7 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 	stageLog("prepare", "conduit_len="+fmt.Sprintf("%d", len(conduit)))
 	excludeInputs := inputAssetExcludeSet(refs)
 	stageLog("sse", "start")
-	conversationID, fileIDs, sedimentIDs, err := d.startConversation(ctx, client, headers, location, requirements, conduit, finalPrompt, model, effort, parentID, refs, excludeInputs)
+	conversationID, fileIDs, sedimentIDs, err := d.startConversation(ctx, client, headers, location, requirements, conduit, finalPrompt, model, effort, parentID, mode, refs, excludeInputs)
 	if err != nil {
 		stageLog("sse", err.Error())
 		return nil, err
@@ -216,9 +231,10 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 	}
 	stageLog("download", fmt.Sprintf("blobs=%d limit=%d took=%s total=%s", len(blobs), limit, time.Since(downloadStart).Round(time.Millisecond), time.Since(start).Round(time.Millisecond)))
 	go d.deleteConversationBestEffort(client, headers, conversationID)
-	out := &GenerateResult{Created: time.Now().Unix(), Meta: Meta{ConversationID: conversationID, Stage: "done", Duration: time.Since(start)}}
+	out := &GenerateResult{Created: time.Now().Unix(), Meta: Meta{ConversationID: conversationID, Stage: "done", Duration: time.Since(start), DownloadAttachment: requireDownloadAttachment}}
 	for _, b := range blobs {
-		out.Data = append(out.Data, ImageData{B64JSON: base64.StdEncoding.EncodeToString(b)})
+		config, format, _ := image.DecodeConfig(bytes.NewReader(b)) // Validated during download.
+		out.Data = append(out.Data, ImageData{B64JSON: base64.StdEncoding.EncodeToString(b), Width: config.Width, Height: config.Height, Format: format})
 	}
 	return out, nil
 }
@@ -396,7 +412,7 @@ func (d *Driver) prepareConversation(ctx context.Context, client *req.Client, he
 	return gjson.GetBytes(resp.Bytes(), "conduit_token").String(), nil
 }
 
-func (d *Driver) startConversation(ctx context.Context, client *req.Client, headers map[string]string, location *time.Location, reqs *chatRequirements, conduitToken, prompt, model, thinkingEffort, parentID string, refs []map[string]any, excludeInputs map[string]struct{}) (cid string, files, sediments []string, resultErr error) {
+func (d *Driver) startConversation(ctx context.Context, client *req.Client, headers map[string]string, location *time.Location, reqs *chatRequirements, conduitToken, prompt, model, thinkingEffort, parentID, mode string, refs []map[string]any, excludeInputs map[string]struct{}) (cid string, files, sediments []string, resultErr error) {
 	stage := "sse"
 	parts := make([]any, 0, len(refs)+1)
 	attachments := make([]map[string]any, 0, len(refs))
@@ -441,7 +457,7 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 	if thinkingEffort != "" {
 		payload["thinking_effort"] = thinkingEffort
 	}
-	if IsWorkModeModel(model) {
+	if mode == "work" {
 		payload["conversation_origin"] = "tpp"
 		payload["service_tier"] = "fast"
 	}
@@ -1211,7 +1227,7 @@ func imageModelSlug(model string) string {
 	return "gpt-5-6-thinking"
 }
 
-// IsWorkModeModel identifies the explicit browser Work Mode model suffix.
+// IsWorkModeModel classifies legacy model configuration. It never selects execution mode.
 func IsWorkModeModel(model string) bool {
 	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(model)), "-wm")
 }
@@ -1221,13 +1237,17 @@ func normalizeThinkingEffort(v string) string {
 	case "none", "min", "minimal", "low", "standard", "medium", "high", "extended", "max", "pro", "xhigh":
 		return strings.ToLower(strings.TrimSpace(v))
 	default:
-		return "extended"
+		return ""
 	}
 }
 
 func classifyHTTP(stage string, status int, body string, headers ...http.Header) *Error {
 	newHTTPError := func(kind ErrorKind, message string, retryable bool) *Error {
 		err := NewError(kind, stage, message, status, retryable)
+		err.Code = strings.TrimSpace(gjson.Get(body, "error.code").String())
+		if err.Code == "" {
+			err.Code = strings.TrimSpace(gjson.Get(body, "error.type").String())
+		}
 		err.ResponseBody = []byte(body)
 		if len(headers) > 0 {
 			err.RetryAfter = parseRetryAfter(headers[0].Get("Retry-After"), time.Now())
@@ -1505,6 +1525,9 @@ func extractSandboxDownloads(body []byte, targetSize string) []sandboxDownload {
 		}
 	}
 	scanMessage := func(msg gjson.Result) {
+		if role := msg.Get("author.role").String(); role != "" && role != "assistant" && role != "tool" {
+			return
+		}
 		messageID := msg.Get("id").String()
 		msg.Get("content.parts").ForEach(func(_, part gjson.Result) bool {
 			add(messageID, part.String())
@@ -1722,13 +1745,6 @@ func normalizeAttachmentTargetSize(text string) string {
 	text = strings.ReplaceAll(text, " ", "")
 	text = strings.ReplaceAll(text, "×", "x")
 	return text
-}
-
-func shouldRequireDownloadAttachment(prompt string) bool {
-	prompt = strings.ToLower(prompt)
-	return strings.Contains(prompt, "可下载文件/附件") ||
-		strings.Contains(prompt, "downloadable file") ||
-		strings.Contains(prompt, "download link")
 }
 
 func jsonObjectWindow(raw string, pos int) string {

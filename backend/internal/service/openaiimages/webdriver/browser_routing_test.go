@@ -128,7 +128,12 @@ func TestBrowserRoutingGenerationAndEdit(t *testing.T) {
 				})
 				d.KeepConversation = true
 				auth := Auth{AccessToken: "current-account-token", ProxyURL: "http://mock-proxy.invalid:8080", AccountID: "current-account", DeviceID: "current-device", SessionID: "current-session", UserAgent: "mock-user-agent", ClientProfile: tt.profile}
-				request := GenerateRequest{Prompt: "draw", Model: tt.model, ThinkingEffort: tt.effort, N: 1}
+				mode := "web"
+				if strings.HasSuffix(tt.model, "-wm") {
+					mode = "work"
+				}
+				attachment := false // This test focuses on routing, not the mode's output default.
+				request := GenerateRequest{Prompt: "draw", Model: tt.model, Mode: mode, RequireDownloadAttachment: &attachment, ThinkingEffort: tt.effort, N: 1}
 				var result *GenerateResult
 				var err error
 				if edit {
