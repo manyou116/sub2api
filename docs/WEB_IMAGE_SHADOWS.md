@@ -48,10 +48,42 @@ authentication and transport failures block children. A parent's schedulable=fal
 alone does not pause its shadow. Web shadow schedulable=false stops new image work.
 Work Mode (-wm) still checks the parent/model text quota and runtime restrictions.
 
-Free-plan image quota exhaustion can persist image cooldown/remaining=0. Transport,
+Explicit image quota exhaustion can persist image cooldown/remaining=0. Transport,
 CF/poll throttling and Work Mode quota errors must not fabricate image exhaustion.
-Preserve retry deadline, bounded failover and driver poll serialization. Never retry
-an already completed generation merely to recover a response serialization failure.
+Quota errors must identify both the image resource and exhaustion; image-related
+words or content-policy rejections alone are insufficient. Transient Web state is
+stored separately from durable parent image-quota cooldown and exposes a reason:
+`rate_limit`, `edge_block`, or `network_error`. Genuine quota exhaustion reports
+`quota_exhausted`; old cooldowns whose cause is unknown report `legacy_cooldown`.
+A successful authoritative quota probe may clear only the durable cooldown version
+it observed, so a late response cannot erase a newer exhaustion event.
+
+Before submission, bounded failover may choose another account. Once generation
+is accepted, or a transport failure leaves acceptance uncertain, never submit the
+generation again automatically. Continue the existing conversation's polling and
+bounded download retries; if its result remains unavailable, return
+`web_image_result_unconfirmed`. Client cancellation releases the ordinary slot and
+does not penalize parent health. Policy and model-permission failures do not pause
+accounts. Reuse the existing transport classifier for persistent proxy/network
+failures; transient failures back off Web requests without suspending the parent's
+other traffic. Honor upstream `Retry-After` within the request deadline.
+Definitive policy or image-quota rejection in an accepted stream preserves its
+400/429 reason while remaining terminal, without automatic generation failover.
+
+Retain SSE-before-poll behavior. Poll serialization applies to individual GETs and
+their minimum spacing, rather than holding the account lock during the whole
+conversation wait. The driver also bounds downloads, validates image data, closes
+SSE readers on cancellation and keeps auth headers restricted to ChatGPT hosts.
+These are focused changes to the retained protocol driver, not a second driver.
+Poll spacing is process-local; account concurrency and cooldown state remain shared.
+Downloads are limited to 20 MiB and recognized PNG/JPEG/GIF/WebP headers with
+dimensions at most 32768 per side and 100 million pixels. This is a format/size
+guard, not full pixel decoding or a guarantee of requested output dimensions.
+
+Web/Work execution-mode redesign is deliberately deferred in this hardening pass.
+The existing model selection and download-attachment options remain independent;
+the attachment checkbox does not implicitly switch quota source or execution mode.
+The known Work Mode/Web quota coupling requires its separate design decision.
 
 ## Lifecycle and migration
 
@@ -94,6 +126,33 @@ it. A failed child update is compensated by deleting that paused partial child;
 the successfully restored parent is retained and the import reports the error.
 This configuration export does not replace a database backup for parent quota
 and cooldown state.
+
+## Batch administration and status reads
+
+`POST /api/v1/admin/accounts/web-image-shadows` accepts `parent_ids` (1 to 200
+positive IDs) and optional positive `concurrency` (default 1). IDs are deduplicated
+in order. Each parent uses the ordinary shadow lifecycle, inheriting its own
+priority and groups; creation does not perform an upstream probe. The response
+contains `created`, `existing`, `skipped`, `failed` counts and a `results` list with
+`parent_id`, optional `shadow_id`, `status`, optional `code` and `message`.
+Existing children are reported without changing their configuration or resuming
+paused accounts. Incompatible parents are skipped; independent failures do not
+roll back successful children. The database uniqueness constraint remains the
+final guard against concurrent creation.
+
+The accounts UI captures all selected IDs, including selections across pages,
+and sends sequential batches of at most 200. It shows per-parent outcomes and
+retries only failed entries. Network failures leave the affected entries retryable;
+repeating creation safely discovers any children created before the response was
+lost. Existing and skipped results are not retried automatically.
+
+`POST /api/v1/admin/accounts/web-image/status` accepts `account_ids` (1 to 200)
+and returns `statuses` and `errors` maps keyed by shadow ID. This reads local
+parent state only; explicit per-account `/web-image/probe` remains the upstream
+operation. Mounted quota cells coalesce reads, share pending requests for the same
+ID and avoid keeping their own long-lived quota cache. Candidate scheduling reads
+parent state in batches, then rechecks the selected account's current state before
+execution. HTTP transport reuse must keep credentials and proxy identity isolated.
 
 ## Verification
 

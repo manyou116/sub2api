@@ -1030,6 +1030,36 @@ export interface WebImageStatus {
   reset_at: string | null
   probed_at: string | null
   cooldown_until: string | null
+  cooldown_reason?: string
+  retry_after_seconds?: number
+}
+
+export interface WebImageShadowBatchItem {
+  parent_id: number
+  shadow_id?: number
+  status: 'created' | 'existing' | 'skipped' | 'failed'
+  code?: string
+  message?: string
+}
+
+export interface WebImageShadowBatchResult {
+  created: number
+  existing: number
+  skipped: number
+  failed: number
+  results: WebImageShadowBatchItem[]
+}
+
+export async function createWebImageShadows(parentIds: number[], concurrency = 1): Promise<WebImageShadowBatchResult> {
+  const { data } = await apiClient.post<WebImageShadowBatchResult>('/admin/accounts/web-image-shadows', {
+    parent_ids: parentIds, concurrency
+  })
+  return data
+}
+
+export async function getWebImageStatuses(accountIds: number[]): Promise<{ statuses: Record<string, WebImageStatus>; errors: Record<string, string> }> {
+  const { data } = await apiClient.post('/admin/accounts/web-image/status', { account_ids: accountIds })
+  return data
 }
 
 export async function createWebImageShadow(parentId: number, payload: SparkShadowCreatePayload = {}): Promise<Account> {
@@ -1208,7 +1238,9 @@ export const accountsAPI = {
   resetOpenAIQuota,
   createSparkShadow,
   createWebImageShadow,
+  createWebImageShadows,
   getWebImageStatus,
+  getWebImageStatuses,
   probeWebImageStatus,
   getUpstreamBillingProbeSettings,
   updateUpstreamBillingProbeSettings,

@@ -42,7 +42,7 @@
         </button>
       </template>
     </div>
-    <div class="flex gap-2">
+    <div class="flex flex-wrap justify-end gap-2">
       <template v-if="selectedIds.length > 0">
         <button type="button" @click="$emit('delete')" class="btn btn-danger btn-sm">{{ t('admin.accounts.bulkActions.delete') }}</button>
         <button type="button" @click="$emit('reset-status')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.resetStatus') }}</button>
@@ -53,6 +53,7 @@
         <button type="button" :disabled="rateLimitReconcileBusy" :title="t('admin.accounts.rateLimitReconcile.help')" @click="$emit('toggle-rate-limit-reconcile', true)" class="btn btn-success btn-sm">{{ t('admin.accounts.bulkActions.enableRateLimitReconcile') }}</button>
         <button type="button" :disabled="rateLimitReconcileBusy" :title="t('admin.accounts.rateLimitReconcile.help')" @click="$emit('toggle-rate-limit-reconcile', false)" class="btn btn-warning btn-sm">{{ t('admin.accounts.bulkActions.disableRateLimitReconcile') }}</button>
         <button type="button" @click="$emit('edit-selected')" class="btn btn-primary btn-sm">{{ t('admin.accounts.bulkActions.edit') }}</button>
+        <button type="button" @click="$emit('create-web-image-shadows')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.webImageShadow.batchCreate') }}</button>
       </template>
       <button @click="$emit('edit-filtered')" class="btn btn-primary btn-sm">
         {{ t('admin.accounts.bulkEdit.submit') }}
@@ -83,7 +84,8 @@ defineEmits([
   'toggle-rate-limit-reconcile',
   'reset-status',
   'refresh-token',
-  'probe-upstream-billing'
+  'probe-upstream-billing',
+  'create-web-image-shadows'
 ])
 
 const { t } = useI18n()

@@ -204,7 +204,9 @@ Do not assume an old PID on :8080 has the latest code.
 
 The Web image control plane uses dedicated credential-linked shadow accounts. The
 validated `backend/internal/service/openaiimages/webdriver/` protocol package is
-retained unchanged. Published migration 177 remains immutable for upgrade checksums.
+retained with focused error, retry and resource hardening. Preserve its protocol
+flow and keep changes covered by driver tests. Published migration 177 remains
+immutable for upgrade checksums.
 
 - Read `docs/WEB_IMAGE_SHADOWS.md` for the approved behavior contract.
 - A `web_images` shadow is the sole ChatGPT Web image route; creation enables it.
@@ -212,6 +214,13 @@ retained unchanged. Published migration 177 remains immutable for upgrade checks
 - Keep credentials and upstream image quota/cooldown tied to the parent identity.
 - Do not restore the legacy Web enable switches, inflight counters, or slot bypasses.
 - Ordinary image APIs for other account types must continue to work.
+- Batch shadow creation reuses the single-account lifecycle and preserves existing
+  children, including their paused state. Batch status reads never probe upstream.
+- Never restart generation after an accepted or uncertain submission; retry only
+  the existing conversation's reads/downloads. Keep quota exhaustion separate from
+  temporary Web throttling and shared parent credential/proxy failures.
+- Web/Work execution-mode redesign is deferred. Do not infer a new mode from the
+  download-attachment checkbox while implementing reliability fixes.
 
 ## Release speed (this fork)
 

@@ -29,6 +29,22 @@ func (h *OpenAIOAuthHandler) CreateWebImageShadow(c *gin.Context) {
 	response.Success(c, dto.AccountFromServiceShallow(shadow))
 }
 
+// CreateWebImageShadows reports each parent independently; repeated batches do
+// not overwrite or resume existing children.
+func (h *OpenAIOAuthHandler) CreateWebImageShadows(c *gin.Context) {
+	var input service.WebImageShadowBatchInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := service.CreateWebImageShadows(c.Request.Context(), h.adminService, input)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
 // ConvertLegacyWebImageShadow previews by default; apply must be explicitly true.
 func (h *OpenAIOAuthHandler) ConvertLegacyWebImageShadow(c *gin.Context) {
 	parentID, err := strconv.ParseInt(c.Param("id"), 10, 64)

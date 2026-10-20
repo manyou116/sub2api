@@ -4,17 +4,17 @@ import WebImageQuotaCell from '../WebImageQuotaCell.vue'
 import GroupCapacityBadge from '@/components/common/GroupCapacityBadge.vue'
 
 const { getStatus, probeStatus } = vi.hoisted(() => ({ getStatus: vi.fn(), probeStatus: vi.fn() }))
-vi.mock('@/api/admin', () => ({ adminAPI: { accounts: { getWebImageStatus: getStatus, probeWebImageStatus: probeStatus } } }))
+vi.mock('@/api/admin', () => ({ adminAPI: { accounts: { getWebImageStatuses: getStatus, probeWebImageStatus: probeStatus } } }))
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 const unknown = { parent_account_id: 7, quota_known: false, remaining: null, reset_at: null, probed_at: null, cooldown_until: null }
 
 describe('Web image quota and capacity', () => {
-  beforeEach(() => { vi.clearAllMocks(); getStatus.mockResolvedValue(unknown) })
+  beforeEach(() => { vi.clearAllMocks(); getStatus.mockResolvedValue({ statuses: { 12: unknown }, errors: {} }) })
 
   it('keeps unknown quota unknown and reads the shared parent snapshot', async () => {
     const wrapper = mount(WebImageQuotaCell, { props: { accountId: 12 } })
     await flushPromises()
-    expect(getStatus).toHaveBeenCalledWith(12)
+    expect(getStatus).toHaveBeenCalledWith([12])
     expect(wrapper.text()).toContain('admin.accounts.webImageShadow.unknown')
     probeStatus.mockResolvedValue({ ...unknown, quota_known: true, remaining: 0, cooldown_until: '2026-10-22T00:00:00Z' })
     await wrapper.get('button').trigger('click')
@@ -26,7 +26,7 @@ describe('Web image quota and capacity', () => {
   })
 
   it('preserves a valid snapshot when a probe fails and displays the error', async () => {
-    getStatus.mockResolvedValue({ ...unknown, quota_known: true, remaining: 4 })
+    getStatus.mockResolvedValue({ statuses: { 12: { ...unknown, quota_known: true, remaining: 4 } }, errors: {} })
     probeStatus.mockRejectedValue(new Error('quota probe unavailable'))
     const wrapper = mount(WebImageQuotaCell, { props: { accountId: 12 } })
     await flushPromises()
@@ -34,6 +34,16 @@ describe('Web image quota and capacity', () => {
     await flushPromises()
     expect(wrapper.get('strong').text()).toBe('4')
     expect(wrapper.get('[role="alert"]').text()).toBe('quota probe unavailable')
+    wrapper.unmount()
+  })
+
+  it('distinguishes temporary throttling from exhausted quota', async () => {
+    getStatus.mockResolvedValue({ statuses: { 12: { ...unknown, cooldown_reason: 'rate_limit', retry_after_seconds: 30, cooldown_until: '2026-10-22T00:00:00Z' } }, errors: {} })
+    const wrapper = mount(WebImageQuotaCell, { props: { accountId: 12 } })
+    await flushPromises()
+    expect(wrapper.get('strong').text()).toBe('admin.accounts.webImageShadow.unknown')
+    expect(wrapper.text()).toContain('admin.accounts.webImageShadow.cooldownReasons.rate_limit')
+    expect(wrapper.text()).toContain('admin.accounts.webImageShadow.retryAfter')
     wrapper.unmount()
   })
 

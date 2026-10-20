@@ -7,16 +7,19 @@
     <p v-if="status" class="mt-2 text-gray-500">{{ t('admin.accounts.webImageShadow.parent', { id: status.parent_account_id }) }}</p>
     <p v-if="status?.reset_at" class="mt-1 text-gray-500">{{ t('admin.accounts.webImageShadow.resetAt') }}: {{ formatDate(status.reset_at) }}</p>
     <p v-if="status?.cooldown_until" class="mt-1 text-amber-600">{{ t('admin.accounts.webImageShadow.cooldownUntil') }}: {{ formatDate(status.cooldown_until) }}</p>
+    <p v-if="status?.cooldown_reason" class="mt-1 text-amber-600">{{ cooldownReason }}</p>
+    <p v-if="status?.retry_after_seconds" class="mt-1 text-gray-500">{{ t('admin.accounts.webImageShadow.retryAfter', { seconds: status.retry_after_seconds }) }}</p>
     <p v-if="status?.probed_at" class="mt-1 text-gray-500">{{ t('admin.accounts.webImageShadow.probedAt') }}: {{ formatDate(status.probed_at) }}</p>
     <p v-if="error" role="alert" class="mt-2 text-red-600">{{ error }}</p>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import type { WebImageStatus } from '@/api/admin/accounts'
+import { loadWebImageStatus } from './webImageStatusBatch'
 
 const props = defineProps<{ accountId: number; refreshToken?: number }>()
 const { t } = useI18n()
@@ -25,13 +28,18 @@ const loading = ref(false)
 const error = ref('')
 let requestID = 0
 const formatDate = (value: string) => new Date(value).toLocaleString()
+const cooldownReason = computed(() => {
+  const reason = status.value?.cooldown_reason || ''
+  const known = ['quota_exhausted', 'rate_limit', 'edge_block', 'network_error']
+  return t(`admin.accounts.webImageShadow.cooldownReasons.${known.includes(reason) ? reason : 'unknown'}`)
+})
 
 async function loadStatus(probe = false) {
   const id = ++requestID
   loading.value = true
   error.value = ''
   try {
-    const result = await (probe ? adminAPI.accounts.probeWebImageStatus(props.accountId) : adminAPI.accounts.getWebImageStatus(props.accountId))
+    const result = await (probe ? adminAPI.accounts.probeWebImageStatus(props.accountId) : loadWebImageStatus(props.accountId))
     if (id === requestID) status.value = result
   } catch (cause: any) {
     if (id === requestID) error.value = cause?.response?.data?.message || cause?.message || t('admin.accounts.webImageShadow.probeFailed')

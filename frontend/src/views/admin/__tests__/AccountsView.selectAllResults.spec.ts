@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import AccountsView from '../AccountsView.vue'
+import BatchWebImageShadowDialog from '@/components/account/BatchWebImageShadowDialog.vue'
 
 const {
   listAccounts,
@@ -83,7 +84,7 @@ const makeAccounts = (count: number) => Array.from({ length: count }, (_, index)
 
 const AccountBulkActionsBarStub = {
   props: ['selectedIds', 'totalResults', 'selectingAll', 'allResultsSelected', 'rateLimitReconcileBusy'],
-  emits: ['select-all-results', 'select-page', 'clear', 'refresh-token', 'toggle-rate-limit-reconcile'],
+  emits: ['select-all-results', 'select-page', 'clear', 'refresh-token', 'toggle-rate-limit-reconcile', 'create-web-image-shadows'],
   template: `
     <div>
       <span data-test="selected-count">{{ selectedIds.length }}</span>
@@ -95,6 +96,7 @@ const AccountBulkActionsBarStub = {
       <button data-test="refresh-token" @click="$emit('refresh-token')">refresh token</button>
       <button data-test="enable-reconcile" @click="$emit('toggle-rate-limit-reconcile', true)">enable</button>
       <button data-test="disable-reconcile" @click="$emit('toggle-rate-limit-reconcile', false)">disable</button>
+      <button data-test="create-web-shadows" @click="$emit('create-web-image-shadows')">create images</button>
     </div>
   `
 }
@@ -133,6 +135,7 @@ const mountView = () => mount(AccountsView, {
       CreateAccountModal: true,
       EditAccountModal: true,
       BulkEditAccountModal: true,
+      BatchWebImageShadowDialog: true,
       PlatformTypeBadge: true,
       AccountCapacityCell: true,
       AccountStatusIndicator: true,
@@ -288,10 +291,19 @@ describe('admin AccountsView select all filtered results', () => {
       include_scheduler_score: '0'
     }))
 
+    await wrapper.get('[data-test="create-web-shadows"]').trigger('click')
+    const batchDialog = wrapper.getComponent(BatchWebImageShadowDialog)
+    expect(batchDialog.props('show')).toBe(true)
+    expect(batchDialog.props('parentIds')).toEqual(allAccounts.map(account => account.id))
+    batchDialog.vm.$emit('close')
+    await flushPromises()
+    expect(batchDialog.props('show')).toBe(false)
+
     await wrapper.get('[data-test="change-filter"]').trigger('click')
 
     expect(wrapper.get('[data-test="selected-count"]').text()).toBe('0')
     expect(wrapper.get('[data-test="all-results-selected"]').text()).toBe('false')
+    wrapper.unmount()
   })
 
   it('keeps the original page selection when loading all results fails', async () => {

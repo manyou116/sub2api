@@ -429,7 +429,9 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		// Spark 影子账号
 		accounts.POST("/:id/shadow", h.Admin.OpenAIOAuth.CreateShadow)
 		accounts.POST("/:id/web-image-shadow", h.Admin.OpenAIOAuth.CreateWebImageShadow)
+		accounts.POST("/web-image-shadows", h.Admin.OpenAIOAuth.CreateWebImageShadows)
 		accounts.POST("/:id/web-image-shadow-conversion", h.Admin.OpenAIOAuth.ConvertLegacyWebImageShadow)
+		accounts.POST("/web-image/status", h.Admin.OpenAIOAuth.BatchWebImageStatus)
 		accounts.GET("/:id/web-image/status", h.Admin.OpenAIOAuth.WebImageStatus)
 		accounts.POST("/:id/web-image/probe", h.Admin.OpenAIOAuth.ProbeWebImage)
 
