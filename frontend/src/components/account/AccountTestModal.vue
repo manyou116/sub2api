@@ -353,7 +353,9 @@ const loadAvailableModels = async () => {
       : models
     // Default selection by platform
     if (availableModels.value.length > 0) {
-      if (props.account.platform === 'gemini') {
+      if (props.account.quota_dimension === 'web_images' && props.account.parent_account_id != null) {
+        selectedModelId.value = availableModels.value.find(m => m.id === 'gpt-image-2')?.id || availableModels.value[0].id
+      } else if (props.account.platform === 'gemini') {
         selectedModelId.value = availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model

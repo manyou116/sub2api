@@ -33,6 +33,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       update: updateAccountMock,
+      getWebImageStatus: vi.fn().mockResolvedValue({ parent_account_id: 1, quota_known: false, remaining: null }),
       checkMixedChannelRisk: checkMixedChannelRiskMock
     },
     settings: {
@@ -1172,6 +1173,26 @@ describe('EditAccountModal', () => {
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.base_url).toBe('https://api.x.ai/v1')
+  })
+
+  it('edits Web image settings and ordinary scheduling fields without parent credentials or proxy', async () => {
+    const account = { ...buildOpenAISparkShadowAccount(), quota_dimension: 'web_images', extra: { openai_web_images: { model_mode: 'fixed', model: 'gpt-5-6-thinking', thinking_effort: 'high', require_download_attachment: true } } }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    expect(wrapper.findComponent({ name: 'ProxySelector' }).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="edit-openai-flatten-namespaces-toggle"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="web-image-model"]').element).toHaveProperty('value', 'gpt-5-6-thinking')
+    await wrapper.get('[data-testid="web-image-model"]').setValue('gpt-5-6-thinking-wm')
+    await wrapper.get('[data-testid="set-shadow-group"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.group_ids).toEqual([7])
+    expect(payload.concurrency).toBe(account.concurrency)
+    expect(payload.priority).toBe(account.priority)
+    expect(payload).not.toHaveProperty('credentials')
+    expect(payload).not.toHaveProperty('proxy_id')
+    expect(payload.extra).toEqual({ openai_web_images: { model_mode: 'fixed', model: 'gpt-5-6-thinking-wm', thinking_effort: 'high', require_download_attachment: true } })
+    wrapper.unmount()
   })
 
   it('only submits model mapping credentials when saving an OpenAI spark shadow account', async () => {

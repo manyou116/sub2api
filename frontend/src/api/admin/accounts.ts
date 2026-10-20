@@ -1023,6 +1023,30 @@ export async function createSparkShadow(parentId: number, payload: SparkShadowCr
   return data
 }
 
+export interface WebImageStatus {
+  parent_account_id: number
+  quota_known: boolean
+  remaining: number | null
+  reset_at: string | null
+  probed_at: string | null
+  cooldown_until: string | null
+}
+
+export async function createWebImageShadow(parentId: number, payload: SparkShadowCreatePayload = {}): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${parentId}/web-image-shadow`, payload)
+  return data
+}
+
+export async function getWebImageStatus(id: number): Promise<WebImageStatus> {
+  const { data } = await apiClient.get<WebImageStatus>(`/admin/accounts/${id}/web-image/status`)
+  return data
+}
+
+export async function probeWebImageStatus(id: number): Promise<WebImageStatus> {
+  const { data } = await apiClient.post<WebImageStatus>(`/admin/accounts/${id}/web-image/probe`)
+  return data
+}
+
 export async function getUpstreamBillingProbeSettings(): Promise<UpstreamBillingProbeSettings> {
   const { data } = await apiClient.get<UpstreamBillingProbeSettings>('/admin/accounts/upstream-billing-probe/settings')
   return data
@@ -1183,6 +1207,9 @@ export const accountsAPI = {
   refreshOpenAIQuota,
   resetOpenAIQuota,
   createSparkShadow,
+  createWebImageShadow,
+  getWebImageStatus,
+  probeWebImageStatus,
   getUpstreamBillingProbeSettings,
   updateUpstreamBillingProbeSettings,
   setUpstreamBillingProbeEnabled,

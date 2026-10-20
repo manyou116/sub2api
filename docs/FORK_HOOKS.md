@@ -54,9 +54,9 @@ approves a new fork-only Grok patch.
 
 ### P1 — Web image shadows
 
-The old account-level Web switches and separate inflight mechanism have been
-removed from this development baseline. The protocol driver is retained as an
-isolated dependency. See `WEB_IMAGE_SHADOWS.md` for the replacement contract.
+Web shadows use the shared account concurrency mechanism and parent credential
+identity. The protocol driver remains an isolated dependency. See
+`WEB_IMAGE_SHADOWS.md` for the behavior contract.
 Do not reintroduce legacy control-plane hooks when merging upstream or old patches.
 Published migration 177 must remain byte-identical.
 
@@ -126,7 +126,7 @@ Account/gateway import cycles; EventStream decoder is the only isolated package
 
 ### P4 — Capacity split
 
-Web shadows will use the normal account concurrency service. Capacity reports
+Web shadows use the normal account concurrency service. Capacity reports
 must classify accounts by purpose, without a second Web inflight store.
 
 ---

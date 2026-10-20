@@ -26,6 +26,8 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <WebImageShadowSettings v-if="isWebShadow" v-model="webImageSettings" :account-id="account.id" />
+      <template v-if="!isWebShadow">
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
@@ -1766,7 +1768,7 @@
         </div>
       </div>
 
-      <div v-if="!isSparkShadow">
+      <div v-if="!isCredentialShadow">
         <div class="mb-1 flex items-center gap-2">
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
@@ -1779,6 +1781,8 @@
         :platform="account.platform"
         :type="account.type"
       />
+
+      </template>
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
@@ -1862,6 +1866,7 @@
         </p>
       </div>
 
+      <template v-if="!isWebShadow">
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
@@ -2373,7 +2378,7 @@
 
       <!-- OpenAI API 长上下文计费开关 -->
       <div
-        v-if="account?.platform === 'openai' && !isSparkShadow && !hideAccountLongContextBilling && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="account?.platform === 'openai' && !isCredentialShadow && !hideAccountLongContextBilling && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2479,7 +2484,7 @@
 
       <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isCredentialShadow"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2660,7 +2665,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isCredentialShadow"
         class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
         data-testid="auto-reset-credit-settings"
       >
@@ -3084,6 +3089,8 @@
         </div>
       </div>
 
+      </template>
+
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div>
           <label class="input-label">{{ t('common.status') }}</label>
@@ -3241,6 +3248,8 @@ import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
+import WebImageShadowSettings from './WebImageShadowSettings.vue'
+import { isWebImageShadow, readWebImageSettings, type WebImageSettings } from './webImageShadow'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
@@ -3350,9 +3359,10 @@ const selectableGroups = computed(() => {
   return Array.from(groups.values())
 })
 
-// Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
-// 故隐藏代理选择器。
-const isSparkShadow = computed(() => props.account?.parent_account_id != null)
+// Credential shadows inherit parent identity and proxy.
+const isCredentialShadow = computed(() => props.account?.parent_account_id != null)
+const isWebShadow = computed(() => isWebImageShadow(props.account))
+const webImageSettings = ref<WebImageSettings>(readWebImageSettings(null))
 
 const hideAccountLongContextBilling = computed(() => {
   return allSelectedGroupsEnableLongContextPricing(form.group_ids, props.groups)
@@ -4279,6 +4289,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedChannelWarningDetails.value = null
   mixedChannelWarningRawMessage.value = ''
   mixedChannelWarningAction.value = null
+  webImageSettings.value = readWebImageSettings(newAccount)
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
   form.proxy_id = newAccount.proxy_id
@@ -5316,8 +5327,18 @@ const handleSubmit = async () => {
     return
   }
 
+  if (isWebShadow.value) {
+    const { proxy_id: _proxyID, ...fields } = form
+    await submitUpdateAccount(accountID, {
+      ...fields,
+      expires_at: form.expires_at ?? 0,
+      load_factor: form.load_factor || 0,
+      extra: { openai_web_images: { ...webImageSettings.value } }
+    })
+    return
+  }
   const updatePayload: Record<string, unknown> = { ...form }
-  if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value &&
+  if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isCredentialShadow.value &&
       [autoResetCredit5hThreshold.value, autoResetCredit7dThreshold.value].some(value => !Number.isFinite(value) || value < 0.1 || value > 100)) {
     appStore.showError(t('admin.accounts.autoResetCredit.thresholdInvalid'))
     return
@@ -5643,7 +5664,7 @@ const handleSubmit = async () => {
 
     // OpenAI/Grok OAuth: persist model mapping to credentials
     if ((props.account.platform === 'openai' || props.account.platform === 'grok') && props.account.type === 'oauth') {
-      const currentCredentials = isSparkShadow.value
+      const currentCredentials = isCredentialShadow.value
         ? {}
         : (updatePayload.credentials as Record<string, unknown>) ||
           ((props.account.credentials as Record<string, unknown>) || {})
@@ -5708,7 +5729,7 @@ const handleSubmit = async () => {
     // OpenAI: 手动覆盖订阅档位 plan_type（Plus / Pro 20x / Pro 5x / Business Standard / Business Premium / Free）。
     // 仅 OAuth 非影子账号：
     // 影子账号凭据由母账号管理(且后端会 sanitize),setup-token 无订阅调度语义。
-    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value) {
+    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isCredentialShadow.value) {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
@@ -5896,7 +5917,7 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_responses_flatten_namespaces
       }
-      if (isSparkShadow.value) {
+      if (isCredentialShadow.value) {
         delete newExtra.openai_long_context_billing_enabled
       } else {
         newExtra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
@@ -5938,7 +5959,7 @@ const handleSubmit = async () => {
 		} else {
 			delete newExtra.auto_pause_7d_disabled
 		}
-		if (props.account.type === 'oauth' && !isSparkShadow.value) {
+		if (props.account.type === 'oauth' && !isCredentialShadow.value) {
 			newExtra.auto_reset_credit_5h_enabled = autoResetCredit5hEnabled.value
 			newExtra.auto_reset_credit_7d_enabled = autoResetCredit7dEnabled.value
 			newExtra.auto_reset_credit_5h_threshold = autoResetCredit5hThreshold.value / 100

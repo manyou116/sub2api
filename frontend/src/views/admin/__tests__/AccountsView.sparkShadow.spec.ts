@@ -17,6 +17,7 @@ const {
   getAllGroups,
   duplicateAccount,
   createSparkShadow,
+  createWebImageShadow,
   showSuccess,
   showError
 } = vi.hoisted(() => ({
@@ -27,6 +28,7 @@ const {
   getAllGroups: vi.fn(),
   duplicateAccount: vi.fn(),
   createSparkShadow: vi.fn(),
+  createWebImageShadow: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
 }))
@@ -40,6 +42,7 @@ vi.mock('@/api/admin', () => ({
       duplicate: duplicateAccount,
       getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
       createSparkShadow,
+      createWebImageShadow,
       delete: vi.fn(),
       batchClearError: vi.fn(),
       batchRefresh: vi.fn(),
@@ -107,7 +110,7 @@ const mountView = () =>
 describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
   beforeEach(() => {
     localStorage.clear()
-    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, showSuccess, showError]) {
+    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, createWebImageShadow, showSuccess, showError]) {
       fn.mockReset()
     }
     listAccounts.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
@@ -190,6 +193,37 @@ describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
     wrapper.unmount()
   })
 
+  it('confirms Web image shadow creation before calling its endpoint', async () => {
+    createWebImageShadow.mockResolvedValue({ id: 1000 })
+    const wrapper = mountView()
+    await flushPromises()
+    wrapper.findComponent(AccountActionMenu).vm.$emit('create-web-image-shadow', { id: 42, name: 'parent' })
+    await flushPromises()
+    expect(createWebImageShadow).not.toHaveBeenCalled()
+    const dialog = wrapper.findAllComponents(ConfirmDialog).find(d => d.props('show'))!
+    expect(dialog.props('title')).toBe('admin.accounts.webImageShadow.create')
+    dialog.vm.$emit('confirm')
+    await flushPromises()
+    expect(createWebImageShadow).toHaveBeenCalledWith(42)
+    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.webImageShadow.created')
+    expect(listAccounts.mock.calls.length).toBeGreaterThan(1)
+    wrapper.unmount()
+  })
+
+  it('shows Web creation errors and keeps the dialog open', async () => {
+    createWebImageShadow.mockRejectedValue({ response: { data: { message: 'Web shadow already exists' } } })
+    const wrapper = mountView()
+    await flushPromises()
+    wrapper.findComponent(AccountActionMenu).vm.$emit('create-web-image-shadow', { id: 42, name: 'parent' })
+    await flushPromises()
+    const dialog = wrapper.findAllComponents(ConfirmDialog).find(d => d.props('show'))!
+    dialog.vm.$emit('confirm')
+    await flushPromises()
+    expect(showError).toHaveBeenCalledWith('Web shadow already exists')
+    expect(dialog.props('show')).toBe(true)
+    wrapper.unmount()
+  })
+
   it('用户取消确认时不调用 API', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -259,7 +293,7 @@ const mountViewWithRow = () =>
 describe('admin AccountsView — 账号行展示', () => {
   beforeEach(() => {
     localStorage.clear()
-    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, showSuccess, showError]) {
+    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, createWebImageShadow, showSuccess, showError]) {
       fn.mockReset()
     }
     listWithEtag.mockResolvedValue({ notModified: true, etag: null, data: null })

@@ -202,7 +202,7 @@ Do not assume an old PID on :8080 has the latest code.
 
 ## Fork Feature: Web Image Shadows
 
-The Web image control plane is being rebuilt on a clean fork baseline. The
+The Web image control plane uses dedicated credential-linked shadow accounts. The
 validated `backend/internal/service/openaiimages/webdriver/` protocol package is
 retained unchanged. Published migration 177 remains immutable for upgrade checksums.
 

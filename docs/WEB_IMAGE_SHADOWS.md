@@ -71,6 +71,30 @@ legacy Web requests, apply conversion, then switch exclusively to shadows; never
 copy live inflight counters between IDs. Reject/report incompatible parents clearly.
 Shadow configuration must be recoverable through a defined backup/restore path.
 
+## Explicit conversion and backup
+
+`POST /api/v1/admin/accounts/:id/web-image-shadow-conversion` previews by default.
+Send `apply: true` only after draining the legacy deployment. When no account
+`enabled` override (including the older legacy-image override) exists, supply
+`legacy_default_enabled` from the old deployment. Optional `legacy_defaults`
+contains its old `max_inflight` and Web model options. The preview reports the
+resulting concurrency, actual account priority, groups and model options; repeated
+apply returns the existing shadow. The operation never rewrites the parent,
+its image cooldown, historical usage, or live concurrency counters.
+
+Account backup nests a `web_image_shadow` configuration inside a selected parent
+only when that Web shadow is also selected. A shadow selected without its parent
+is counted in `skipped_shadows`; export never silently adds unselected credentials.
+Spark keeps its previous exclusion behavior. Web backup contains no credentials,
+uses OpenAI group names across instances, and preserves zero priority, explicit
+empty groups, model mapping/options, status and the scheduling switch. Restore
+groups first: a missing or ambiguous group name fails that child restoration.
+The child is created paused, configured, then enabled only if the backup requested
+it. A failed child update is compensated by deleting that paused partial child;
+the successfully restored parent is retained and the import reports the error.
+This configuration export does not replace a database backup for parent quota
+and cooldown state.
+
 ## Verification
 
 Test coexistence/uniqueness, parent deletion/type/proxy handling, image-only routing,

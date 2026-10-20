@@ -36,11 +36,22 @@ need_rg() {
 
 echo "== Fork hook check (see docs/FORK_HOOKS.md) =="
 
-# P1 currently retains only the independently tested protocol package.
-# New shadow integration invariants are added with their implementation commit.
-echo "-- P1 protocol --"
+# --- P1 Web image shadows ---
+echo "-- P1 Web image shadows --"
 need_file backend/internal/service/openaiimages/webdriver/types.go
 need_file backend/migrations/177_add_web_image_rate_limit.sql
+need_file backend/migrations/246_web_image_shadows.sql
+need_file backend/internal/service/web_image_shadow_lifecycle.go
+need_file backend/internal/service/openai_web_image_service.go
+need_file backend/internal/service/openai_web_image_forward.go
+need_rg "shadow quota dimension" 'QuotaDimensionWebImages' backend/internal/service/domain_constants.go
+need_rg "image-only scheduler gate" 'webImageSchedulingReason' backend/internal/service/openai_account_scheduler.go
+need_rg "Web dispatch uses shadow identity" 'account.IsWebImageShadow()' backend/internal/service/openai_images.go
+need_rg "images use ordinary account slots" 'h.acquireResponsesAccountSlot' backend/internal/handler/openai_images.go
+need_rg "shadow create route" '/:id/web-image-shadow' backend/internal/server/routes/admin.go
+need_rg "parent resource state" 'WebImageCooldown' backend/internal/repository/account_web_image_state_repo.go
+need_rg "shared concurrency capacity classification" 'QuotaDimensionWebImages' backend/internal/service/group_capacity_service.go
+need_rg "frontend creates Web shadows" 'createWebImageShadow' frontend/src/api/admin/accounts.ts
 
 # --- P5 kiro ---
 echo "-- P5 kiro --"
