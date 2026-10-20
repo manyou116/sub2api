@@ -117,7 +117,7 @@ func TestBrowserRoutingGenerationAndEdit(t *testing.T) {
 							case "/backend-api/files/download/file_output":
 								body = `{"download_url":"https://mock.invalid/image"}`
 							case "/image":
-								body = "generated-image"
+								body = string(protocolPNG(t))
 							default:
 								t.Errorf("unexpected path %s", r.URL.Path)
 							}
@@ -139,7 +139,7 @@ func TestBrowserRoutingGenerationAndEdit(t *testing.T) {
 				}
 				require.NoError(t, err)
 				require.Len(t, result.Data, 1)
-				require.Equal(t, base64.StdEncoding.EncodeToString([]byte("generated-image")), result.Data[0].B64JSON)
+				require.Equal(t, base64.StdEncoding.EncodeToString(protocolPNG(t)), result.Data[0].B64JSON)
 				require.Contains(t, steps, "/backend-api/f/conversation/prepare")
 				require.Contains(t, steps, "/backend-api/f/conversation")
 				if edit {

@@ -1,7 +1,6 @@
 package webdriver
 
 import (
-	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -12,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,65 +57,6 @@ func NewDriver(factory func(proxyURL string) (*req.Client, error)) *Driver {
 	}
 }
 
-// Serialize conversation GET polls per access-token within this process.
-// Concurrent webimg jobs otherwise stack 429s on the same account.
-var accountPollLocks = struct {
-	sync.Mutex
-	locks map[string]*accountPollLock
-}{locks: make(map[string]*accountPollLock)}
-
-type accountPollLock struct {
-	semaphore  chan struct{}
-	references int
-}
-
-func pollLockKey(auth Auth) string {
-	tok := strings.TrimSpace(auth.AccessToken)
-	if tok == "" {
-		return "anon"
-	}
-	// OAuth access tokens are JWTs and commonly share their first dozens of
-	// bytes. Hash the complete token so distinct accounts never serialize their
-	// image polls behind one another, without retaining the token as a map key.
-	sum := sha256.Sum256([]byte(tok))
-	return hex.EncodeToString(sum[:])
-}
-
-func withAccountPollLock(ctx context.Context, key string, fn func() error) error {
-	if key == "" {
-		key = "anon"
-	}
-
-	accountPollLocks.Lock()
-	lock := accountPollLocks.locks[key]
-	if lock == nil {
-		lock = &accountPollLock{semaphore: make(chan struct{}, 1)}
-		accountPollLocks.locks[key] = lock
-	}
-	lock.references++
-	accountPollLocks.Unlock()
-
-	release := func() {
-		accountPollLocks.Lock()
-		lock.references--
-		if lock.references == 0 && accountPollLocks.locks[key] == lock {
-			delete(accountPollLocks.locks, key)
-		}
-		accountPollLocks.Unlock()
-	}
-	select {
-	case lock.semaphore <- struct{}{}:
-		defer func() {
-			<-lock.semaphore
-			release()
-		}()
-		return fn()
-	case <-ctx.Done():
-		release()
-		return NewError(ErrorKindTimeout, "poll", ctx.Err().Error(), 0, true)
-	}
-}
-
 func (d *Driver) ProbeQuota(ctx context.Context, auth Auth) (*Quota, error) {
 	location, err := loadWebImageTimezone()
 	if err != nil {
@@ -136,10 +75,10 @@ func (d *Driver) ProbeQuota(ctx context.Context, auth Auth) (*Quota, error) {
 		SetBody(map[string]any{"gizmo_id": nil, "requested_default_model": nil, "conversation_id": nil, "timezone": zone, "timezone_offset_min": offset}).
 		Post(baseURL + "/backend-api/conversation/init")
 	if err != nil {
-		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+		return nil, transportError(stage, err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, classifyHTTP(stage, resp.StatusCode, resp.String())
+		return nil, classifyHTTP(stage, resp.StatusCode, resp.String(), resp.Header)
 	}
 	remaining := 0
 	var resetAt *time.Time
@@ -163,9 +102,10 @@ func stageLog(stage string, msg string) {
 	if os.Getenv("WEBIMG_DEBUG") == "" {
 		return
 	}
-	f, err := os.OpenFile("/tmp/webimg-stage.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile("/tmp/webimg-stage.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err == nil {
-		_, _ = fmt.Fprintf(f, "%s %s %s\n", time.Now().Format(time.RFC3339), stage, msg)
+		_ = f.Chmod(0600)
+		_, _ = fmt.Fprintf(f, "%s %s %s\n", time.Now().Format(time.RFC3339), stage, safeStageLogMessage(msg))
 		_ = f.Close()
 	}
 }
@@ -249,13 +189,8 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 	hadSSEPreview := len(fileIDs) > 0 || len(sedimentIDs) > 0
 	stageLog("sse", fmt.Sprintf("cid=%s files=%d sediment=%d exclude_inputs=%d", conversationID, len(fileIDs), len(sedimentIDs), len(excludeInputs)))
 	if conversationID == "" {
-		return nil, NewError(ErrorKindUpstream, "sse", "missing conversation_id", 0, true)
+		return nil, submissionError(NewError(ErrorKindUpstream, "sse", "missing conversation_id", 0, true), SubmissionAccepted, "")
 	}
-	// Hide conversation off the critical path so download → HTTP response is not blocked
-	// by the PATCH is_visible=false RTT (often 1–3s; browser already showed the image).
-	defer func(cid string) {
-		go d.deleteConversationBestEffort(client, headers, cid)
-	}(conversationID)
 	var sandboxDownloads []sandboxDownload
 	// Edits: conversation JSON always contains the uploaded input pointer(s). Ignore those and
 	// keep polling until a NEW generated asset appears (otherwise we "succeed" with the source image).
@@ -264,7 +199,7 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 		fileIDs, sedimentIDs, sandboxDownloads, err = d.pollImages(ctx, client, headers, auth, conversationID, excludeInputs, requireDownloadAttachment, genReq.Size, hadSSEPreview)
 		if err != nil {
 			stageLog("poll", err.Error())
-			return nil, err
+			return nil, submissionError(err, SubmissionAccepted, conversationID)
 		}
 		stageLog("poll", fmt.Sprintf("files=%d sediment=%d sandbox=%d", len(fileIDs), len(sedimentIDs), len(sandboxDownloads)))
 	}
@@ -277,9 +212,10 @@ func (d *Driver) run(ctx context.Context, auth Auth, genReq GenerateRequest, isE
 	blobs, err := d.downloadAssets(ctx, client, headers, conversationID, fileIDs, sedimentIDs, sandboxDownloads, limit)
 	if err != nil {
 		stageLog("download", err.Error())
-		return nil, err
+		return nil, submissionError(err, SubmissionAccepted, conversationID)
 	}
 	stageLog("download", fmt.Sprintf("blobs=%d limit=%d took=%s total=%s", len(blobs), limit, time.Since(downloadStart).Round(time.Millisecond), time.Since(start).Round(time.Millisecond)))
+	go d.deleteConversationBestEffort(client, headers, conversationID)
 	out := &GenerateResult{Created: time.Now().Unix(), Meta: Meta{ConversationID: conversationID, Stage: "done", Duration: time.Since(start)}}
 	for _, b := range blobs {
 		out.Data = append(out.Data, ImageData{B64JSON: base64.StdEncoding.EncodeToString(b)})
@@ -297,7 +233,7 @@ func (d *Driver) session(auth Auth) (*req.Client, map[string]string, error) {
 	if d.ClientFactory != nil {
 		client, err = d.ClientFactory(auth.ProxyURL)
 		if err != nil {
-			return nil, nil, NewError(ErrorKindTransport, "session", err.Error(), 0, true)
+			return nil, nil, transportError("session", err)
 		}
 	}
 	if client == nil {
@@ -352,10 +288,10 @@ func (d *Driver) chatRequirements(ctx context.Context, client *req.Client, heade
 		SetHeader("X-OpenAI-Target-Path", basePath+"/prepare").SetHeader("X-OpenAI-Target-Route", basePath+"/prepare").
 		SetBody(map[string]any{"p": pToken}).Post(baseURL + basePath + "/prepare")
 	if err != nil {
-		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+		return nil, transportError(stage, err)
 	}
 	if prep.StatusCode >= 400 {
-		return nil, classifyHTTP(stage, prep.StatusCode, prep.String())
+		return nil, classifyHTTP(stage, prep.StatusCode, prep.String(), prep.Header)
 	}
 	if gjson.GetBytes(prep.Bytes(), "arkose.required").Bool() {
 		return nil, NewError(ErrorKindUpstream, stage, "arkose required", prep.StatusCode, false)
@@ -372,10 +308,10 @@ func (d *Driver) chatRequirements(ctx context.Context, client *req.Client, heade
 		SetBody(map[string]any{"prepare_token": gjson.GetBytes(prep.Bytes(), "prepare_token").String(), "proofofwork": proofToken, "turnstile": ""}).
 		Post(baseURL + basePath + "/finalize")
 	if err != nil {
-		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+		return nil, transportError(stage, err)
 	}
 	if fin.StatusCode >= 400 {
-		return nil, classifyHTTP(stage, fin.StatusCode, fin.String())
+		return nil, classifyHTTP(stage, fin.StatusCode, fin.String(), fin.Header)
 	}
 	token := gjson.GetBytes(fin.Bytes(), "token").String()
 	if token == "" {
@@ -399,10 +335,10 @@ func (d *Driver) uploadImage(ctx context.Context, client *req.Client, headers ma
 		SetBody(map[string]any{"file_name": name, "file_size": len(img.Data), "use_case": "multimodal", "width": 1024, "height": 1024}).
 		Post(baseURL + "/backend-api/files")
 	if err != nil {
-		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+		return nil, transportError(stage, err)
 	}
 	if resp.StatusCode >= 400 {
-		return nil, classifyHTTP(stage, resp.StatusCode, resp.String())
+		return nil, classifyHTTP(stage, resp.StatusCode, resp.String(), resp.Header)
 	}
 	fileID := gjson.GetBytes(resp.Bytes(), "file_id").String()
 	uploadURL := gjson.GetBytes(resp.Bytes(), "upload_url").String()
@@ -412,19 +348,19 @@ func (d *Driver) uploadImage(ctx context.Context, client *req.Client, headers ma
 	put, err := client.R().SetContext(ctx).SetHeader("Content-Type", ct).SetHeader("x-ms-blob-type", "BlockBlob").SetHeader("x-ms-version", "2020-04-08").
 		SetHeader("Origin", baseURL).SetHeader("Referer", baseURL+"/").SetHeader("User-Agent", headers["User-Agent"]).SetBody(img.Data).Put(uploadURL)
 	if err != nil {
-		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+		return nil, transportError(stage, err)
 	}
 	if put.StatusCode >= 400 {
-		return nil, classifyHTTP(stage, put.StatusCode, put.String())
+		return nil, classifyHTTP(stage, put.StatusCode, put.String(), put.Header)
 	}
 	path := "/backend-api/files/" + fileID + "/uploaded"
 	done, err := client.R().SetContext(ctx).SetHeaders(cloneHeaders(headers)).SetHeader("Content-Type", "application/json").
 		SetHeader("X-OpenAI-Target-Path", path).SetHeader("X-OpenAI-Target-Route", path).SetBodyString("{}").Post(baseURL + path)
 	if err != nil {
-		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+		return nil, transportError(stage, err)
 	}
 	if done.StatusCode >= 400 {
-		return nil, classifyHTTP(stage, done.StatusCode, done.String())
+		return nil, classifyHTTP(stage, done.StatusCode, done.String(), done.Header)
 	}
 	return map[string]any{"file_id": fileID, "file_name": name, "file_size": len(img.Data), "mime_type": ct, "width": 1024, "height": 1024}, nil
 }
@@ -452,15 +388,15 @@ func (d *Driver) prepareConversation(ctx context.Context, client *req.Client, he
 	h["X-OpenAI-Target-Route"] = path
 	resp, err := client.R().SetContext(ctx).SetHeaders(h).SetBody(payload).Post(baseURL + path)
 	if err != nil {
-		return "", NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+		return "", transportError(stage, err)
 	}
 	if resp.StatusCode >= 400 {
-		return "", classifyHTTP(stage, resp.StatusCode, resp.String())
+		return "", classifyHTTP(stage, resp.StatusCode, resp.String(), resp.Header)
 	}
 	return gjson.GetBytes(resp.Bytes(), "conduit_token").String(), nil
 }
 
-func (d *Driver) startConversation(ctx context.Context, client *req.Client, headers map[string]string, location *time.Location, reqs *chatRequirements, conduitToken, prompt, model, thinkingEffort, parentID string, refs []map[string]any, excludeInputs map[string]struct{}) (string, []string, []string, error) {
+func (d *Driver) startConversation(ctx context.Context, client *req.Client, headers map[string]string, location *time.Location, reqs *chatRequirements, conduitToken, prompt, model, thinkingEffort, parentID string, refs []map[string]any, excludeInputs map[string]struct{}) (cid string, files, sediments []string, resultErr error) {
 	stage := "sse"
 	parts := make([]any, 0, len(refs)+1)
 	attachments := make([]map[string]any, 0, len(refs))
@@ -524,14 +460,19 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 	h["X-OpenAI-Target-Route"] = path
 	resp, err := client.R().SetContext(ctx).SetHeaders(h).SetBody(payload).DisableAutoReadResponse().Post(baseURL + path)
 	if err != nil {
-		return "", nil, nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+		return "", nil, nil, submissionError(transportError(stage, err), SubmissionUncertain, "")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return "", nil, nil, classifyHTTP(stage, resp.StatusCode, string(b))
+		return "", nil, nil, classifyHTTP(stage, resp.StatusCode, string(b), resp.Header)
 	}
 	var conversationID string
+	defer func() {
+		if resultErr != nil {
+			resultErr = submissionError(resultErr, SubmissionAccepted, conversationID)
+		}
+	}()
 	var fileIDs, sedimentIDs []string
 	appendFile := func(id string) {
 		id = strings.TrimSpace(id)
@@ -557,19 +498,9 @@ func (d *Driver) startConversation(ctx context.Context, client *req.Client, head
 	// Read SSE off the main path so idle/max timeouts can break hung streams.
 	// Official web keeps the stream open after useful image events; hanging here
 	// makes account tests look stuck for minutes with only heartbeats.
-	lines := make(chan string, 64)
-	readErr := make(chan error, 1)
-	go func() {
-		sc := bufio.NewScanner(resp.Body)
-		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-		for sc.Scan() {
-			lines <- sc.Text()
-		}
-		if err := sc.Err(); err != nil {
-			readErr <- err
-		}
-		close(lines)
-	}()
+	readCtx, stopRead := context.WithCancel(ctx)
+	defer stopRead()
+	lines, readErr := readSSELines(readCtx, resp.Body)
 
 	// Architecture (strict):
 	//   1) While SSE is open: ONLY read SSE events — zero GET /conversation polls.
@@ -604,7 +535,7 @@ loop:
 		case err := <-readErr:
 			idleTimer.Stop()
 			if conversationID == "" {
-				return "", nil, nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+				return "", nil, nil, transportError(stage, err)
 			}
 			stageLog("sse", "stream_read_end_leave_to_poll")
 			break loop
@@ -758,12 +689,12 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 		sandboxDownloads     []sandboxDownload
 	)
 	lockKey := pollLockKey(auth)
-	lockStarted := time.Now()
-	err := withAccountPollLock(ctx, lockKey, func() error {
-		if waited := time.Since(lockStarted); waited > 250*time.Millisecond {
-			stageLog("poll", fmt.Sprintf("lock_acquired wait=%s", waited.Round(time.Millisecond)))
-		}
+	pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
+	defer cancelPoll()
+	err := func() error {
 		consecutive429 := 0
+		var lastReadError error
+		var retryAfterUntil time.Time
 		for attempt, at := range offsets {
 			target := started.Add(at)
 			if consecutive429 > 0 {
@@ -791,18 +722,34 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 			}
 
 			path := "/backend-api/conversation/" + conversationID
-			pctx, pcancel := context.WithTimeout(ctx, 12*time.Second)
-			resp, reqErr := client.R().SetContext(pctx).SetHeaders(cloneHeaders(headers)).SetHeader("Accept", "application/json").
-				SetHeader("X-OpenAI-Target-Path", path).
-				SetHeader("X-OpenAI-Target-Route", "/backend-api/conversation/{conversation_id}").
-				Get(baseURL + path)
-			pcancel()
+			var resp *req.Response
+			reqErr := withAccountPollGate(pollCtx, lockKey, func(lock *accountPollLock) error {
+				pctx, pcancel := context.WithTimeout(pollCtx, 12*time.Second)
+				defer pcancel()
+				var callErr error
+				resp, callErr = client.R().SetContext(pctx).SetHeaders(cloneHeaders(headers)).SetHeader("Accept", "application/json").
+					SetHeader("X-OpenAI-Target-Path", path).
+					SetHeader("X-OpenAI-Target-Route", "/backend-api/conversation/{conversation_id}").
+					Get(baseURL + path)
+				delay := minGap
+				if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
+					delay = max(delay, pollBackoffAfter429(consecutive429+1), parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
+				}
+				lock.nextAllowed.Store(time.Now().Add(delay).UnixNano())
+				return callErr
+			})
 			elapsed := time.Since(started)
 			if reqErr != nil {
+				lastReadError = transportError(stage, reqErr)
+				if pollCtx.Err() != nil {
+					break
+				}
 				stageLog("poll", fmt.Sprintf("transport attempt=%d/%d elapsed=%s err=%s", attempt+1, len(offsets), elapsed.Round(time.Millisecond), reqErr.Error()))
 				continue
 			}
 			if resp.StatusCode == http.StatusTooManyRequests {
+				lastReadError = nil
+				retryAfterUntil = time.Now().Add(parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()))
 				consecutive429++
 				// Keep retrying within timeout with backoff (do not abort after 3 hits).
 				stageLog("poll", fmt.Sprintf("429 attempt=%d/%d consecutive=%d cool=%s elapsed=%s",
@@ -810,6 +757,7 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 				continue
 			}
 			if resp.StatusCode >= 500 {
+				lastReadError = classifyHTTP(stage, resp.StatusCode, resp.String(), resp.Header)
 				stageLog("poll", fmt.Sprintf("5xx attempt=%d/%d status=%d elapsed=%s", attempt+1, len(offsets), resp.StatusCode, elapsed.Round(time.Millisecond)))
 				continue
 			}
@@ -823,9 +771,10 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 					stageLog("poll", fmt.Sprintf("inaccessible attempt=%d/%d elapsed=%s retry_later", attempt+1, len(offsets), elapsed.Round(time.Millisecond)))
 					continue
 				}
-				return classifyHTTP(stage, resp.StatusCode, bodyText)
+				return classifyHTTP(stage, resp.StatusCode, bodyText, resp.Header)
 			}
 			consecutive429 = 0
+			lastReadError = nil
 			body := resp.Bytes()
 			var foundFileIDs, foundSedimentIDs []string
 			attachmentCount := 0
@@ -885,14 +834,19 @@ func (d *Driver) pollImages(ctx context.Context, client *req.Client, headers map
 		}
 		if len(fileIDs) == 0 && len(sedimentIDs) == 0 && len(sandboxDownloads) == 0 {
 			if consecutive429 > 0 {
-				return NewError(ErrorKindRateLimited, stage,
+				err := NewError(ErrorKindRateLimited, stage,
 					"conversation poll rate limited (too many 429); retry later",
 					http.StatusTooManyRequests, true)
+				err.RetryAfter = max(0, time.Until(retryAfterUntil))
+				return err
+			}
+			if lastReadError != nil {
+				return lastReadError
 			}
 			return NewError(ErrorKindTimeout, stage, "image poll timeout (schedule exhausted)", 0, true)
 		}
 		return nil
-	})
+	}()
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1029,26 +983,7 @@ func (d *Driver) downloadAssets(ctx context.Context, client *req.Client, headers
 }
 
 func (d *Driver) downloadSandboxWithRetry(ctx context.Context, client *req.Client, headers map[string]string, conversationID string, item sandboxDownload) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt < 8; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, NewError(ErrorKindTimeout, "download", ctx.Err().Error(), 0, true)
-			case <-time.After(time.Duration(attempt) * 750 * time.Millisecond):
-			}
-		}
-		b, err := d.downloadSandbox(ctx, client, headers, conversationID, item)
-		if err == nil {
-			return b, nil
-		}
-		lastErr = err
-		msg := strings.ToLower(err.Error())
-		if !strings.Contains(msg, "not found") && !strings.Contains(msg, "missing download url") {
-			return nil, err
-		}
-	}
-	return nil, lastErr
+	return retryDownload(ctx, 8, 750*time.Millisecond, func() ([]byte, error) { return d.downloadSandbox(ctx, client, headers, conversationID, item) })
 }
 
 func (d *Driver) downloadSandbox(ctx context.Context, client *req.Client, headers map[string]string, conversationID string, item sandboxDownload) ([]byte, error) {
@@ -1062,48 +997,29 @@ func (d *Driver) downloadSandbox(ctx context.Context, client *req.Client, header
 		SetHeader("X-OpenAI-Target-Path", path).
 		SetHeader("X-OpenAI-Target-Route", "/backend-api/conversation/{conversation_id}/interpreter/download").
 		SetQueryParam("message_id", item.MessageID).
-		SetQueryParam("sandbox_path", item.Path).
+		SetQueryParam("sandbox_path", item.Path).DisableAutoReadResponse().
 		Get(baseURL + path)
 	if err != nil {
-		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+		return nil, transportError(stage, err)
 	}
-	if resp.StatusCode >= 400 {
-		return nil, classifyHTTP(stage, resp.StatusCode, resp.String())
+	body, err := readDownloadBody(resp)
+	if err != nil {
+		return nil, err
 	}
-	if u := strings.TrimSpace(gjson.GetBytes(resp.Bytes(), "download_url").String()); u != "" {
+	if u := strings.TrimSpace(gjson.GetBytes(body, "download_url").String()); u != "" {
 		return d.downloadResolvedURL(ctx, client, headers, u)
 	}
-	if len(resp.Bytes()) == 0 {
-		return nil, NewError(ErrorKindUpstream, stage, "empty image body", resp.StatusCode, true)
-	}
-	if gjson.ValidBytes(resp.Bytes()) {
+	if gjson.ValidBytes(body) {
 		return nil, NewError(ErrorKindUpstream, stage, "missing download url", resp.StatusCode, true)
 	}
-	return resp.Bytes(), nil
+	if err := validateDownloadedImage(body); err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 func (d *Driver) downloadOneWithRetry(ctx context.Context, client *req.Client, headers map[string]string, conversationID, id string, sediment bool) ([]byte, error) {
-	var lastErr error
-	for attempt := 0; attempt < 6; attempt++ {
-		if attempt > 0 {
-			// 120ms, 240ms, 360ms... — file links often appear within ~1s of conversation pointers.
-			select {
-			case <-ctx.Done():
-				return nil, NewError(ErrorKindTimeout, "download", ctx.Err().Error(), 0, true)
-			case <-time.After(time.Duration(attempt) * 120 * time.Millisecond):
-			}
-		}
-		b, err := d.downloadOne(ctx, client, headers, conversationID, id, sediment)
-		if err == nil {
-			return b, nil
-		}
-		lastErr = err
-		msg := strings.ToLower(err.Error())
-		if !strings.Contains(msg, "file link not found") && !strings.Contains(msg, "missing download url") && !strings.Contains(msg, "not found") {
-			return nil, err
-		}
-	}
-	return nil, lastErr
+	return retryDownload(ctx, 6, 120*time.Millisecond, func() ([]byte, error) { return d.downloadOne(ctx, client, headers, conversationID, id, sediment) })
 }
 
 func (d *Driver) downloadOne(ctx context.Context, client *req.Client, headers map[string]string, conversationID, id string, sediment bool) ([]byte, error) {
@@ -1127,6 +1043,7 @@ func (d *Driver) downloadOne(ctx context.Context, client *req.Client, headers ma
 	var downloadURL string
 	var lastStatus int
 	var lastBody string
+	var lastHeaders http.Header
 
 	// Official web file path captured 2026-07-13 from chatgpt.com:
 	// GET /backend-api/files/download/{file_id}?conversation_id=...&inline=false&download_intent=false
@@ -1147,9 +1064,12 @@ func (d *Driver) downloadOne(ctx context.Context, client *req.Client, headers ma
 		}
 		resp, err := r.Get(baseURL + path)
 		if err != nil {
-			return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+			return nil, transportError(stage, err)
 		}
-		lastStatus, lastBody = resp.StatusCode, resp.String()
+		lastStatus, lastBody, lastHeaders = resp.StatusCode, resp.String(), resp.Header
+		if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
+			return nil, classifyHTTP(stage, resp.StatusCode, resp.String(), resp.Header)
+		}
 		if resp.StatusCode < 400 {
 			downloadURL = resolve(resp)
 		}
@@ -1158,11 +1078,15 @@ func (d *Driver) downloadOne(ctx context.Context, client *req.Client, headers ma
 			legacy := "/backend-api/files/" + id + "/download"
 			resp2, err2 := client.R().SetContext(ctx).SetHeaders(cloneHeaders(headers)).SetHeader("Accept", "application/json").
 				SetHeader("X-OpenAI-Target-Path", legacy).SetHeader("X-OpenAI-Target-Route", legacy).Get(baseURL + legacy)
-			if err2 == nil {
-				lastStatus, lastBody = resp2.StatusCode, resp2.String()
-				if resp2.StatusCode < 400 {
-					downloadURL = resolve(resp2)
-				}
+			if err2 != nil {
+				return nil, transportError(stage, err2)
+			}
+			lastStatus, lastBody, lastHeaders = resp2.StatusCode, resp2.String(), resp2.Header
+			if resp2.StatusCode >= 400 && resp2.StatusCode != http.StatusNotFound {
+				return nil, classifyHTTP(stage, resp2.StatusCode, resp2.String(), resp2.Header)
+			}
+			if resp2.StatusCode < 400 {
+				downloadURL = resolve(resp2)
 			}
 		}
 	}
@@ -1175,9 +1099,12 @@ func (d *Driver) downloadOne(ctx context.Context, client *req.Client, headers ma
 			SetHeader("X-OpenAI-Target-Route", "/backend-api/conversation/{conversation_id}/attachment/{attachment_id}/download").
 			Get(baseURL + path)
 		if err != nil {
-			return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+			return nil, transportError(stage, err)
 		}
-		lastStatus, lastBody = resp.StatusCode, resp.String()
+		lastStatus, lastBody, lastHeaders = resp.StatusCode, resp.String(), resp.Header
+		if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
+			return nil, classifyHTTP(stage, resp.StatusCode, resp.String(), resp.Header)
+		}
 		if resp.StatusCode < 400 {
 			downloadURL = resolve(resp)
 		}
@@ -1191,9 +1118,12 @@ func (d *Driver) downloadOne(ctx context.Context, client *req.Client, headers ma
 				SetHeader("X-OpenAI-Target-Path", path).SetHeader("X-OpenAI-Target-Route", path).
 				SetQueryParam("asset_pointer", pointer).Get(baseURL + path)
 			if err != nil {
-				continue
+				return nil, transportError(stage, err)
 			}
-			lastStatus, lastBody = resp.StatusCode, resp.String()
+			lastStatus, lastBody, lastHeaders = resp.StatusCode, resp.String(), resp.Header
+			if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
+				return nil, classifyHTTP(stage, resp.StatusCode, resp.String(), resp.Header)
+			}
 			if resp.StatusCode < 400 {
 				downloadURL = resolve(resp)
 				if downloadURL != "" {
@@ -1205,7 +1135,7 @@ func (d *Driver) downloadOne(ctx context.Context, client *req.Client, headers ma
 
 	if downloadURL == "" {
 		if lastBody != "" {
-			return nil, classifyHTTP(stage, lastStatus, lastBody)
+			return nil, classifyHTTP(stage, lastStatus, lastBody, lastHeaders)
 		}
 		return nil, NewError(ErrorKindUpstream, stage, "missing download url", lastStatus, true)
 	}
@@ -1220,21 +1150,22 @@ func (d *Driver) downloadResolvedURL(ctx context.Context, client *req.Client, he
 		return nil, NewError(ErrorKindUpstream, stage, "missing download url", 0, true)
 	}
 	// estuary/content is on chatgpt.com and needs auth headers.
-	imgReq := client.R().SetContext(ctx)
-	if strings.Contains(downloadURL, "chatgpt.com") {
+	imgReq := client.R().SetContext(ctx).DisableAutoReadResponse()
+	if chatGPTDownloadURL(downloadURL) {
 		imgReq.SetHeaders(cloneHeaders(headers))
 	}
 	img, err := imgReq.Get(downloadURL)
 	if err != nil {
-		return nil, NewError(ErrorKindTransport, stage, err.Error(), 0, true)
+		return nil, transportError(stage, err)
 	}
-	if img.StatusCode >= 400 {
-		return nil, classifyHTTP(stage, img.StatusCode, img.String())
+	body, err := readDownloadBody(img)
+	if err != nil {
+		return nil, err
 	}
-	if len(img.Bytes()) == 0 {
-		return nil, NewError(ErrorKindUpstream, stage, "empty image body", img.StatusCode, true)
+	if err := validateDownloadedImage(body); err != nil {
+		return nil, err
 	}
-	return img.Bytes(), nil
+	return body, nil
 }
 
 // deleteConversationBestEffort hides the conversation in ChatGPT history (PATCH is_visible=false).
@@ -1294,19 +1225,26 @@ func normalizeThinkingEffort(v string) string {
 	}
 }
 
-func classifyHTTP(stage string, status int, body string) *Error {
+func classifyHTTP(stage string, status int, body string, headers ...http.Header) *Error {
 	newHTTPError := func(kind ErrorKind, message string, retryable bool) *Error {
 		err := NewError(kind, stage, message, status, retryable)
 		err.ResponseBody = []byte(body)
+		if len(headers) > 0 {
+			err.RetryAfter = parseRetryAfter(headers[0].Get("Retry-After"), time.Now())
+		}
 		return err
 	}
-	if status == http.StatusUnauthorized {
+	if status == http.StatusUnauthorized || (status == http.StatusForbidden && isCredentialRejection(body)) {
 		return newHTTPError(ErrorKindAuth, "token invalidated", false)
 	}
 	if IsHTMLForbiddenResponse(status, []byte(body)) {
 		return newHTTPError(ErrorKindUpstream, "ChatGPT Web returned an HTML 403 page", true)
 	}
 	if rl := extractTaskRateLimitError(stage, []byte(body)); rl != nil {
+		rl.ResponseBody = []byte(body)
+		if len(headers) > 0 {
+			rl.RetryAfter = parseRetryAfter(headers[0].Get("Retry-After"), time.Now())
+		}
 		return rl
 	}
 	if looksLikeRateLimitMessage(body) && IsImageQuotaLimitedMessage(body) {
@@ -1346,36 +1284,13 @@ func statusOr(status, fallback int) int {
 // (Free plan image caps, resets in N hours, etc.). HTTP 429 on conversation GET
 // is NOT quota and must not mark the account web-image cooldown / remaining=0.
 func IsImageQuotaLimitedMessage(text string) bool {
-	msg := strings.TrimSpace(text)
-	if msg == "" {
+	msg := strings.ToLower(strings.TrimSpace(text))
+	if msg == "" || strings.Contains(msg, "soft poll 429") || strings.Contains(msg, "conversation poll rate limited") || strings.Contains(msg, "conversation get 429") {
 		return false
 	}
-	l := strings.ToLower(msg)
-	// Explicit non-quota read/throttle paths.
-	if strings.Contains(l, "soft poll 429") ||
-		strings.Contains(l, "conversation poll rate limited") ||
-		strings.Contains(l, "conversation get 429") {
-		return false
-	}
-	// Prefer clear image-quota phrasing over generic "rate limit".
-	keys := []string{
-		"free plan limit",
-		"image generation limit",
-		"image generations",
-		"limit for image",
-		"免费版额度",
-		"免费计划",
-		"生成次数已达",
-		"图片生成",
-		"生图",
-	}
-	for _, k := range keys {
-		if strings.Contains(l, k) || strings.Contains(msg, k) {
-			return true
-		}
-	}
-	// Generic rate-limit text without image context: treat as non-quota throttle.
-	return false
+	imageContext := containsAny(msg, "image generation", "image_gen", "image quota", "remaining images", "out of image", "图片", "生图")
+	exhausted := containsAny(msg, "generation limit", "generations limit", "image_gen_limit", "image_generation_limit", "limit for image", "plan limit", "hit the limit", "reached the limit", "quota exceeded", "quota_exceeded", "quota exhausted", "quota_exhausted", "no remaining", "out of", "额度用尽", "次数已用完", "达到上限", "用量上限", "免费版额度", "生成次数已达", "请等待重置")
+	return imageContext && exhausted
 }
 
 func looksLikeRateLimitMessage(text string) bool {

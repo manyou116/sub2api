@@ -141,7 +141,7 @@ func TestWebImageTimezoneOutboundProbeGenerationAndEdit(t *testing.T) {
 							case "/backend-api/files/download/file_output":
 								body = `{"download_url":"https://mock.invalid/image"}`
 							case "/image":
-								body = "generated-image"
+								body = string(protocolPNG(t))
 							default:
 								t.Errorf("unexpected path %s", r.URL.Path)
 							}
