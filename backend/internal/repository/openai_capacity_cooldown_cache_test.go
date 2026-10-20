@@ -108,22 +108,79 @@ func TestCapacityCooldownRecoveredRetryCannotBecomeFailureAgain(t *testing.T) {
 	require.EqualValues(t, 1, d.Total)
 }
 
-func TestCapacityCooldownIsolatesModelsAndAccounts(t *testing.T) {
+func TestCapacityCooldownPausesAllTextModelsAndIsolatesAccounts(t *testing.T) {
 	c, _ := capacityTestStore(t)
 	capacityTrip(t, c)
 	ctx := context.Background()
 	blocked, err := c.BlockedOpenAICapacityAccounts(ctx, "model-a")
 	require.NoError(t, err)
 	require.Equal(t, []int64{42}, blocked)
-	for _, pair := range []struct {
-		id    int64
-		model string
-	}{{43, "model-a"}, {42, "model-b"}} {
-		d, err := c.AdmitOpenAICapacity(ctx, pair.id, pair.model, "fresh", 60)
+	for _, model := range []string{"model-a", "model-b"} {
+		d, err := c.AdmitOpenAICapacity(ctx, 42, model, "fresh", 60)
+		require.NoError(t, err)
+		require.False(t, d.Allowed)
+		blocked, err := c.BlockedOpenAICapacityAccounts(ctx, model)
+		require.NoError(t, err)
+		require.Equal(t, []int64{42}, blocked)
+		d, err = c.AdmitOpenAICapacity(ctx, 43, model, "fresh", 60)
 		require.NoError(t, err)
 		require.True(t, d.Allowed)
 		require.False(t, d.Probe)
 	}
+}
+
+func TestCapacityCooldownCountsOverloadsAcrossModels(t *testing.T) {
+	c, _ := capacityTestStore(t)
+	settings := service.DefaultOpenAICapacityCooldownSettings()
+	settings.FailureThreshold = 2
+	first, err := c.ObserveOpenAICapacity(context.Background(), 42, "model-a", "request-a", 0, 1, settings)
+	require.NoError(t, err)
+	require.False(t, first.Tripped)
+	second, err := c.ObserveOpenAICapacity(context.Background(), 42, "model-b", "request-b", 0, 1, settings)
+	require.NoError(t, err)
+	require.True(t, second.Tripped)
+	require.EqualValues(t, 2, second.Failures)
+}
+
+func TestCapacityCooldownResetFencesInflightResultsAcrossModels(t *testing.T) {
+	c, _ := capacityTestStore(t)
+	opened := capacityTrip(t, c)
+	ctx := context.Background()
+	require.NoError(t, c.ResetOpenAICapacity(ctx, 42))
+	current, err := c.CurrentOpenAICapacity(ctx, 42)
+	require.NoError(t, err)
+	require.Greater(t, current.Generation, opened.Generation)
+	late := capacityRecord(t, c, "late-old-failure", opened.Generation, 1)
+	require.False(t, late.Tripped)
+	settings := service.DefaultOpenAICapacityCooldownSettings()
+	for _, model := range []string{"model-a", "model-b"} {
+		d, err := c.AdmitOpenAICapacity(ctx, 42, model, "after-reset", 60)
+		require.NoError(t, err)
+		require.True(t, d.Allowed)
+		require.False(t, d.Probe)
+	}
+	fresh, err := c.ObserveOpenAICapacity(ctx, 42, "model-b", "new-failure", current.Generation, 1, settings)
+	require.NoError(t, err)
+	require.True(t, fresh.Tripped, "genuine post-recovery overloads must still pause the account")
+}
+
+func TestCapacityCooldownControlLockExcludesOtherInstances(t *testing.T) {
+	c, _ := capacityTestStore(t)
+	unlock, err := c.LockOpenAICapacity(context.Background(), 42)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_, err = c.LockOpenAICapacity(ctx, 42)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	unlock()
+	otherUnlock, err := c.LockOpenAICapacity(context.Background(), 42)
+	require.NoError(t, err)
+	unlock() // An old owner cannot delete the replacement lease.
+	freshCtx, stop := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer stop()
+	_, err = c.LockOpenAICapacity(freshCtx, 42)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	otherUnlock()
 }
 
 func TestCapacityCooldownSingleProbeAcrossClientsAndRecovery(t *testing.T) {
@@ -153,7 +210,7 @@ func TestCapacityCooldownSingleProbeAcrossClientsAndRecovery(t *testing.T) {
 				store = other
 			}
 			id := fmt.Sprintf("probe-%d", i)
-			d, err := store.AdmitOpenAICapacity(ctx, 42, "model-a", id, 60)
+			d, err := store.AdmitOpenAICapacity(ctx, 42, fmt.Sprintf("model-%d", i%3), id, 60)
 			results <- admission{id, d, err}
 		}(i)
 	}

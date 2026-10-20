@@ -2129,6 +2129,11 @@ func (s *RateLimitService) samplePassiveUsageFromHeaders(ctx context.Context, ac
 
 // ClearRateLimit 清除账号的限流状态
 func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) error {
+	unlock, err := s.resetOpenAICapacityPause(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
 		return err
 	}
@@ -2181,7 +2186,7 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 		}
 	}
 
-	if hasRecoverableRuntimeState(account) {
+	if hasRecoverableRuntimeState(account) || (options.InvalidateToken && isOpenAIOAuthAccount(account)) {
 		if err := s.ClearRateLimit(ctx, accountID); err != nil {
 			return nil, err
 		}
@@ -2204,6 +2209,11 @@ func (s *RateLimitService) RecoverAccountAfterSuccessfulTest(ctx context.Context
 }
 
 func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID int64) error {
+	unlock, err := s.resetOpenAICapacityPause(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if err := s.accountRepo.ClearTempUnschedulable(ctx, accountID); err != nil {
 		return err
 	}
@@ -2258,7 +2268,7 @@ func (s *RateLimitService) GetTempUnschedStatus(ctx context.Context, accountID i
 		if err != nil {
 			return nil, err
 		}
-		if state != nil && state.UntilUnix > now {
+		if state != nil && state.UntilUnix > now && state.MatchedKeyword != openAICapacityCooldownKeyword {
 			return state, nil
 		}
 	}

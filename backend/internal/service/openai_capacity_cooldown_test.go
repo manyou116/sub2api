@@ -24,6 +24,11 @@ type capacityStoreStub struct {
 	ids      []string
 	outcomes []int
 	reads    int
+	trip     OpenAICapacityDecision
+	current  OpenAICapacityDecision
+	resetErr error
+	resets   int
+	cached   *TempUnschedState
 	released chan struct{}
 }
 
@@ -35,7 +40,32 @@ func (c *capacityStoreStub) ObserveOpenAICapacity(_ context.Context, _ int64, _ 
 	defer c.mu.Unlock()
 	c.ids = append(c.ids, id)
 	c.outcomes = append(c.outcomes, outcome)
-	return OpenAICapacityDecision{}, nil
+	return c.trip, nil
+}
+func (c *capacityStoreStub) LockOpenAICapacity(context.Context, int64) (func(), error) {
+	return func() {}, nil
+}
+func (c *capacityStoreStub) CurrentOpenAICapacity(context.Context, int64) (OpenAICapacityDecision, error) {
+	return c.current, nil
+}
+func (c *capacityStoreStub) ResetOpenAICapacity(context.Context, int64) error {
+	c.resets++
+	if c.resetErr == nil {
+		c.current.Generation++
+		c.current.UntilMS = 0
+	}
+	return c.resetErr
+}
+func (c *capacityStoreStub) GetTempUnsched(context.Context, int64) (*TempUnschedState, error) {
+	return c.cached, nil
+}
+func (c *capacityStoreStub) SetTempUnsched(_ context.Context, _ int64, state *TempUnschedState) error {
+	c.cached = state
+	return nil
+}
+func (c *capacityStoreStub) DeleteTempUnsched(context.Context, int64) error {
+	c.cached = nil
+	return nil
 }
 func (c *capacityStoreStub) ReleaseOpenAICapacity(context.Context, int64, string, string, int64) error {
 	c.released <- struct{}{}
@@ -169,7 +199,7 @@ func TestCapacityCooldownCanonicalModelAndRedisFailure(t *testing.T) {
 	a.Credentials["compact_model_mapping"] = map[string]any{"alias-a": "gpt-5.4-mini"}
 	compactSelection := &AccountSelectionResult{Account: a}
 	require.True(t, svc.admitOpenAICapacity(svc.withOpenAICapacityCooldown(context.Background(), true), compactSelection, "alias-a"))
-	require.Equal(t, "gpt-5.4-mini", compactSelection.Account.capacityAttempt.model, "compact-specific model mapping must have its own circuit")
+	require.Equal(t, "gpt-5.4-mini", compactSelection.Account.capacityAttempt.model, "the trigger reason must retain the actual compact model")
 	sel := &AccountSelectionResult{Account: a}
 	require.True(t, svc.admitOpenAICapacity(ctx, sel, "picture"))
 	require.Same(t, a, sel.Account, "mapped image model must stay outside the text circuit")

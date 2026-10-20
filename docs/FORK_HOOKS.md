@@ -259,6 +259,12 @@ Preserve the runtime-blocked check, result/error observation hooks, and the
 optional capacity switch policy in the common failover constructor. The OAuth
 passthrough HTTP error branch must also consult `shouldSwitchOpenAICapacity`
 before committing a 503 response. Preserve the separate admin GET/PUT routes
-and settings card. Quota, 429, images and WebSocket ingress stay outside this
-capacity circuit. Run `TestCapacityCooldown` in repository/service/admin/handler
+and settings card. Capacity pauses now cover the account's text models and
+project into the existing temporary-unschedulable fields for admin filtering.
+Preserve the Web-image exception for this reason alone, including Work Mode
+and the candidate/capacity queries. Auth/transport pauses must retain priority.
+Admin recovery must reset the shared Redis generation under the control lock
+so delayed results cannot reapply an old DB pause. Quota, 429, images and
+WebSocket ingress do not generate capacity observations.
+Run `TestCapacityCooldown` in repository/service/admin/handler
 packages, plus the settings component tests, when replaying these hooks.

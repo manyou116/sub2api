@@ -1068,7 +1068,7 @@ export default {
       },
       capacityCooldown: {
         title: 'OpenAI overload cooldown',
-        description: 'Temporarily avoid an OAuth text account and model when overloaded requests reach the count threshold within the observation window, independently of 429 quotas. Disabled by default.',
+        description: 'Pause all text models on an OAuth account when overloads reach the count threshold. The account appears under Temporarily unschedulable for filtering, details and recovery. Web image generation remains available. Independent of 429 quotas; disabled by default.',
         enabled: 'Enable overload protection',
         switchAccount: 'Prefer another account on overload',
         switchHint: 'Switch only before meaningful output, using the existing account-switch limit. Requests with output are not replayed.',
