@@ -11,12 +11,14 @@ import (
 const MaxWebImageShadowBatch = 200
 
 type WebImageShadowBatchInput struct {
-	ParentIDs   []int64 `json:"parent_ids"`
-	Concurrency *int    `json:"concurrency,omitempty"`
+	ParentIDs   []int64  `json:"parent_ids"`
+	Modes       []string `json:"modes,omitempty"`
+	Concurrency *int     `json:"concurrency,omitempty"`
 }
 
 type WebImageShadowBatchItem struct {
 	ParentID int64  `json:"parent_id"`
+	Mode     string `json:"mode"`
 	ShadowID int64  `json:"shadow_id,omitempty"`
 	Status   string `json:"status"`
 	Code     string `json:"code,omitempty"`
@@ -44,7 +46,20 @@ func CreateWebImageShadows(ctx context.Context, creator webImageShadowCreator, i
 	if input.Concurrency != nil && *input.Concurrency <= 0 {
 		return nil, infraerrors.BadRequest("WEB_IMAGE_SHADOW_CONCURRENCY", "Web image shadow concurrency must be positive")
 	}
-	result := &WebImageShadowBatchResult{Results: make([]WebImageShadowBatchItem, 0, len(input.ParentIDs))}
+	modes := make([]string, 0, 2)
+	if len(input.Modes) == 0 {
+		input.Modes = []string{ImageShadowModeWeb}
+	}
+	for _, requested := range input.Modes {
+		mode, err := normalizeImageShadowMode(requested)
+		if err != nil || requested == "" {
+			return nil, infraerrors.BadRequest("IMAGE_SHADOW_MODE_INVALID", "modes must contain web or work")
+		}
+		if len(modes) == 0 || (modes[0] != mode && len(modes) == 1) {
+			modes = append(modes, mode)
+		}
+	}
+	result := &WebImageShadowBatchResult{Results: make([]WebImageShadowBatchItem, 0, len(input.ParentIDs)*len(modes))}
 	seen := make(map[int64]bool, len(input.ParentIDs))
 	for _, id := range input.ParentIDs {
 		if id <= 0 {
@@ -52,9 +67,11 @@ func CreateWebImageShadows(ctx context.Context, creator webImageShadowCreator, i
 		}
 		if !seen[id] {
 			seen[id] = true
-			result.Results = append(result.Results, WebImageShadowBatchItem{
-				ParentID: id, Status: "failed", Code: "WEB_IMAGE_SHADOW_BATCH_CANCELED", Message: "batch canceled before this account was created",
-			})
+			for _, mode := range modes {
+				result.Results = append(result.Results, WebImageShadowBatchItem{
+					ParentID: id, Mode: mode, Status: "failed", Code: "WEB_IMAGE_SHADOW_BATCH_CANCELED", Message: "batch canceled before this account was created",
+				})
+			}
 		}
 	}
 	jobs := make(chan int)
@@ -68,9 +85,9 @@ func CreateWebImageShadows(ctx context.Context, creator webImageShadowCreator, i
 					continue
 				}
 				item := &result.Results[i]
-				shadow, err := creator.CreateWebImageShadow(ctx, item.ParentID, WebImageShadowOptions{Concurrency: input.Concurrency})
+				shadow, err := creator.CreateWebImageShadow(ctx, item.ParentID, WebImageShadowOptions{Mode: item.Mode, Concurrency: input.Concurrency})
 				if err == nil && shadow != nil {
-					*item = WebImageShadowBatchItem{ParentID: item.ParentID, ShadowID: shadow.ID, Status: "created"}
+					*item = WebImageShadowBatchItem{ParentID: item.ParentID, Mode: item.Mode, ShadowID: shadow.ID, Status: "created"}
 					continue
 				}
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

@@ -325,7 +325,10 @@ func TestWebImageShadowExportRequiresSelectedParent(t *testing.T) {
 			parentID := int64(21)
 			adminSvc.accounts = []service.Account{{ID: 22, Name: "web", Platform: service.PlatformOpenAI,
 				Type: service.AccountTypeOAuth, ParentAccountID: &parentID, QuotaDimension: service.QuotaDimensionWebImages,
-				Concurrency: 1, Priority: 0, Status: service.StatusActive, Schedulable: false}}
+				Concurrency: 1, Priority: 0, Status: service.StatusActive, Schedulable: false},
+				{ID: 23, Name: "work", Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+					ParentAccountID: &parentID, QuotaDimension: service.QuotaDimensionWorkImages,
+					Concurrency: 2, Status: service.StatusActive, Schedulable: false}}
 			if includeParent {
 				adminSvc.accounts = append(adminSvc.accounts, service.Account{ID: parentID, Name: "parent",
 					Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
@@ -341,12 +344,14 @@ func TestWebImageShadowExportRequiresSelectedParent(t *testing.T) {
 			if includeParent {
 				require.Len(t, result.Data.Accounts, 1)
 				require.NotNil(t, result.Data.Accounts[0].WebImageShadow)
+				require.NotNil(t, result.Data.Accounts[0].WorkImageShadow)
+				require.Equal(t, 2, result.Data.Accounts[0].WorkImageShadow.Concurrency)
 				require.Zero(t, result.Data.Accounts[0].WebImageShadow.Priority)
 				require.False(t, result.Data.Accounts[0].WebImageShadow.Schedulable)
 				require.Zero(t, result.Data.SkippedShadows)
 			} else {
 				require.Empty(t, result.Data.Accounts)
-				require.Equal(t, 1, result.Data.SkippedShadows)
+				require.Equal(t, 2, result.Data.SkippedShadows)
 				require.NotContains(t, rec.Body.String(), "selected-parent-token")
 			}
 		})

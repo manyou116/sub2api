@@ -26,7 +26,7 @@ func resolveCredentialAccount(ctx context.Context, repo AccountRepository, accou
 	if parent.IsShadow() {
 		return nil, fmt.Errorf("credential shadow parent %d is itself a shadow", parent.ID)
 	}
-	if account.IsWebImageShadow() {
+	if account.IsImageShadow() {
 		if err := ValidateWebImageShadowParent(parent); err != nil {
 			return nil, err
 		}

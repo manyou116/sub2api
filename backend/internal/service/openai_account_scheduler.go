@@ -1776,7 +1776,10 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
-	if account.IsWebImageShadow() {
+	if imageShadowRouteMismatch(ctx, account, req.RequestedModel) {
+		return false, "image_shadow_mode_mismatch"
+	}
+	if account.IsImageShadow() {
 		if s == nil || s.service == nil {
 			return false, "web_image_service_unavailable"
 		}
@@ -2150,6 +2153,10 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 	excludedIDs map[int64]struct{},
 	requiredCapability OpenAIImagesCapability,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	ctx, routeErr := s.imageShadowRoutingContext(ctx, groupID, requestedModel)
+	if routeErr != nil {
+		return nil, OpenAIAccountScheduleDecision{}, routeErr
+	}
 	selection, decision, err := s.selectAccountWithScheduler(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", requiredCapability, false, PlatformOpenAI, false, false)
 	if err == nil && selection != nil && selection.Account != nil {
 		return selection, decision, nil

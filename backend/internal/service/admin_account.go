@@ -1072,7 +1072,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 	if input.Concurrency != nil && *input.Concurrency <= 0 {
 		for _, acc := range cachedTargets {
-			if acc.IsWebImageShadow() {
+			if acc.IsImageShadow() {
 				return nil, infraerrors.BadRequest("WEB_IMAGE_SHADOW_CONCURRENCY", "Web image shadow concurrency must be positive")
 			}
 		}

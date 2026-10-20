@@ -199,8 +199,8 @@ func (Account) Fields() []ent.Field {
 
 		field.Int64("parent_account_id").Optional().Nillable().
 			Comment("Parent account id for a linked credential shadow (NULL = normal)."),
-		field.Enum("quota_dimension").Values("global", "spark", "web_images").Default("global").
-			Comment("Quota purpose: global, spark or web_images."),
+		field.Enum("quota_dimension").Values("global", "spark", "web_images", "work_images").Default("global").
+			Comment("Quota purpose: global, spark, web_images or work_images."),
 	}
 }
 

@@ -128,3 +128,17 @@ func TestWebImageShadowBackupPreservesExpiryBillingAndEmptyMapping(t *testing.T)
 	require.Empty(t, stub.update.Credentials["model_mapping"])
 	require.True(t, stub.options.StartPaused)
 }
+
+func TestWorkImageShadowBackupRestoresTypedChild(t *testing.T) {
+	stub := &webShadowDataAdmin{}
+	h := &AccountHandler{adminService: stub}
+	account := &service.Account{Name: "parent · WM 生图", Concurrency: 2, Status: service.StatusActive,
+		Extra: map[string]any{"openai_web_images": map[string]any{"model_mode": "fixed", "model": "gpt-5.6-luna-wm"}}}
+	backup, err := h.exportImageShadow(context.Background(), account, service.ImageShadowModeWork)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.6-luna-wm", backup.ModelOptions["model"])
+	require.NoError(t, h.restoreImageShadow(context.Background(), 1, backup, service.ImageShadowModeWork))
+	require.Equal(t, service.ImageShadowModeWork, stub.options.Mode)
+	require.True(t, stub.options.StartPaused)
+	require.Equal(t, backup.ModelOptions, stub.update.Extra["openai_web_images"])
+}

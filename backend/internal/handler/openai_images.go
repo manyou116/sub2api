@@ -157,6 +157,19 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 
 	sessionHash := h.gatewayService.GenerateExplicitSessionHash(c, body)
 	requestCtx := service.WithOpenAIImagesEndpoint(service.WithOpenAIImageGenerationIntent(c.Request.Context()))
+	modeModel := routingModel
+	if clientRequestModel == "gpt-image-2-web" || clientRequestModel == "gpt-image-2-work" {
+		modeModel = clientRequestModel
+	}
+	requestCtx, err = h.gatewayService.PrepareImageShadowRoutingContext(requestCtx, apiKey.GroupID, modeModel)
+	if err != nil {
+		if errors.Is(err, service.ErrImageShadowModeRequired) {
+			h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", err.Error(), streamStarted)
+		} else {
+			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "upstream_error", "Image routing is temporarily unavailable", streamStarted)
+		}
+		return
+	}
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
@@ -180,6 +193,10 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			parsed.RequiredCapabilityForModel(channelMapping.MappedModel),
 		)
 		if err != nil {
+			if errors.Is(err, service.ErrImageShadowModeRequired) {
+				h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", err.Error(), streamStarted)
+				return
+			}
 			if failoverClientGone(c) {
 				reqLog.Info("openai.images.account_select_aborted_client_disconnected", zap.Error(err))
 				return

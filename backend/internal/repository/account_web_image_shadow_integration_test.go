@@ -28,17 +28,18 @@ func TestWebImageShadowDatabase(t *testing.T) {
 			ParentAccountID: &parent.ID, QuotaDimension: dimension, Concurrency: concurrency,
 			Credentials: map[string]any{"model_mapping": map[string]any{"gpt-image-2": "gpt-image-2"}}}
 	}
-	spark, web := newChild(service.QuotaDimensionSpark, 3), newChild(service.QuotaDimensionWebImages, 2)
+	spark, web, work := newChild(service.QuotaDimensionSpark, 3), newChild(service.QuotaDimensionWebImages, 2), newChild(service.QuotaDimensionWorkImages, 1)
 	require.NoError(t, repo.Create(ctx, spark))
 	require.NoError(t, repo.Create(ctx, web), "migration 246 must allow a Web child alongside Spark")
-	for _, child := range []*service.Account{spark, web} {
+	require.NoError(t, repo.Create(ctx, work), "migration 247 permits all three shadow purposes")
+	for _, child := range []*service.Account{spark, web, work} {
 		require.NoError(t, repo.BindGroups(ctx, child.ID, []int64{group.ID}))
 	}
 	children, err := repo.ListShadowsByParent(ctx, parent.ID)
 	require.NoError(t, err)
-	require.Len(t, children, 2)
-	childIDs := []int64{children[0].ID, children[1].ID}
-	require.ElementsMatch(t, []int64{spark.ID, web.ID}, childIDs)
+	require.Len(t, children, 3)
+	childIDs := []int64{children[0].ID, children[1].ID, children[2].ID}
+	require.ElementsMatch(t, []int64{spark.ID, web.ID, work.ID}, childIDs)
 
 	// Expected PostgreSQL errors must not abort the surrounding test transaction.
 	expectConstraint := func(name string, write func() error) {
@@ -55,9 +56,16 @@ func TestWebImageShadowDatabase(t *testing.T) {
 	expectConstraint("uq_accounts_web_image_shadow_per_parent", func() error {
 		return repo.Create(ctx, newChild(service.QuotaDimensionWebImages, 1))
 	})
+	expectConstraint("uq_accounts_work_image_shadow_per_parent", func() error {
+		return repo.Create(ctx, newChild(service.QuotaDimensionWorkImages, 1))
+	})
 	for _, invalid := range []int{0, -1} {
 		expectConstraint("chk_accounts_web_image_shadow_concurrency", func() error {
 			_, err := tx.ExecContext(ctx, "UPDATE accounts SET concurrency = $1 WHERE id = $2", invalid, web.ID)
+			return err
+		})
+		expectConstraint("chk_accounts_work_image_shadow_concurrency", func() error {
+			_, err := tx.ExecContext(ctx, "UPDATE accounts SET concurrency = $1 WHERE id = $2", invalid, work.ID)
 			return err
 		})
 	}
@@ -74,19 +82,22 @@ func TestWebImageShadowDatabase(t *testing.T) {
 		return byID
 	}
 	rows := capacity()
-	require.Len(t, rows, 2, "a manually paused parent must not pause either child")
+	require.Len(t, rows, 3, "a manually paused parent must not pause children")
+	require.Equal(t, service.QuotaDimensionWorkImages, rows[work.ID].QuotaDimension)
 	require.Equal(t, service.QuotaDimensionSpark, rows[spark.ID].QuotaDimension)
 	require.Equal(t, service.QuotaDimensionWebImages, rows[web.ID].QuotaDimension)
 	require.Equal(t, 2, rows[web.ID].Concurrency)
 	require.NoError(t, repo.SetSchedulable(ctx, spark.ID, false))
 	rows = capacity()
-	require.Len(t, rows, 1)
-	require.Contains(t, rows, web.ID, "only the image-purpose child contributes capacity")
+	require.Len(t, rows, 2)
+	require.Contains(t, rows, web.ID)
+	require.Contains(t, rows, work.ID, "both image purposes contribute image capacity")
 
 	future := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
 	_, err = client.Account.UpdateOneID(parent.ID).SetRateLimitResetAt(future).SetOverloadUntil(future).Save(ctx)
 	require.NoError(t, err)
 	require.Contains(t, capacity(), web.ID, "ordinary images ignore parent text quota and overload")
+	require.NotContains(t, capacity(), work.ID, "WM shares parent text quota")
 	_, err = client.Account.UpdateOneID(parent.ID).SetTempUnschedulableUntil(future).
 		SetTempUnschedulableReason(service.OpenAICapacityCooldownReasonPrefix + `"error_message":"text capacity"}`).Save(ctx)
 	require.NoError(t, err)
@@ -139,6 +150,19 @@ func TestWebImageShadowDatabase(t *testing.T) {
 	rows = capacity()
 	require.Len(t, rows, 1)
 	require.Equal(t, 4, rows[recreated.ID].Concurrency)
+	_, err = client.Account.UpdateOneID(parent.ID).ClearRateLimitResetAt().ClearOverloadUntil().Save(ctx)
+	require.NoError(t, err)
+	require.Contains(t, capacity(), work.ID, "parent text recovery restores WM without a child quota copy")
+	require.NoError(t, repo.SetWebImageCooldown(ctx, parent.ID, future))
+	require.Contains(t, capacity(), work.ID, "Web quota exhaustion does not block WM")
+	require.NotContains(t, capacity(), recreated.ID)
+	require.NoError(t, repo.Delete(ctx, work.ID))
+	workRecreated := newChild(service.QuotaDimensionWorkImages, 3)
+	require.NoError(t, repo.Create(ctx, workRecreated))
+	require.NoError(t, repo.BindGroups(ctx, workRecreated.ID, []int64{group.ID}))
+	_, err = client.Account.UpdateOneID(parent.ID).SetRateLimitResetAt(future).Save(ctx)
+	require.NoError(t, err)
+	require.NotContains(t, capacity(), workRecreated.ID, "recreated WM still shares parent quota")
 	_, err = client.Account.UpdateOneID(parent.ID).SetDeletedAt(time.Now()).Save(ctx)
 	require.NoError(t, err)
 	require.Empty(t, capacity(), "a deleted parent must not leave schedulable child capacity")

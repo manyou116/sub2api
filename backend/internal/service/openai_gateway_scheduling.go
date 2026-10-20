@@ -393,7 +393,10 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account == nil {
 		return "account_nil"
 	}
-	if account.IsWebImageShadow() && (requestedModel == "" || !OpenAIImageGenerationIntentFromContext(ctx) || !IsGPTImageGenerationModel(account.GetMappedModel(requestedModel))) {
+	if imageShadowRouteMismatch(ctx, account, requestedModel) {
+		return "image_shadow_mode_mismatch"
+	}
+	if account.IsImageShadow() && (requestedModel == "" || !OpenAIImageGenerationIntentFromContext(ctx) || !IsGPTImageGenerationModel(account.GetMappedModel(requestedModel))) {
 		return "web_image_only"
 	}
 	// account_model composite routes publish an alias that only accounts with an

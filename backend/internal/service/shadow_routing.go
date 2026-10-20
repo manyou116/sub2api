@@ -21,7 +21,7 @@ func parentHealthyForShadow(account *Account, lookup func(int64) *Account) bool 
 	if parent == nil {
 		return false
 	}
-	if account.IsWebImageShadow() {
+	if account.IsImageShadow() {
 		return ValidateWebImageShadowParent(parent) == nil && parent.IsCredentialUsableForWebImages()
 	}
 	return !parent.IsShadow() && parent.IsOpenAIOAuth() && parent.IsCredentialUsableForShadow()

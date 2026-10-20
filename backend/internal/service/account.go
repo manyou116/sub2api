@@ -1821,7 +1821,7 @@ func (a *Account) GetOpenAISessionID() string {
 }
 
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
-	if a.IsWebImageShadow() {
+	if a.IsImageShadow() {
 		return capability == ""
 	}
 	if a == nil {
@@ -2012,7 +2012,7 @@ func (a *Account) openAIEndpointCapabilitySet() (map[string]bool, bool) {
 }
 
 func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapability) bool {
-	if a.IsWebImageShadow() {
+	if a.IsImageShadow() {
 		return capability == OpenAIImagesCapabilityBasic || capability == OpenAIImagesCapabilityNative
 	}
 	if a.IsSparkShadow() && capability != "" {
@@ -3284,6 +3284,14 @@ func (a *Account) IsSparkShadow() bool {
 
 func (a *Account) IsWebImageShadow() bool {
 	return a.IsShadow() && a.QuotaDimension == QuotaDimensionWebImages
+}
+
+func (a *Account) IsWorkImageShadow() bool {
+	return a.IsShadow() && a.QuotaDimension == QuotaDimensionWorkImages
+}
+
+func (a *Account) IsImageShadow() bool {
+	return a.IsWebImageShadow() || a.IsWorkImageShadow()
 }
 
 // QuotaDimensionOrDefault 返回账号的用量维度，未设置时回退 "global"。

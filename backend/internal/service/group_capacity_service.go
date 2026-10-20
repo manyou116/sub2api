@@ -146,7 +146,7 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 			continue
 		}
 
-		ref := groupCapacityAccountRef{groupID: row.GroupID, accountID: row.AccountID, image: row.QuotaDimension == QuotaDimensionWebImages}
+		ref := groupCapacityAccountRef{groupID: row.GroupID, accountID: row.AccountID, image: row.QuotaDimension == QuotaDimensionWebImages || row.QuotaDimension == QuotaDimensionWorkImages}
 		if _, ok := seenGroupAccount[ref]; ok {
 			continue
 		}
@@ -265,7 +265,7 @@ func (s *GroupCapacityService) getGroupCapacity(ctx context.Context, groupID int
 	for i := range accounts {
 		acc := &accounts[i]
 		accountIDs = append(accountIDs, acc.ID)
-		if acc.IsWebImageShadow() {
+		if acc.IsImageShadow() {
 			imageAccounts[acc.ID] = true
 			imageConcurrencyMax += acc.Concurrency
 			continue

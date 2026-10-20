@@ -68,6 +68,7 @@ type DataAccount struct {
 	ExpiresAt          *int64              `json:"expires_at,omitempty"`
 	AutoPauseOnExpired *bool               `json:"auto_pause_on_expired,omitempty"`
 	WebImageShadow     *DataWebImageShadow `json:"web_image_shadow,omitempty"`
+	WorkImageShadow    *DataWebImageShadow `json:"work_image_shadow,omitempty"`
 }
 
 type DataImportRequest struct {
@@ -119,17 +120,26 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 		}
 	}
 	webShadows := map[int64]*DataWebImageShadow{}
+	workShadows := map[int64]*DataWebImageShadow{}
 	skippedShadows := 0
 	exportable := make([]service.Account, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
-		if account.IsWebImageShadow() && selectedParents[*account.ParentAccountID] {
-			backup, err := h.exportWebImageShadow(ctx, account)
+		if account.IsImageShadow() && selectedParents[*account.ParentAccountID] {
+			mode := service.ImageShadowModeWeb
+			if account.IsWorkImageShadow() {
+				mode = service.ImageShadowModeWork
+			}
+			backup, err := h.exportImageShadow(ctx, account, mode)
 			if err != nil {
 				response.ErrorFrom(c, err)
 				return
 			}
-			webShadows[*account.ParentAccountID] = backup
+			if mode == service.ImageShadowModeWork {
+				workShadows[*account.ParentAccountID] = backup
+			} else {
+				webShadows[*account.ParentAccountID] = backup
+			}
 		} else if account.IsShadow() {
 			skippedShadows++
 		} else {
@@ -221,6 +231,7 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			ExpiresAt:          expiresAt,
 			AutoPauseOnExpired: &acc.AutoPauseOnExpired,
 			WebImageShadow:     webShadows[acc.ID],
+			WorkImageShadow:    workShadows[acc.ID],
 		})
 	}
 
@@ -479,6 +490,14 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			if err := h.restoreWebImageShadow(ctx, created.ID, item.WebImageShadow); err != nil {
 				result.AccountFailed++
 				result.Errors = append(result.Errors, DataImportError{Kind: "web_image_shadow", Name: item.WebImageShadow.Name, Message: err.Error()})
+			} else {
+				result.AccountCreated++
+			}
+		}
+		if item.WorkImageShadow != nil {
+			if err := h.restoreImageShadow(ctx, created.ID, item.WorkImageShadow, service.ImageShadowModeWork); err != nil {
+				result.AccountFailed++
+				result.Errors = append(result.Errors, DataImportError{Kind: "work_image_shadow", Name: item.WorkImageShadow.Name, Message: err.Error()})
 			} else {
 				result.AccountCreated++
 			}

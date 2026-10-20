@@ -2,10 +2,15 @@ package admin
 
 import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"net/http"
 	"strconv"
 )
+
+func (h *OpenAIOAuthHandler) ImageShadowModels(c *gin.Context) {
+	response.Success(c, service.GetImageShadowModelCatalog())
+}
 
 func (h *OpenAIOAuthHandler) WebImageStatus(c *gin.Context) { h.webImageStatus(c, false) }
 func (h *OpenAIOAuthHandler) ProbeWebImage(c *gin.Context)  { h.webImageStatus(c, true) }

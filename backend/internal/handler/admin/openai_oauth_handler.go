@@ -489,6 +489,11 @@ func (h *OpenAIOAuthHandler) QueryQuota(c *gin.Context) {
 		response.BadRequest(c, "openai quota service is not enabled")
 		return
 	}
+	accountID, err = h.quotaResourceAccountID(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	usage, err := h.quotaService.QueryUsage(c.Request.Context(), accountID)
 	if err != nil {
@@ -514,6 +519,11 @@ func (h *OpenAIOAuthHandler) RefreshQuota(c *gin.Context) {
 	}
 	if h.quotaService == nil {
 		response.BadRequest(c, "openai quota service is not enabled")
+		return
+	}
+	accountID, err = h.quotaResourceAccountID(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 

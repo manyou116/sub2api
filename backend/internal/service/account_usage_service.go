@@ -358,7 +358,7 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		return s.getPassiveUsageForAccount(ctx, account)
 	}
 
-	if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
+	if account.Platform == PlatformOpenAI && (account.Type == AccountTypeOAuth || account.IsImageShadow()) {
 		// Usage can come from a stored snapshot even when a probe fails. Neither
 		// that nor a working access token proves a rejected refresh token recovered.
 		return s.getOpenAIUsage(ctx, account, forceProbe)
@@ -712,6 +712,14 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 
 	if account == nil || account.IsWebImageShadow() {
 		return usage, nil
+	}
+
+	if account.IsWorkImageShadow() {
+		parent, err := resolveCredentialAccount(ctx, s.accountRepo, account)
+		if err != nil {
+			return nil, err
+		}
+		return s.getOpenAIUsage(ctx, parent, force)
 	}
 
 	applyExtraToUsage(usage, account.Extra, now)

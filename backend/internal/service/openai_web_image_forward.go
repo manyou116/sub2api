@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -23,26 +24,28 @@ func (s *OpenAIWebImageService) generate(ctx context.Context, shadow *Account, p
 	if err != nil {
 		return nil, "", err
 	}
-	if !fresh.IsWebImageShadow() {
+	if !fresh.IsImageShadow() {
 		return nil, "", errors.New("web image shadow no longer exists")
 	}
 	parent, err := s.eligible(ctx, fresh)
 	if err != nil {
 		return nil, "", err
 	}
-	status, err := s.parentStatus(ctx, parent.ID)
-	if err != nil {
-		return nil, "", err
-	}
-	if status.ProbedAt == nil || (status.QuotaKnown && time.Since(*status.ProbedAt) > 30*time.Second) {
-		if _, err = s.Probe(ctx, fresh.ID); errors.Is(err, errWebImageProbeBusy) {
-			err = s.waitForQuotaProbe(ctx, parent.ID)
-		}
+	if fresh.IsWebImageShadow() {
+		status, err := s.parentStatus(ctx, parent.ID)
 		if err != nil {
 			return nil, "", err
 		}
-		if _, err = s.eligible(ctx, fresh); err != nil {
-			return nil, "", err
+		if status.ProbedAt == nil || (status.QuotaKnown && time.Since(*status.ProbedAt) > 30*time.Second) {
+			if _, err = s.Probe(ctx, fresh.ID); errors.Is(err, errWebImageProbeBusy) {
+				err = s.waitForQuotaProbe(ctx, parent.ID)
+			}
+			if err != nil {
+				return nil, "", err
+			}
+			if _, err = s.eligible(ctx, fresh); err != nil {
+				return nil, "", err
+			}
 		}
 	}
 	auth, err := s.auth(ctx, parent)
@@ -50,10 +53,7 @@ func (s *OpenAIWebImageService) generate(ctx context.Context, shadow *Account, p
 		return nil, "", err
 	}
 	options := resolveWebImageOptions(fresh)
-	request := webdriver.GenerateRequest{Prompt: parsed.Prompt, Model: options.Model, ThinkingEffort: options.ThinkingEffort, Size: parsed.Size, Quality: parsed.Quality, ResponseFormat: parsed.ResponseFormat, N: parsed.N}
-	if options.RequireDownloadAttachment != nil && *options.RequireDownloadAttachment {
-		request.Prompt += "\n请提供可下载文件/附件。"
-	}
+	request := webdriver.GenerateRequest{Mode: imageShadowMode(fresh), RequireDownloadAttachment: options.RequireDownloadAttachment, Prompt: parsed.Prompt, Model: options.Model, ThinkingEffort: options.ThinkingEffort, Size: parsed.Size, Quality: parsed.Quality, ResponseFormat: parsed.ResponseFormat, N: parsed.N}
 	for _, upload := range parsed.Uploads {
 		request.Images = append(request.Images, webdriver.InputImage{FileName: upload.FileName, ContentType: upload.ContentType, Data: upload.Data})
 	}
@@ -96,7 +96,11 @@ func (s *OpenAIWebImageService) generate(ctx context.Context, shadow *Account, p
 	}
 	if err != nil {
 		s.redactDriverError(err, parent)
-		s.observeError(ctx, parent, options.Model, err)
+		s.observeImageShadowError(ctx, fresh, parent, options.Model, err)
+		var failure *webdriver.Error
+		if ctx.Err() != nil && (!errors.As(err, &failure) || !failure.MayHaveGenerated()) {
+			return result, options.Model, ctx.Err()
+		}
 		return result, options.Model, err
 	}
 	return result, options.Model, nil
@@ -111,14 +115,15 @@ func (s *OpenAIGatewayService) forwardWebImage(ctx context.Context, c *gin.Conte
 		requestModel = parsed.Model
 	}
 	businessModel := account.GetMappedModel(requestModel)
-	if !IsGPTImageGenerationModel(businessModel) {
+	if !IsGPTImageGenerationModel(businessModel) || imageShadowModelModeMismatch(account, requestModel) || imageShadowModelModeMismatch(account, parsed.Model) {
 		upstreamErr := webImageInputError(errors.New("web image shadow requires an image model"))
 		writeOpenAIImagesUpstreamErrorResponse(c, upstreamErr)
 		return nil, upstreamErr
 	}
 	SetOpsUpstreamModel(c, businessModel)
 	started := time.Now()
-	generated, _, err := s.webImages.generate(ctx, account, parsed)
+	generated, executionModel, err := s.webImages.generate(ctx, account, parsed)
+	SetOpsUpstreamModel(c, executionModel)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, err
@@ -142,7 +147,8 @@ func (s *OpenAIGatewayService) forwardWebImage(ctx context.Context, c *gin.Conte
 			upstreamErr = webImageResultUnconfirmed(driverErr)
 			// A definitive rejection in the stream is terminal too, but its known
 			// policy/quota reason is more useful than an uncertain-result message.
-			if driverErr.Kind == webdriver.ErrorKindPolicy || webImageQuotaFailure(driverErr) {
+			globalQuota, modelQuota := workImageQuotaFailure(driverErr)
+			if driverErr.Kind == webdriver.ErrorKindPolicy || webImageQuotaFailure(driverErr) || (account.IsWorkImageShadow() && (globalQuota || modelQuota)) {
 				status = http.StatusTooManyRequests
 				if driverErr.Kind == webdriver.ErrorKindPolicy {
 					status = http.StatusBadRequest
@@ -176,7 +182,17 @@ func (s *OpenAIGatewayService) forwardWebImage(ctx context.Context, c *gin.Conte
 	if generated == nil || len(generated.Data) == 0 {
 		return nil, errors.New("web image generation returned no images")
 	}
-	result := &OpenAIForwardResult{Model: requestModel, UpstreamModel: businessModel, UpstreamEndpoint: "/backend-api/conversation", Duration: time.Since(started), ImageCount: len(generated.Data), ImageSize: parsed.SizeTier, ImageInputSize: parsed.Size, Stream: parsed.Stream, Usage: OpenAIUsage{InputTokens: generated.Usage.InputTokens, OutputTokens: generated.Usage.OutputTokens, ImageOutputTokens: generated.Usage.ImageOutputTokens}}
+	result := &OpenAIForwardResult{Model: requestModel, BillingModel: "gpt-image-2", UpstreamModel: executionModel, UpstreamEndpoint: "/backend-api/conversation", Duration: time.Since(started), ImageCount: len(generated.Data), ImageSize: parsed.SizeTier, ImageInputSize: parsed.Size, Stream: parsed.Stream, Usage: OpenAIUsage{InputTokens: generated.Usage.InputTokens, OutputTokens: generated.Usage.OutputTokens, ImageOutputTokens: generated.Usage.ImageOutputTokens}}
+	for _, item := range generated.Data {
+		if item.Width > 0 && item.Height > 0 {
+			result.ImageOutputSizes = append(result.ImageOutputSizes, fmt.Sprintf("%dx%d", item.Width, item.Height))
+		}
+	}
+	if len(result.ImageOutputSizes) > 0 {
+		result.ImageOutputSize = result.ImageOutputSizes[0]
+		result.ImageSizeSource = "decoded_output"
+	}
+	slog.Info("image_shadow_completed", "account_id", account.ID, "parent_account_id", *account.ParentAccountID, "business_model", requestModel, "execution_model", executionModel, "quota_source", imageShadowQuotaSource(account), "token_usage_known", false, "output_sizes", result.ImageOutputSizes)
 	SetActualOpenAIUpstreamEndpoint(c, result.UpstreamEndpoint)
 	data := make([]map[string]any, 0, len(generated.Data))
 	for _, item := range generated.Data {
@@ -214,7 +230,10 @@ func (s *OpenAIGatewayService) forwardWebImage(ctx context.Context, c *gin.Conte
 }
 
 func (s *OpenAIGatewayService) webImageSchedulingReason(ctx context.Context, account *Account, model string) string {
-	if !account.IsWebImageShadow() {
+	if imageShadowModelModeMismatch(account, model) {
+		return "image_shadow_mode_mismatch"
+	}
+	if !account.IsImageShadow() {
 		return ""
 	}
 	if strings.TrimSpace(model) == "" || !OpenAIImageGenerationIntentFromContext(ctx) || !IsGPTImageGenerationModel(account.GetMappedModel(model)) {
@@ -279,7 +298,7 @@ func (s *OpenAIGatewayService) openAIRequestPrivacySet(ctx context.Context, acco
 	if account == nil {
 		return false
 	}
-	if !account.IsWebImageShadow() {
+	if !account.IsImageShadow() {
 		return account.IsPrivacySet()
 	}
 	if s.webImages == nil {

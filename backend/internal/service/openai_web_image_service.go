@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service/openaiimages/webdriver"
@@ -64,7 +63,7 @@ func NewOpenAIWebImageService(accounts AccountRepository, quotaCache WebImageQuo
 var errWebImageProbeBusy = errors.New("web image quota probe already running")
 
 func (s *OpenAIWebImageService) parent(ctx context.Context, account *Account) (*Account, error) {
-	if account == nil || !account.IsWebImageShadow() {
+	if account == nil || !account.IsImageShadow() {
 		return nil, errors.New("account is not a Web image shadow")
 	}
 	if snapshot, ok := ctx.Value(webImageCandidateKey{}).(*webImageCandidateState); ok {
@@ -85,6 +84,9 @@ func (s *OpenAIWebImageService) Status(ctx context.Context, id int64) (*WebImage
 	account, err := s.accounts.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if !account.IsWebImageShadow() {
+		return nil, errors.New("only Web shadows have image quota; WM shares parent Codex usage")
 	}
 	parent, err := s.parent(ctx, account)
 	if err != nil {
@@ -132,6 +134,9 @@ func (s *OpenAIWebImageService) Probe(ctx context.Context, id int64) (*WebImageS
 	if err != nil {
 		return nil, err
 	}
+	if !account.IsWebImageShadow() {
+		return nil, errors.New("only Web shadows have image quota; WM shares parent Codex usage")
+	}
 	parent, err := s.parent(ctx, account)
 	if err != nil {
 		return nil, err
@@ -168,7 +173,7 @@ func (s *OpenAIWebImageService) Probe(ctx context.Context, id int64) (*WebImageS
 	quota, err := s.driver.ProbeQuota(ctx, auth)
 	if err != nil {
 		s.redactDriverError(err, parent)
-		s.observeError(ctx, parent, resolveWebImageOptions(account).Model, err)
+		s.observeImageShadowError(ctx, account, parent, resolveWebImageOptions(account).Model, err)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
@@ -232,23 +237,30 @@ type webImageOptions struct {
 }
 
 func resolveWebImageOptions(account *Account) webImageOptions {
-	options := webImageOptions{ModelMode: "auto", Model: "gpt-5-6-thinking", ThinkingEffort: "extended"}
+	mode := imageShadowMode(account)
+	options := webImageOptions{ModelMode: imageShadowModelRecommended}
 	if account != nil {
 		if raw, err := json.Marshal(account.Extra["openai_web_images"]); err == nil {
 			_ = json.Unmarshal(raw, &options)
 		}
 	}
-	if options.ModelMode != "fixed" || strings.TrimSpace(options.Model) == "" {
-		options.Model = "gpt-5-6-thinking"
-	}
-	if options.Model == "auto" {
+	if options.ModelMode != imageShadowModelFixed {
+		options.ModelMode = imageShadowModelRecommended
+		options.Model = imageShadowRecommendedModel(mode)
 		options.ThinkingEffort = ""
+	}
+	if entry, ok := imageShadowModel(mode, options.Model); ok && options.ThinkingEffort == "" {
+		options.ThinkingEffort = entry.DefaultThinkingEffort
+	}
+	if mode == ImageShadowModeWork {
+		required := true
+		options.RequireDownloadAttachment = &required
 	}
 	return options
 }
 
 func (s *OpenAIWebImageService) eligible(ctx context.Context, account *Account) (*Account, error) {
-	if account == nil || !account.IsWebImageShadow() || !account.IsSchedulable() || account.Concurrency <= 0 {
+	if account == nil || !account.IsImageShadow() || !account.IsSchedulable() || account.Concurrency <= 0 {
 		return nil, errors.New("web image shadow is not schedulable")
 	}
 	parent, err := s.parent(ctx, account)
@@ -259,21 +271,30 @@ func (s *OpenAIWebImageService) eligible(ctx context.Context, account *Account) 
 		return nil, errors.New("web image parent credentials are unavailable")
 	}
 	options := resolveWebImageOptions(account)
-	if webdriver.IsWorkModeModel(options.Model) {
+	if err := validateResolvedImageShadowOptions(options, imageShadowMode(account)); err != nil {
+		return nil, err
+	}
+	if account.IsWorkImageShadow() {
 		// Manual text pause does not disable a child; actual model quota and runtime
 		// restrictions still apply to the shared upstream Work Mode identity.
 		copyParent := *parent
 		copyParent.Schedulable = true
-		model := options.Model
+		model := imageShadowCodexModel(options.Model)
 		if IsOpenAICapacityCooldownReason(copyParent.TempUnschedulableReason) {
 			copyParent.TempUnschedulableUntil = nil
 		}
-		if !copyParent.IsSchedulableForModelWithContext(ctx, model) || s.gateway.isOpenAIAccountModelRuntimeBlocked(parent, model) {
+		if !copyParent.IsSchedulableForModel(model) || s.gateway.isOpenAIAccountModelRuntimeBlocked(parent, model) {
 			return nil, errors.New("web Work Mode parent text quota is unavailable")
+		}
+		for _, window := range []string{"5h", "7d"} {
+			if used, known := resolveOpenAIQuotaUtilization(parent.Extra, window, time.Now()); known && used >= 1 {
+				return nil, errors.New("WM parent Codex quota is exhausted")
+			}
 		}
 		if paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, parent); paused {
 			return nil, errors.New("web Work Mode parent text quota is exhausted")
 		}
+		return parent, nil
 	}
 	status, err := s.parentStatus(ctx, parent.ID)
 	if err != nil {

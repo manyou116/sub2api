@@ -50,12 +50,12 @@ func TestWebImageShadowBatchPartialResults(t *testing.T) {
 	require.Equal(t, 2, result.Skipped)
 	require.Equal(t, 1, result.Failed)
 	require.Equal(t, []WebImageShadowBatchItem{
-		{ParentID: 10, ShadowID: 110, Status: "created"},
-		{ParentID: 20, Status: "existing", Code: "WEB_IMAGE_SHADOW_ALREADY_EXISTS", Message: "already exists"},
-		{ParentID: 30, Status: "skipped", Code: "WEB_IMAGE_SHADOW_INVALID_PARENT", Message: "unsupported parent"},
-		{ParentID: 40, Status: "skipped", Code: "ACCOUNT_NOT_FOUND", Message: "account not found"},
-		{ParentID: 50, Status: "failed", Code: "WEB_IMAGE_SHADOW_CREATE_FAILED", Message: "could not create Web image shadow"},
-		{ParentID: 60, ShadowID: 160, Status: "created"},
+		{ParentID: 10, Mode: "web", ShadowID: 110, Status: "created"},
+		{ParentID: 20, Mode: "web", Status: "existing", Code: "WEB_IMAGE_SHADOW_ALREADY_EXISTS", Message: "already exists"},
+		{ParentID: 30, Mode: "web", Status: "skipped", Code: "WEB_IMAGE_SHADOW_INVALID_PARENT", Message: "unsupported parent"},
+		{ParentID: 40, Mode: "web", Status: "skipped", Code: "ACCOUNT_NOT_FOUND", Message: "account not found"},
+		{ParentID: 50, Mode: "web", Status: "failed", Code: "WEB_IMAGE_SHADOW_CREATE_FAILED", Message: "could not create Web image shadow"},
+		{ParentID: 60, Mode: "web", ShadowID: 160, Status: "created"},
 	}, result.Results)
 }
 
@@ -65,6 +65,8 @@ func TestWebImageShadowBatchValidatesBeforeMutating(t *testing.T) {
 		{}, {ParentIDs: make([]int64, MaxWebImageShadowBatch+1)},
 		{ParentIDs: []int64{1, 0}}, {ParentIDs: []int64{1, -1}},
 		{ParentIDs: []int64{1}, Concurrency: &zero},
+		{ParentIDs: []int64{1}, Modes: []string{"unknown"}},
+		{ParentIDs: []int64{1}, Modes: []string{""}},
 	} {
 		_, err := CreateWebImageShadows(context.Background(), batchWebImageCreatorFunc(func(context.Context, int64, WebImageShadowOptions) (*Account, error) {
 			t.Error("invalid batch must not start creation")
@@ -167,4 +169,26 @@ func TestWebImageShadowBatchReusesLifecycleWithoutResumingExistingChild(t *testi
 	require.Equal(t, 1, result.Existing)
 	require.Equal(t, 7, repo.accounts[child.ID].Concurrency)
 	require.False(t, repo.accounts[child.ID].Schedulable)
+}
+
+func TestImageShadowBatchBothModesAreIndependentAndDeduplicated(t *testing.T) {
+	var calls atomic.Int32
+	creator := batchWebImageCreatorFunc(func(_ context.Context, id int64, opts WebImageShadowOptions) (*Account, error) {
+		calls.Add(1)
+		if id == 10 && opts.Mode == ImageShadowModeWeb {
+			return nil, infraerrors.New(http.StatusConflict, "WEB_IMAGE_SHADOW_ALREADY_EXISTS", "already exists")
+		}
+		return &Account{ID: id + 100}, nil
+	})
+	result, err := CreateWebImageShadows(context.Background(), creator, WebImageShadowBatchInput{
+		ParentIDs: []int64{10, 20, 10}, Modes: []string{"web", "work", "web"},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 4, calls.Load())
+	require.Equal(t, 3, result.Created)
+	require.Equal(t, 1, result.Existing)
+	require.Len(t, result.Results, 4)
+	for i, item := range result.Results {
+		require.Equal(t, []string{"web", "work", "web", "work"}[i], item.Mode)
+	}
 }

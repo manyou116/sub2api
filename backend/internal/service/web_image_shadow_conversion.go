@@ -61,6 +61,9 @@ func (s *adminServiceImpl) ConvertLegacyWebImageShadow(ctx context.Context, pare
 			}
 		}
 	}
+	if plan.ModelOptions["model_mode"] == "auto" {
+		plan.ModelOptions["model_mode"] = "recommended"
+	}
 	children, err := s.accountRepo.ListShadowsByParent(ctx, parentID)
 	if err != nil {
 		return nil, err

@@ -2069,8 +2069,11 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 					if err != nil || parent == nil || parent.IsShadow() {
 						continue
 					}
-					if acc.IsWebImageShadow() {
+					if acc.IsImageShadow() {
 						if service.ValidateWebImageShadowParent(parent) != nil || !parent.IsCredentialUsableForWebImages() {
+							continue
+						}
+						if acc.IsWorkImageShadow() && (parent.IsRateLimited() || parent.IsOverloaded()) {
 							continue
 						}
 					} else if !parent.IsOpenAIOAuth() || !parent.IsCredentialUsableForShadow() {
@@ -2118,12 +2121,14 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 				AND p.platform = 'openai'
 				AND (p.expires_at IS NULL OR p.expires_at > $3 OR p.auto_pause_on_expired = FALSE)
 				AND (p.temp_unschedulable_until IS NULL OR p.temp_unschedulable_until <= $3
-					OR (a.quota_dimension = 'web_images' AND left(COALESCE(p.temp_unschedulable_reason, ''), length($4)) = $4))
+					OR (a.quota_dimension IN ('web_images', 'work_images') AND left(COALESCE(p.temp_unschedulable_reason, ''), length($4)) = $4))
 				AND ((a.quota_dimension = 'spark' AND p.type = 'oauth') OR
-					(a.quota_dimension = 'web_images' AND p.type IN ('oauth', 'setup-token')
+					(a.quota_dimension IN ('web_images', 'work_images') AND p.type IN ('oauth', 'setup-token')
 					AND trim(COALESCE(p.credentials->>'access_token', '')) <> ''
 					AND lower(trim(COALESCE(p.credentials->>'auth_mode', ''))) <> 'agentidentity'
-					AND (p.web_image_rate_limit_reset_at IS NULL OR p.web_image_rate_limit_reset_at <= $3)))
+					AND ((a.quota_dimension = 'web_images' AND (p.web_image_rate_limit_reset_at IS NULL OR p.web_image_rate_limit_reset_at <= $3))
+						OR (a.quota_dimension = 'work_images' AND (p.rate_limit_reset_at IS NULL OR p.rate_limit_reset_at <= $3)
+							AND (p.overload_until IS NULL OR p.overload_until <= $3)))))
 			))
 		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC
 	`, pq.Array(groupIDs), service.StatusActive, time.Now(), service.OpenAICapacityCooldownReasonPrefix)

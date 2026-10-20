@@ -607,7 +607,7 @@ func (s *OpenAIGatewayService) ForwardImages(
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
-	if account.IsWebImageShadow() {
+	if account.IsImageShadow() {
 		return s.forwardWebImage(ctx, c, account, parsed, channelMappedModel)
 	}
 	switch account.Type {

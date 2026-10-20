@@ -430,6 +430,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/:id/shadow", h.Admin.OpenAIOAuth.CreateShadow)
 		accounts.POST("/:id/web-image-shadow", h.Admin.OpenAIOAuth.CreateWebImageShadow)
 		accounts.POST("/web-image-shadows", h.Admin.OpenAIOAuth.CreateWebImageShadows)
+		accounts.GET("/image-shadow-models", h.Admin.OpenAIOAuth.ImageShadowModels)
 		accounts.POST("/:id/web-image-shadow-conversion", h.Admin.OpenAIOAuth.ConvertLegacyWebImageShadow)
 		accounts.POST("/web-image/status", h.Admin.OpenAIOAuth.BatchWebImageStatus)
 		accounts.GET("/:id/web-image/status", h.Admin.OpenAIOAuth.WebImageStatus)

@@ -24,6 +24,25 @@ type DataWebImageShadow struct {
 	ModelOptions       map[string]any `json:"model_options,omitempty"`
 }
 
+// WM exposes the parent's Codex resource. Route both the upstream read and its
+// display-cache writes to that parent; Spark retains its independent display row.
+func (h *OpenAIOAuthHandler) quotaResourceAccountID(ctx context.Context, id int64) (int64, error) {
+	if h.adminService == nil {
+		return id, nil
+	}
+	account, err := h.adminService.GetAccount(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	if account == nil {
+		return 0, service.ErrAccountNotFound
+	}
+	if account.IsWorkImageShadow() {
+		return *account.ParentAccountID, nil
+	}
+	return id, nil
+}
+
 func webImageBackupOptions(extra map[string]any) map[string]any {
 	options, _ := extra["openai_web_images"].(map[string]any)
 	result := map[string]any{}
@@ -32,10 +51,17 @@ func webImageBackupOptions(extra map[string]any) map[string]any {
 			result[key] = value
 		}
 	}
+	if result["model_mode"] == "auto" {
+		result["model_mode"] = "recommended"
+	}
 	return result
 }
 
 func (h *AccountHandler) exportWebImageShadow(ctx context.Context, account *service.Account) (*DataWebImageShadow, error) {
+	return h.exportImageShadow(ctx, account, service.ImageShadowModeWeb)
+}
+
+func (h *AccountHandler) exportImageShadow(ctx context.Context, account *service.Account, mode string) (*DataWebImageShadow, error) {
 	backup := &DataWebImageShadow{Name: account.Name, Concurrency: account.Concurrency,
 		Priority: account.Priority, GroupNames: []string{}, Status: account.Status,
 		Schedulable: account.Schedulable, ModelOptions: webImageBackupOptions(account.Extra),
@@ -55,7 +81,7 @@ func (h *AccountHandler) exportWebImageShadow(ctx context.Context, account *serv
 			return nil, err
 		}
 		if group == nil || group.Platform != service.PlatformOpenAI {
-			return nil, fmt.Errorf("web image shadow %d has an incompatible group %d", account.ID, id)
+			return nil, fmt.Errorf("%s image shadow %d has an incompatible group %d", mode, account.ID, id)
 		}
 		backup.GroupNames = append(backup.GroupNames, group.Name)
 	}
@@ -63,6 +89,10 @@ func (h *AccountHandler) exportWebImageShadow(ctx context.Context, account *serv
 }
 
 func (h *AccountHandler) restoreWebImageShadow(ctx context.Context, parentID int64, backup *DataWebImageShadow) error {
+	return h.restoreImageShadow(ctx, parentID, backup, service.ImageShadowModeWeb)
+}
+
+func (h *AccountHandler) restoreImageShadow(ctx context.Context, parentID int64, backup *DataWebImageShadow, mode string) error {
 	if backup.Concurrency <= 0 {
 		return fmt.Errorf("web image shadow concurrency must be positive")
 	}
@@ -92,6 +122,7 @@ func (h *AccountHandler) restoreWebImageShadow(ctx context.Context, parentID int
 		}
 	}
 	shadow, err := h.adminService.CreateWebImageShadow(ctx, parentID, service.WebImageShadowOptions{
+		Mode: mode,
 		Name: backup.Name, Concurrency: &backup.Concurrency, Priority: &backup.Priority,
 		GroupIDs: &groupIDs, StartPaused: true,
 	})

@@ -121,7 +121,7 @@ func TestWebImageQuotaIndependenceWorkModeAndHealth(t *testing.T) {
 	s.gateway.openaiAccountRuntimeBlockUntil.Store(parent.ID, future)
 	_, err := s.eligible(ctx, shadow)
 	require.NoError(t, err, "ordinary Web must ignore text quota/runtime limit")
-	shadow.Extra = map[string]any{"openai_web_images": map[string]any{"model_mode": "fixed", "model": "gpt-5-6-thinking-wm"}}
+	shadow.QuotaDimension = QuotaDimensionWorkImages
 	_, err = s.eligible(ctx, shadow)
 	require.ErrorContains(t, err, "text quota")
 	parent.RateLimitResetAt = nil
@@ -533,4 +533,28 @@ func (r *webImageTestRepo) GetByIDs(_ context.Context, ids []int64) ([]*Account,
 		}
 	}
 	return result, nil
+}
+
+func (r *webImageTestRepo) ListByPlatform(_ context.Context, platform string) ([]Account, error) {
+	var accounts []Account
+	for _, a := range r.accounts {
+		if a.Platform == platform {
+			accounts = append(accounts, *a)
+		}
+	}
+	return accounts, nil
+}
+func (r *webImageTestRepo) ListByGroup(ctx context.Context, _ int64) ([]Account, error) {
+	return r.ListByPlatform(ctx, PlatformOpenAI)
+}
+func (r *webImageTestRepo) SetRateLimited(_ context.Context, id int64, until time.Time) error {
+	r.accounts[id].RateLimitResetAt = &until
+	return nil
+}
+func (r *webImageTestRepo) SetModelRateLimit(_ context.Context, id int64, model string, until time.Time, reason ...string) error {
+	if r.accounts[id].Extra == nil {
+		r.accounts[id].Extra = map[string]any{}
+	}
+	r.accounts[id].Extra[modelRateLimitsKey] = map[string]any{model: map[string]any{"rate_limit_reset_at": until.Format(time.RFC3339)}}
+	return nil
 }

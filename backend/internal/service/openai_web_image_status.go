@@ -146,9 +146,13 @@ func (s *OpenAIGatewayService) webImageCandidateContext(ctx context.Context, acc
 		return ctx
 	}
 	ids := []int64{}
+	webIDs := []int64{}
 	for _, account := range accounts {
-		if account.IsWebImageShadow() {
+		if account.IsImageShadow() {
 			ids = append(ids, *account.ParentAccountID)
+			if account.IsWebImageShadow() {
+				webIDs = append(webIDs, *account.ParentAccountID)
+			}
 		}
 	}
 	if len(ids) == 0 {
@@ -161,7 +165,7 @@ func (s *OpenAIGatewayService) webImageCandidateContext(ctx context.Context, acc
 		state.parents[parent.ID] = parent
 	}
 	if err == nil {
-		state.statuses, state.err = s.webImages.parentStatuses(ctx, ids)
+		state.statuses, state.err = s.webImages.parentStatuses(ctx, webIDs)
 	}
 	return context.WithValue(ctx, webImageCandidateKey{}, state)
 }

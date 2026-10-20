@@ -26,9 +26,12 @@ type openAIQuotaWorkflowStub struct {
 	creditsCacheCalls  int
 	cachedCreditsUsage *service.OpenAIQuotaUsage
 
-	resetCalls int
-	queryCalls int
-	cacheCalls int
+	resetCalls       int
+	queryCalls       int
+	cacheCalls       int
+	queryAccountID   int64
+	cacheAccountID   int64
+	creditsAccountID int64
 
 	queryCtxErr error
 	cacheCtxErr error
@@ -39,20 +42,23 @@ func (s *openAIQuotaWorkflowStub) ResetCredit(context.Context, int64) (*service.
 	return s.resetResult, s.resetErr
 }
 
-func (s *openAIQuotaWorkflowStub) QueryUsage(ctx context.Context, _ int64) (*service.OpenAIQuotaUsage, error) {
+func (s *openAIQuotaWorkflowStub) QueryUsage(ctx context.Context, accountID int64) (*service.OpenAIQuotaUsage, error) {
 	s.queryCalls++
+	s.queryAccountID = accountID
 	s.queryCtxErr = ctx.Err()
 	return s.queryResult, s.queryErr
 }
 
-func (s *openAIQuotaWorkflowStub) CacheResetCreditsSnapshot(ctx context.Context, _ int64, _ *service.OpenAIRateLimitResetCredits) error {
+func (s *openAIQuotaWorkflowStub) CacheResetCreditsSnapshot(ctx context.Context, accountID int64, _ *service.OpenAIRateLimitResetCredits) error {
 	s.cacheCalls++
+	s.cacheAccountID = accountID
 	s.cacheCtxErr = ctx.Err()
 	return s.cacheErr
 }
 
-func (s *openAIQuotaWorkflowStub) CacheCreditsSnapshot(_ context.Context, _ int64, usage *service.OpenAIQuotaUsage) error {
+func (s *openAIQuotaWorkflowStub) CacheCreditsSnapshot(_ context.Context, accountID int64, usage *service.OpenAIQuotaUsage) error {
 	s.creditsCacheCalls++
+	s.creditsAccountID = accountID
 	s.cachedCreditsUsage = usage
 	return s.creditsCacheErr
 }
@@ -379,7 +385,7 @@ func TestOpenAIResetQuota_PostProcessingSurvivesClientCancellation(t *testing.T)
 func TestOpenAIRefreshQuota_PersistsSnapshot(t *testing.T) {
 	quota := successfulOpenAIQuotaWorkflowStub()
 	handler := &OpenAIOAuthHandler{
-		adminService: &openAIResetAdminServiceStub{},
+		adminService: &openAIResetAdminServiceStub{account: &service.Account{ID: 42}},
 		quotaService: quota,
 	}
 
@@ -405,7 +411,7 @@ func TestOpenAIRefreshQuota_PersistFailureStillReturnsUsage(t *testing.T) {
 	}
 	quota.cacheErr = errors.New("expiration details unavailable")
 	handler := &OpenAIOAuthHandler{
-		adminService: &openAIResetAdminServiceStub{},
+		adminService: &openAIResetAdminServiceStub{account: &service.Account{ID: 42}},
 		quotaService: quota,
 	}
 
@@ -453,7 +459,7 @@ func TestOpenAIQuotaEmptyUsageIsHandledWithoutPanic(t *testing.T) {
 		quota := successfulOpenAIQuotaWorkflowStub()
 		quota.queryResult = nil
 		handler := &OpenAIOAuthHandler{
-			adminService: &openAIResetAdminServiceStub{},
+			adminService: &openAIResetAdminServiceStub{account: &service.Account{ID: 42}},
 			quotaService: quota,
 		}
 
@@ -488,7 +494,7 @@ func TestOpenAIQuotaEmptyUsageIsHandledWithoutPanic(t *testing.T) {
 func TestOpenAIRefreshQuota_QueryFailureIsReported(t *testing.T) {
 	quota := &openAIQuotaWorkflowStub{queryErr: errors.New("upstream query failed")}
 	handler := &OpenAIOAuthHandler{
-		adminService: &openAIResetAdminServiceStub{},
+		adminService: &openAIResetAdminServiceStub{account: &service.Account{ID: 42}},
 		quotaService: quota,
 	}
 
@@ -526,4 +532,55 @@ func TestNewOpenAIOAuthHandlerKeepsNilQuotaCapabilitiesGuarded(t *testing.T) {
 		router.ServeHTTP(recorder, httptest.NewRequest(tc.method, tc.path, nil))
 		require.Equal(t, http.StatusBadRequest, recorder.Code, "%s %s", tc.method, tc.path)
 	}
+}
+
+func TestWorkImageQuotaRefreshUsesOnlyParentResource(t *testing.T) {
+	parentID := int64(9)
+	for _, tc := range []struct {
+		mode   string
+		parent *int64
+		want   int64
+	}{
+		{service.QuotaDimensionGlobal, nil, 42},
+		{service.QuotaDimensionSpark, &parentID, 42},
+		{service.QuotaDimensionWorkImages, &parentID, parentID},
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodPost} {
+			t.Run(tc.mode+method, func(t *testing.T) {
+				quota := successfulOpenAIQuotaWorkflowStub()
+				h := &OpenAIOAuthHandler{quotaService: quota, adminService: &openAIResetAdminServiceStub{
+					account: &service.Account{ID: 42, ParentAccountID: tc.parent, QuotaDimension: tc.mode},
+				}}
+				gin.SetMode(gin.TestMode)
+				router := gin.New()
+				if method == http.MethodGet {
+					router.GET("/quota/:id", h.QueryQuota)
+				} else {
+					router.POST("/quota/:id", h.RefreshQuota)
+				}
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, httptest.NewRequest(method, "/quota/42", nil))
+				require.Equal(t, http.StatusOK, response.Code)
+				require.Equal(t, tc.want, quota.queryAccountID)
+				if method == http.MethodPost {
+					require.Equal(t, tc.want, quota.cacheAccountID)
+					require.Equal(t, tc.want, quota.creditsAccountID)
+				} else {
+					require.Zero(t, quota.cacheCalls)
+					require.Zero(t, quota.creditsCacheCalls)
+				}
+				require.Zero(t, quota.resetCalls)
+			})
+		}
+	}
+}
+
+func TestWorkImageQuotaRefreshMissingAccountDoesNotWrite(t *testing.T) {
+	quota := successfulOpenAIQuotaWorkflowStub()
+	h := &OpenAIOAuthHandler{quotaService: quota, adminService: &openAIResetAdminServiceStub{err: service.ErrAccountNotFound}}
+	status, _ := performOpenAIQuotaRefreshRequest(t, h)
+	require.Equal(t, http.StatusNotFound, status)
+	require.Zero(t, quota.queryCalls)
+	require.Zero(t, quota.cacheCalls)
+	require.Zero(t, quota.creditsCacheCalls)
 }

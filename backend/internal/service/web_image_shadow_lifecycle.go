@@ -10,8 +10,14 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
+const (
+	ImageShadowModeWeb  = "web"
+	ImageShadowModeWork = "work"
+)
+
 // WebImageShadowOptions preserves explicit zero priority and empty group bindings.
 type WebImageShadowOptions struct {
+	Mode        string   `json:"mode,omitempty"`
 	Name        string   `json:"name"`
 	Concurrency *int     `json:"concurrency"`
 	Priority    *int     `json:"priority"`
@@ -51,12 +57,12 @@ func findShadowDimension(shadows []*Account, dimension string) *Account {
 }
 
 func (s *adminServiceImpl) validateWebImageShadowUpdate(ctx context.Context, account *Account, input *UpdateAccountInput) error {
-	if account.IsWebImageShadow() && input.Concurrency != nil && *input.Concurrency <= 0 {
+	if account.IsImageShadow() && input.Concurrency != nil && *input.Concurrency <= 0 {
 		return infraerrors.BadRequest("WEB_IMAGE_SHADOW_CONCURRENCY", "Web image shadow concurrency must be positive")
 	}
-	if account.IsWebImageShadow() {
+	if account.IsImageShadow() {
 		if options, provided := input.Extra["openai_web_images"]; provided {
-			if err := validateWebImageOptions(options); err != nil {
+			if err := validateImageShadowOptions(options, imageShadowMode(account)); err != nil {
 				return err
 			}
 		}
@@ -85,7 +91,7 @@ func (s *adminServiceImpl) validateWebImageShadowUpdate(ctx context.Context, acc
 		if child.IsSparkShadow() && !candidate.IsOpenAIOAuth() {
 			return infraerrors.BadRequest("SPARK_SHADOW_PARENT_IMMUTABLE_TYPE", "a parent with a Spark shadow must remain OpenAI OAuth")
 		}
-		if child.IsWebImageShadow() {
+		if child.IsImageShadow() {
 			if err := ValidateWebImageShadowParent(&candidate); err != nil {
 				return err
 			}
@@ -106,7 +112,15 @@ func (s *adminServiceImpl) createWebImageShadow(ctx context.Context, parent *Acc
 	if err := ValidateWebImageShadowParent(parent); err != nil {
 		return nil, err
 	}
-	if err := validateWebImageOptions(modelOptions); err != nil {
+	mode, err := normalizeImageShadowMode(opts.Mode)
+	if err != nil {
+		return nil, err
+	}
+	dimension := QuotaDimensionWebImages
+	if mode == ImageShadowModeWork {
+		dimension = QuotaDimensionWorkImages
+	}
+	if err := validateImageShadowOptions(modelOptions, mode); err != nil {
 		return nil, err
 	}
 	children, err := s.accountRepo.ListShadowsByParent(ctx, parent.ID)
@@ -114,9 +128,9 @@ func (s *adminServiceImpl) createWebImageShadow(ctx context.Context, parent *Acc
 		return nil, err
 	}
 	conflict := func() error {
-		return infraerrors.New(http.StatusConflict, "WEB_IMAGE_SHADOW_ALREADY_EXISTS", "parent account already has a Web image shadow")
+		return infraerrors.New(http.StatusConflict, "WEB_IMAGE_SHADOW_ALREADY_EXISTS", "parent account already has a "+mode+" image shadow")
 	}
-	if findShadowDimension(children, QuotaDimensionWebImages) != nil {
+	if findShadowDimension(children, dimension) != nil {
 		return nil, conflict()
 	}
 	concurrency, priority := 1, parent.Priority
@@ -143,23 +157,23 @@ func (s *adminServiceImpl) createWebImageShadow(ctx context.Context, parent *Acc
 	}
 	name := strings.TrimSpace(opts.Name)
 	if name == "" {
-		name = parent.Name + " (Web Images)"
+		name = defaultImageShadowName(parent.Name, mode)
 	}
 	if runes := []rune(name); len(runes) > 100 {
 		name = string(runes[:100])
 	}
 	shadow := &Account{
 		Name: name, Platform: PlatformOpenAI, Type: parent.Type,
-		ParentAccountID: &parent.ID, QuotaDimension: QuotaDimensionWebImages,
+		ParentAccountID: &parent.ID, QuotaDimension: dimension,
 		Concurrency: concurrency, Priority: priority, ProxyID: parent.ProxyID,
 		Status: StatusActive, Schedulable: !opts.StartPaused,
-		Credentials: map[string]any{"model_mapping": map[string]any{"gpt-image-2": "gpt-image-2"}},
+		Credentials: map[string]any{"model_mapping": map[string]any{"gpt-image-2": "gpt-image-2", "gpt-image-2-" + mode: "gpt-image-2"}},
 	}
 	if len(modelOptions) > 0 {
 		shadow.Extra = map[string]any{"openai_web_images": modelOptions}
 	}
 	if err := s.accountRepo.Create(ctx, shadow); err != nil {
-		if current, qerr := s.accountRepo.ListShadowsByParent(ctx, parent.ID); qerr == nil && findShadowDimension(current, QuotaDimensionWebImages) != nil {
+		if current, qerr := s.accountRepo.ListShadowsByParent(ctx, parent.ID); qerr == nil && findShadowDimension(current, dimension) != nil {
 			return nil, conflict()
 		}
 		return nil, err
@@ -174,35 +188,24 @@ func (s *adminServiceImpl) createWebImageShadow(ctx context.Context, parent *Acc
 	return shadow, nil
 }
 
-func validateWebImageOptions(value any) error {
-	if value == nil {
-		return nil
+func normalizeImageShadowMode(mode string) (string, error) {
+	if mode == "" {
+		return ImageShadowModeWeb, nil
 	}
-	options, ok := value.(map[string]any)
-	invalid := func() error {
-		return infraerrors.BadRequest("WEB_IMAGE_OPTIONS_INVALID", "Web image settings accept model_mode (auto/fixed), model, thinking_effort and require_download_attachment only")
+	if mode != ImageShadowModeWeb && mode != ImageShadowModeWork {
+		return "", infraerrors.BadRequest("IMAGE_SHADOW_MODE_INVALID", "image shadow mode must be web or work")
 	}
-	if !ok {
-		return invalid()
+	return mode, nil
+}
+
+func defaultImageShadowName(parentName, mode string) string {
+	suffix := " · Web 生图"
+	if mode == ImageShadowModeWork {
+		suffix = " · WM 生图"
 	}
-	for key, value := range options {
-		switch key {
-		case "model_mode":
-			if value != "auto" && value != "fixed" {
-				return invalid()
-			}
-		case "model", "thinking_effort":
-			text, ok := value.(string)
-			if !ok || len(text) > 200 || strings.ContainsAny(text, "\r\n") {
-				return invalid()
-			}
-		case "require_download_attachment":
-			if _, ok := value.(bool); !ok {
-				return invalid()
-			}
-		default:
-			return invalid()
-		}
+	name := []rune(strings.TrimSpace(parentName))
+	if limit := 100 - len([]rune(suffix)); len(name) > limit {
+		name = name[:limit]
 	}
-	return nil
+	return string(name) + suffix
 }

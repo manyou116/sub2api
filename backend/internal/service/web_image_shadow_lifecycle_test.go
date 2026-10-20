@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,6 +36,16 @@ func TestWebImageShadowCoexistenceAndLifecycle(t *testing.T) {
 	spark, err := svc.CreateShadow(ctx, parent.ID, ShadowOptions{})
 	require.NoError(t, err)
 	require.True(t, spark.IsSparkShadow())
+	work, err := svc.CreateWebImageShadow(ctx, parent.ID, WebImageShadowOptions{Mode: ImageShadowModeWork})
+	require.NoError(t, err)
+	require.True(t, work.IsWorkImageShadow())
+	require.True(t, work.IsImageShadow())
+	require.False(t, work.IsWebImageShadow())
+	require.Empty(t, work.GetOpenAIAccessToken())
+	require.Equal(t, "parent · WM 生图", work.Name)
+	require.Equal(t, "parent · Web 生图", web.Name)
+	_, err = svc.CreateWebImageShadow(ctx, parent.ID, WebImageShadowOptions{Mode: ImageShadowModeWork})
+	require.Error(t, err)
 	_, err = svc.CreateShadow(ctx, parent.ID, ShadowOptions{})
 	require.Error(t, err)
 	_, err = svc.CreateWebImageShadow(ctx, parent.ID, WebImageShadowOptions{})
@@ -43,6 +54,7 @@ func TestWebImageShadowCoexistenceAndLifecycle(t *testing.T) {
 	require.NoError(t, svc.propagateProxyToShadows(ctx, parent.ID, &proxy))
 	require.Equal(t, &proxy, repo.accounts[web.ID].ProxyID)
 	require.Equal(t, &proxy, repo.accounts[spark.ID].ProxyID)
+	require.Equal(t, &proxy, repo.accounts[work.ID].ProxyID)
 	require.NoError(t, svc.DeleteAccount(ctx, parent.ID))
 	require.Empty(t, repo.accounts)
 }
@@ -121,7 +133,7 @@ func TestWebImageShadowConversionPreviewApplyAndRecreate(t *testing.T) {
 	svc, repo, parent := webShadowTestParent(t)
 	parent.Priority, parent.GroupIDs = 0, []int64{}
 	parent.Extra = map[string]any{"openai_web_images": map[string]any{
-		"max_inflight": float64(3), "priority": float64(99), "model": "gpt-5", "model_mode": "fixed", "require_download_attachment": true,
+		"max_inflight": float64(3), "priority": float64(99), "model": "gpt-5-6-thinking", "model_mode": "fixed", "require_download_attachment": true,
 	}}
 	before := *parent
 	before.Extra, _ = cloneAccountJSONMap(parent.Extra)
@@ -153,4 +165,45 @@ func TestWebImageShadowConversionPreviewApplyAndRecreate(t *testing.T) {
 	_, err = svc.CreateWebImageShadow(ctx, parent.ID, WebImageShadowOptions{})
 	require.NoError(t, err)
 	require.Equal(t, before.Extra, parent.Extra)
+}
+
+func TestImageShadowNamesPreserveModeAndManualRename(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, parent := webShadowTestParent(t)
+	parent.Name = strings.Repeat("父", 100)
+	work, err := svc.CreateWebImageShadow(ctx, parent.ID, WebImageShadowOptions{Mode: ImageShadowModeWork})
+	require.NoError(t, err)
+	require.Len(t, []rune(work.Name), 100)
+	require.True(t, strings.HasSuffix(work.Name, " · WM 生图"))
+	work.Name = "independent name"
+	require.NoError(t, repo.Update(ctx, work))
+	_, err = svc.UpdateAccount(ctx, parent.ID, &UpdateAccountInput{Name: "renamed parent"})
+	require.NoError(t, err)
+	require.Equal(t, "independent name", repo.accounts[work.ID].Name)
+	_, err = svc.CreateWebImageShadow(ctx, parent.ID, WebImageShadowOptions{Mode: "unsupported"})
+	require.Error(t, err)
+	zero := 0
+	_, err = svc.UpdateAccount(ctx, work.ID, &UpdateAccountInput{Concurrency: &zero})
+	require.Error(t, err)
+	_, err = svc.BulkUpdateAccounts(ctx, &BulkUpdateAccountsInput{AccountIDs: []int64{work.ID}, Concurrency: &zero})
+	require.Error(t, err)
+}
+
+func TestWorkImageUsageReadsParentResourceWithoutCopyingQuota(t *testing.T) {
+	_, repo, parent := webShadowTestParent(t)
+	parent.Extra = map[string]any{
+		"codex_5h_used_percent": 17.0,
+		"codex_5h_reset_at":     time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		"codex_7d_used_percent": 33.0,
+		"codex_7d_reset_at":     time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339),
+	}
+	shadow := &Account{ID: 100, ParentAccountID: &parent.ID, QuotaDimension: QuotaDimensionWorkImages,
+		Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"codex_5h_used_percent": 99.0}}
+	s := &AccountUsageService{accountRepo: repo}
+	parent.Type, shadow.Type = AccountTypeSetupToken, AccountTypeSetupToken
+	usage, err := s.GetUsageForAccount(context.Background(), shadow, false)
+	require.NoError(t, err)
+	require.Equal(t, 17.0, usage.FiveHour.Utilization)
+	require.Equal(t, 33.0, usage.SevenDay.Utilization)
+	require.Equal(t, 99.0, shadow.Extra["codex_5h_used_percent"], "reading parent usage never copies a snapshot into the child")
 }
