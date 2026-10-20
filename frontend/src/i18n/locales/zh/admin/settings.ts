@@ -1062,7 +1062,7 @@ export default {
       },
       capacityCooldown: {
         title: 'OpenAI 过载回避',
-        description: 'OAuth 文本请求在窗口内过载次数达到阈值时，按账号和模型临时回避，独立于 429 配额限流。默认关闭。',
+        description: 'OAuth 文本请求在窗口内过载次数达到阈值时，整号进入“临时不可调度”，暂停所有文本模型，Web 生图除外。可在账号后台筛选、查看和恢复，独立于 429 配额限流。默认关闭。',
         enabled: '启用过载保护',
         switchAccount: '过载时优先换账号重试',
         switchHint: '仅在尚未输出有效内容时换号，沿用现有换号次数上限；不重复提交已经输出内容的请求。',

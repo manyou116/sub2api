@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"strconv"
 
@@ -10,11 +9,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// All keys share a canonical-model hash tag. The index lets a selection pass
+// All text models share one circuit. The index lets a selection pass
 // skip cooled accounts without a Redis round trip for every pool candidate.
-func capacityKeys(accountID int64, model string) []string {
-	hash := sha256.Sum256([]byte(model))
-	prefix := fmt.Sprintf("openai_capacity:{%x}:", hash[:16])
+func capacityKeys(accountID int64, _ string) []string {
+	prefix := "openai_capacity:{account_text_v1}:"
 	key := prefix + strconv.FormatInt(accountID, 10)
 	return []string{key, key + ":events", key + ":failures", key + ":successes", prefix + "blocked"}
 }
@@ -33,6 +31,17 @@ local until_ms = tonumber(redis.call('HGET', state, 'until') or '0')
 local phase = tonumber(redis.call('HGET', state, 'phase') or '0')
 local function result(allowed, probe, tripped, f, n)
   return {allowed,probe,tripped,generation,until_ms,f or 0,n or 0,level}
+end
+if op == 'current' then return result(1,0,0) end
+if op == 'reset' then
+  generation = generation+1
+  until_ms, level = 0, 0
+  redis.call('HSET',state,'phase',0,'generation',generation,'until',0,'level',0,'recovered',0)
+  redis.call('HDEL',state,'owner','lease')
+  redis.call('EXPIRE',state,14400)
+  redis.call('ZREM',blocked,account)
+  redis.call('DEL',events,failures,successes)
+  return result(1,0,0)
 end
 if op == 'release' then
   if generation == tonumber(ARGV[4]) and redis.call('HGET',state,'owner') == id then
@@ -134,4 +143,13 @@ func (c *tempUnschedCache) ReleaseOpenAICapacity(ctx context.Context, accountID 
 
 func (c *tempUnschedCache) BlockedOpenAICapacityAccounts(ctx context.Context, model string) ([]int64, error) {
 	return capacityCooldownScript.Run(ctx, c.rdb, capacityKeys(0, model), "blocked", 0, "").Int64Slice()
+}
+
+func (c *tempUnschedCache) CurrentOpenAICapacity(ctx context.Context, accountID int64) (service.OpenAICapacityDecision, error) {
+	return c.capacityDecision(ctx, accountID, "", "current", "")
+}
+
+func (c *tempUnschedCache) ResetOpenAICapacity(ctx context.Context, accountID int64) error {
+	_, err := c.capacityDecision(ctx, accountID, "", "reset", "")
+	return err
 }

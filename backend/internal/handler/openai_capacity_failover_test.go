@@ -125,7 +125,7 @@ func TestCapacityCooldownHandlerSwitchesBeforeOutput(t *testing.T) {
 					require.NotContains(t, rec.Body.String(), "resp_failed")
 					require.Equal(t, []int64{801, 802}, upstream.hits, "switch directly instead of retrying the overloaded account")
 					require.Empty(t, repo.setErrorIDs)
-					require.Empty(t, repo.setTempIDs)
+					require.Equal(t, []int64{801}, repo.setTempIDs, "the existing temporary-unschedulable state must expose the text pause")
 					require.Empty(t, repo.rateLimitIDs, "overload is independent of quota/429")
 					blocked, err := store.BlockedOpenAICapacityAccounts(context.Background(), "gpt-5.4")
 					require.NoError(t, err)
@@ -136,11 +136,11 @@ func TestCapacityCooldownHandlerSwitchesBeforeOutput(t *testing.T) {
 					require.EqualValues(t, 1, d.Generation, "duplicate observations must not open additional cooldowns")
 					require.EqualValues(t, 1, d.Level)
 					next := httptest.NewRecorder()
-					nextReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","input":"next","stream":false}`))
+					nextReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4-mini","input":"next","stream":false}`))
 					nextReq.Header.Set("Content-Type", "application/json")
 					router.ServeHTTP(next, nextReq)
 					require.Equal(t, http.StatusOK, next.Code, next.Body.String())
-					require.Equal(t, []int64{801, 802, 802}, upstream.hits, "subsequent scheduling must skip the cooled account")
+					require.Equal(t, []int64{801, 802, 802}, upstream.hits, "another text model must also skip the cooled account")
 				})
 			}
 		}

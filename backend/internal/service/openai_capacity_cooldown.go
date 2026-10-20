@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +21,17 @@ type OpenAICapacityCooldownStore interface {
 	ObserveOpenAICapacity(context.Context, int64, string, string, int64, int, OpenAICapacityCooldownSettings) (OpenAICapacityDecision, error)
 	ReleaseOpenAICapacity(context.Context, int64, string, string, int64) error
 	BlockedOpenAICapacityAccounts(context.Context, string) ([]int64, error)
+	LockOpenAICapacity(context.Context, int64) (func(), error)
+	CurrentOpenAICapacity(context.Context, int64) (OpenAICapacityDecision, error)
+	ResetOpenAICapacity(context.Context, int64) error
+}
+
+// The stable prefix lets web-image selection exempt only this text pause.
+const OpenAICapacityCooldownReasonPrefix = `{"source":"openai_capacity_cooldown",`
+const openAICapacityCooldownKeyword = "openai_capacity_cooldown"
+
+func IsOpenAICapacityCooldownReason(reason string) bool {
+	return strings.HasPrefix(reason, OpenAICapacityCooldownReasonPrefix)
 }
 
 type OpenAICapacityDecision struct {
@@ -31,6 +45,7 @@ type openAICapacityAttempt struct {
 	settings   OpenAICapacityCooldownSettings
 	model, id  string
 	generation int64
+	rateLimit  *RateLimitService
 }
 
 type openAICapacityContextKey struct{}
@@ -39,7 +54,8 @@ type openAICapacityRequest struct {
 	settings OpenAICapacityCooldownSettings
 	compact  bool
 	mu       sync.Mutex
-	blocked  map[string]map[int64]bool
+	blocked  map[int64]bool
+	loaded   bool
 }
 
 func (s *OpenAIGatewayService) selectAccountWithScheduler(
@@ -87,14 +103,14 @@ func (s *OpenAIGatewayService) withOpenAICapacityCooldown(ctx context.Context, c
 	if err != nil || !settings.Enabled || !ok {
 		return ctx
 	}
-	return context.WithValue(ctx, openAICapacityContextKey{}, &openAICapacityRequest{store: store, settings: settings, compact: compact, blocked: make(map[string]map[int64]bool)})
+	return context.WithValue(ctx, openAICapacityContextKey{}, &openAICapacityRequest{store: store, settings: settings, compact: compact})
 }
 
 func openAICapacityEligible(account *Account, model string) bool {
 	return isOpenAIOAuthAccount(account) && !account.IsShadow() && model != "" && !isOpenAIImageGenerationModel(model)
 }
 
-// Fetch only active blocked IDs once per canonical model and selection pass, not
+// Fetch only active blocked IDs once per selection pass, not
 // once per pool candidate. Admission below closes snapshot/concurrency races.
 func openAICapacityBlocked(ctx context.Context, account *Account, requestedModel string) bool {
 	v, _ := ctx.Value(openAICapacityContextKey{}).(*openAICapacityRequest)
@@ -107,9 +123,8 @@ func openAICapacityBlocked(ctx context.Context, account *Account, requestedModel
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	blocked, found := v.blocked[model]
-	if !found {
-		blocked = make(map[int64]bool)
+	if !v.loaded {
+		v.blocked = make(map[int64]bool)
 		readCtx, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
 		ids, err := v.store.BlockedOpenAICapacityAccounts(readCtx, model)
@@ -117,11 +132,11 @@ func openAICapacityBlocked(ctx context.Context, account *Account, requestedModel
 			slog.Warn("openai.capacity_cooldown_read_failed", "error", err)
 		}
 		for _, id := range ids {
-			blocked[id] = true
+			v.blocked[id] = true
 		}
-		v.blocked[model] = blocked
+		v.loaded = true
 	}
-	return blocked[account.ID]
+	return v.blocked[account.ID]
 }
 
 func (s *OpenAIGatewayService) admitOpenAICapacity(ctx context.Context, selection *AccountSelectionResult, requestedModel string) bool {
@@ -152,7 +167,7 @@ func (s *OpenAIGatewayService) admitOpenAICapacity(ctx context.Context, selectio
 		return false
 	}
 	account := *selection.Account // Never attach request state to a shared scheduler snapshot.
-	account.capacityAttempt = &openAICapacityAttempt{v.store, v.settings, model, id, decision.Generation}
+	account.capacityAttempt = &openAICapacityAttempt{v.store, v.settings, model, id, decision.Generation, s.rateLimitService}
 	if err != nil {
 		account.capacityAttempt.store = nil
 	}
@@ -182,7 +197,84 @@ func observeOpenAICapacity(account *Account, outcome int) {
 	} else if d.Tripped {
 		slog.Warn("openai.capacity_cooldown_tripped", "account_id", account.ID, "model", a.model,
 			"failures", d.Failures, "requests", d.Total, "level", d.Level, "until_unix_ms", d.UntilMS)
+		if err := a.rateLimit.persistOpenAICapacityPause(account, a, d); err != nil {
+			slog.Warn("openai.capacity_cooldown_persist_failed", "account_id", account.ID, "error", err)
+		}
 	}
+}
+
+func (s *RateLimitService) persistOpenAICapacityPause(account *Account, attempt *openAICapacityAttempt, decision OpenAICapacityDecision) error {
+	if s == nil || s.accountRepo == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	unlock, err := attempt.store.LockOpenAICapacity(ctx, account.ID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	current, err := attempt.store.CurrentOpenAICapacity(ctx, account.ID)
+	if err != nil || current.Generation != decision.Generation || current.UntilMS != decision.UntilMS {
+		return err // A manual recovery or newer overload superseded this result.
+	}
+	until := time.UnixMilli(decision.UntilMS)
+	state := TempUnschedState{
+		UntilUnix: (decision.UntilMS + 999) / 1000, TriggeredAtUnix: time.Now().Unix(),
+		StatusCode: 503, MatchedKeyword: openAICapacityCooldownKeyword, RuleIndex: -1,
+		Scope: TempUnschedScopeAccount, Model: attempt.model,
+		TriggerCount: decision.Failures, TriggerThreshold: attempt.settings.FailureThreshold,
+		ErrorMessage: fmt.Sprintf("OpenAI 文本过载：%s；%d 秒内 %d 次过载达到阈值 %d；第 %d 级回避。整个账号暂停文本调用，Web 生图除外。", attempt.model, attempt.settings.WindowSeconds, decision.Failures, attempt.settings.FailureThreshold, decision.Level),
+	}
+	payload, err := json.Marshal(struct {
+		Source string `json:"source"`
+		TempUnschedState
+	}{openAICapacityCooldownKeyword, state})
+	if err != nil {
+		return err
+	}
+	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, string(payload)); err != nil {
+		return err
+	}
+	// Another failure may have a stricter account-wide reason. Cache the DB
+	// winner, rather than making an authentication pause look image-exempt.
+	fresh, err := s.accountRepo.GetByID(ctx, account.ID)
+	if err != nil {
+		return err
+	}
+	if fresh != nil && fresh.TempUnschedulableUntil != nil && s.tempUnschedCache != nil {
+		actual := tempUnschedStateFromStoredReason(fresh.TempUnschedulableReason, fresh.TempUnschedulableUntil.Unix())
+		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, actual); err != nil {
+			return err
+		}
+	}
+	s.notifyAccountSchedulingBlocked(account, until, openAICapacityCooldownKeyword)
+	return nil
+}
+
+// Hold the same account lock until the existing DB/cache recovery finishes.
+// Reset advances the Redis generation so old in-flight results cannot re-pause it.
+func (s *RateLimitService) resetOpenAICapacityPause(ctx context.Context, accountID int64) (func(), error) {
+	store, ok := s.tempUnschedCache.(OpenAICapacityCooldownStore)
+	if !ok {
+		return func() {}, nil
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if !isOpenAIOAuthAccount(account) {
+		return func() {}, nil
+	}
+	unlock, err := store.LockOpenAICapacity(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.ResetOpenAICapacity(ctx, accountID); err != nil {
+		unlock()
+		return nil, err
+	}
+	return unlock, nil
 }
 
 func observeOpenAICapacityResult(account *Account, success bool, observedErr ...error) {

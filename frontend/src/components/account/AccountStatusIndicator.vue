@@ -1,13 +1,13 @@
 <template>
   <div class="flex items-center gap-2">
     <!-- Rate Limit Display (429) - Two-line layout -->
-    <div v-if="isRateLimited" class="flex flex-col items-center gap-1">
+    <div v-if="isRateLimited && !isCapacityPause" class="flex flex-col items-center gap-1">
       <span class="badge text-xs badge-warning">{{ t('admin.accounts.status.rateLimited') }}</span>
       <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ rateLimitResumeText }}</span>
     </div>
 
     <!-- Overload Display (529) - Two-line layout -->
-    <div v-else-if="isOverloaded" class="flex flex-col items-center gap-1">
+    <div v-else-if="isOverloaded && !isCapacityPause" class="flex flex-col items-center gap-1">
       <span class="badge text-xs badge-danger">{{ t('admin.accounts.status.overloaded') }}</span>
       <span class="text-[11px] text-gray-400 dark:text-gray-500">{{ overloadCountdown }}</span>
     </div>
@@ -278,6 +278,11 @@ const isTempUnschedulable = computed(() => {
   if (!props.account.temp_unschedulable_until) return false
   return new Date(props.account.temp_unschedulable_until) > new Date()
 })
+
+const isCapacityPause = computed(() =>
+  isTempUnschedulable.value && props.account.platform === 'openai' &&
+  props.account.temp_unschedulable_reason?.startsWith('{"source":"openai_capacity_cooldown",')
+)
 
 // Computed: has error status
 const hasError = computed(() => {

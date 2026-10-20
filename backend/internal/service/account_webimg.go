@@ -18,7 +18,7 @@ func (a *Account) IsSchedulableIgnoringTextRateLimit() bool {
 		return false
 	}
 	// Keep auth/transport temp blocks; skip text rate-limit and overload windows.
-	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
+	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) && !IsOpenAICapacityCooldownReason(a.TempUnschedulableReason) {
 		return false
 	}
 	// Web image cooldown is independent of text RateLimitResetAt.

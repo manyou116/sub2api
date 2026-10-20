@@ -76,6 +76,11 @@ func (s *OpenAIGatewayService) webImageSharedQuotaBlocked(ctx context.Context, a
 	if !webdriver.IsWorkModeModel(model) {
 		return false
 	}
+	if IsOpenAICapacityCooldownReason(account.TempUnschedulableReason) {
+		copy := *account
+		copy.TempUnschedulableUntil, copy.TempUnschedulableReason = nil, ""
+		account = &copy // Work Mode also exempts this text-only pause, not its quotas.
+	}
 	if !account.IsSchedulableForModelWithContext(ctx, model) || s.isOpenAIAccountRequestRuntimeBlocked(account, model) {
 		return true
 	}

@@ -33,6 +33,8 @@ type GroupAccountCapacityRow struct {
 	RateLimitResetAt         *time.Time
 	OverloadUntil            *time.Time
 	WebImageRateLimitResetAt *time.Time
+	TempUnschedulableUntil   *time.Time
+	TempUnschedulableReason  string
 	Platform                 string
 	Type                     string
 }
@@ -173,6 +175,7 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 		}
 
 		acc := Account{
+			Status: StatusActive, Schedulable: true,
 			ID:                       row.AccountID,
 			Concurrency:              row.Concurrency,
 			Extra:                    row.Extra,
@@ -182,21 +185,28 @@ func (s *GroupCapacityService) getGroupCapacitiesBatch(ctx context.Context, grou
 			RateLimitResetAt:         row.RateLimitResetAt,
 			OverloadUntil:            row.OverloadUntil,
 			WebImageRateLimitResetAt: row.WebImageRateLimitResetAt,
+			TempUnschedulableUntil:   row.TempUnschedulableUntil,
+			TempUnschedulableReason:  row.TempUnschedulableReason,
 			Platform:                 row.Platform,
 			Type:                     row.Type,
 		}
 
 		// Text capacity: exclude accounts currently in text rate-limit / overload windows.
-		if !acc.IsRateLimited() && !acc.IsOverloaded() {
+		tempPaused := acc.TempUnschedulableUntil != nil && time.Now().Before(*acc.TempUnschedulableUntil)
+		textSchedulable := !acc.IsRateLimited() && !acc.IsOverloaded() && !tempPaused
+		if textSchedulable {
 			results[idx].ConcurrencyMax += acc.Concurrency
 		}
 		// Web image capacity: include text-rate-limited OAuth accounts (web path bypasses text RL),
 		// but exclude durable web-image cooldown.
 		if s.webImages != nil {
 			cfg := s.webImages.ParseAccountConfig(&acc)
-			if cfg.Enabled && !acc.IsWebImageRateLimited() {
+			if cfg.Enabled && acc.IsSchedulableIgnoringTextRateLimit() {
 				results[idx].ImageConcurrencyMax += cfg.MaxInflight
 			}
+		}
+		if tempPaused {
+			continue
 		}
 
 		if maxSessions := acc.GetMaxSessions(); maxSessions > 0 {
