@@ -710,14 +710,14 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 	now := time.Now()
 	usage := &UsageInfo{UpdatedAt: &now}
 
-	if account == nil {
+	if account == nil || account.IsWebImageShadow() {
 		return usage, nil
 	}
 
 	applyExtraToUsage(usage, account.Extra, now)
 
 	if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
-		if account.IsShadow() {
+		if account.IsSparkShadow() {
 			// Spark shadow accounts fetch usage from /wham/usage (bengalfox channel)
 			// via the shared OpenAIQuotaService, which resolves credentials from the
 			// parent account.  The result is written to the shadow row's own codex_*
@@ -793,7 +793,7 @@ func isOpenAICodexSnapshotStale(account *Account, now time.Time) bool {
 	// (/wham/usage body 的 codex_bengalfox),与 WSv2 无关——不能用 WSv2 门控其 staleness,否则首刷后
 	// codex_5h/7d 已存在→staleness 恒 false→spark 窗口永久冻结(外审第9轮 P1)。影子改按
 	// codex_usage_updated_at TTL 判定;实际查询频率仍由 shouldProbeOpenAICodexSnapshot 的缓存 TTL 节流。
-	if !account.IsShadow() && !account.IsOpenAIResponsesWebSocketV2Enabled() {
+	if !account.IsSparkShadow() && !account.IsOpenAIResponsesWebSocketV2Enabled() {
 		return false
 	}
 	if account.Extra == nil {

@@ -615,27 +615,19 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		// 影子绝不持有凭据(凭据只在母账号)——外审 F5。
 		if !isAllowedSparkShadowCredentialsUpdate(input.Credentials) {
 			return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_NO_CREDENTIALS",
-				"spark shadow accounts do not hold auth credentials; only model mapping can be configured on the shadow account")
+				"credential shadow accounts do not hold auth credentials; only model mapping can be configured on the shadow account")
 		}
 		// 影子 type 不可变——很多上游逻辑按 account.Type 分支(OAuth transform / ChatGPT
 		// header 注入 / WS OAuth 决策),改成 apikey 会让 spark 影子被选中后按错误协议转发(外审 G7)。
 		if input.Type != "" && input.Type != account.Type {
 			return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_IMMUTABLE_TYPE",
-				"spark shadow account type cannot be changed; it must remain an OpenAI OAuth shadow")
-		}
-	} else if input.Type != "" && input.Type != account.Type && input.Type != AccountTypeOAuth {
-		// 母账号守卫(外审 D/P1):有 spark 影子的账号不能把 type 改出 OpenAI OAuth——影子读透母
-		// 凭据,母变成 apikey/setup_token 会让影子被调度后按错协议失败(resolveCredentialAccount
-		// 必报错)。须先删影子再改 type。
-		shadows, serr := s.accountRepo.ListShadowsByParent(ctx, id)
-		if serr != nil {
-			return nil, serr
-		}
-		if len(shadows) > 0 {
-			return nil, infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_PARENT_IMMUTABLE_TYPE",
-				"cannot change account type while it has a spark shadow; delete the shadow first")
+				"credential shadow account type cannot be changed")
 		}
 	}
+	if err := s.validateWebImageShadowUpdate(ctx, account, input); err != nil {
+		return nil, err
+	}
+
 	wasOveragesEnabled := account.IsOveragesEnabled()
 
 	if input.Name != "" {
@@ -1021,7 +1013,8 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || resetSettingsRequested || reconcileSettingsRequested {
+	_, webImageOptionsRequested := input.Extra["openai_web_images"]
+	if webImageOptionsRequested || input.Concurrency != nil || len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || resetSettingsRequested || reconcileSettingsRequested {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1077,6 +1070,13 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			}
 		}
 	}
+	if input.Concurrency != nil && *input.Concurrency <= 0 {
+		for _, acc := range cachedTargets {
+			if acc.IsWebImageShadow() {
+				return nil, infraerrors.BadRequest("WEB_IMAGE_SHADOW_CONCURRENCY", "Web image shadow concurrency must be positive")
+			}
+		}
+	}
 	// 影子账号绝不持有凭据:批量更新携带凭据时,目标中不得含影子(外审 G5,与单账号
 	// UpdateAccount 守卫对齐)。覆盖显式 IDs 与 filter 解析出的 IDs(此处 AccountIDs 已解析完成)。
 	if len(input.Credentials) > 0 {
@@ -1084,6 +1084,16 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			if acc != nil && acc.IsCredentialShadow() {
 				return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_NO_CREDENTIALS",
 					"spark shadow account %d cannot hold credentials; manage credentials on the parent account", acc.ID)
+			}
+		}
+	}
+
+	if len(input.Credentials) > 0 || webImageOptionsRequested {
+		for _, account := range cachedTargets {
+			if account != nil {
+				if err := s.validateWebImageShadowUpdate(ctx, account, &UpdateAccountInput{Credentials: input.Credentials, Extra: input.Extra}); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -1329,14 +1339,14 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
-	// 级联删除 spark 影子账号（先删影子，再删母账号）
+	// Delete every credential shadow before deleting the parent.
 	shadows, err := s.accountRepo.ListShadowsByParent(ctx, id)
 	if err != nil {
-		return fmt.Errorf("list spark shadows for cascade delete: %w", err)
+		return fmt.Errorf("list credential shadows for cascade delete: %w", err)
 	}
 	for _, shadow := range shadows {
 		if err := s.accountRepo.Delete(ctx, shadow.ID); err != nil {
-			return fmt.Errorf("cascade delete spark shadow %d: %w", shadow.ID, err)
+			return fmt.Errorf("cascade delete credential shadow %d: %w", shadow.ID, err)
 		}
 	}
 	if err := s.accountRepo.Delete(ctx, id); err != nil {
@@ -1427,7 +1437,7 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	if err != nil {
 		return nil, fmt.Errorf("check existing spark shadows: %w", err)
 	}
-	if len(shadows) > 0 {
+	if findShadowDimension(shadows, QuotaDimensionSpark) != nil {
 		return nil, infraerrors.New(http.StatusConflict, "SPARK_SHADOW_ALREADY_EXISTS",
 			"parent account already has a spark shadow account")
 	}
@@ -1503,7 +1513,7 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	// 5. 持久化（Create 填充 shadow.ID）。并发竞态:预查(步骤2)放行后另一请求抢先建成,本次会撞
 	// 一母一影唯一索引。复查确认确为"已存在"竞态时返回结构化 409 而非裸 500——外审 A/P1。
 	if err := s.accountRepo.Create(ctx, shadow); err != nil {
-		if existing, qerr := s.accountRepo.ListShadowsByParent(ctx, parentID); qerr == nil && len(existing) > 0 {
+		if existing, qerr := s.accountRepo.ListShadowsByParent(ctx, parentID); qerr == nil && findShadowDimension(existing, QuotaDimensionSpark) != nil {
 			return nil, infraerrors.New(http.StatusConflict, "SPARK_SHADOW_ALREADY_EXISTS",
 				"parent account already has a spark shadow account")
 		}
@@ -1528,7 +1538,7 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 	return shadow, nil
 }
 
-// propagateProxyToShadows syncs proxyID to all spark shadow accounts of parentID.
+// propagateProxyToShadows syncs proxyID to all credential shadow accounts of parentID.
 // It is called synchronously so that proxy changes are immediately consistent;
 // accountRepo.Update triggers the scheduler outbox + cache propagation internally.
 // Calling this for a non-parent account is a harmless no-op.
@@ -1542,12 +1552,12 @@ func (s *adminServiceImpl) propagateProxyToShadows(ctx context.Context, parentID
 func propagateAccountProxyToShadows(ctx context.Context, repo AccountRepository, parentID int64, proxyID *int64) error {
 	shadows, err := repo.ListShadowsByParent(ctx, parentID)
 	if err != nil {
-		return fmt.Errorf("list spark shadows for proxy propagation: %w", err)
+		return fmt.Errorf("list credential shadows for proxy propagation: %w", err)
 	}
 	for _, shadow := range shadows {
 		shadow.ProxyID = proxyID
 		if err := repo.Update(ctx, shadow); err != nil {
-			return fmt.Errorf("update spark shadow %d proxy: %w", shadow.ID, err)
+			return fmt.Errorf("update credential shadow %d proxy: %w", shadow.ID, err)
 		}
 	}
 	return nil

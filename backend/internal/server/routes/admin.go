@@ -428,6 +428,8 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 
 		// Spark 影子账号
 		accounts.POST("/:id/shadow", h.Admin.OpenAIOAuth.CreateShadow)
+		accounts.POST("/:id/web-image-shadow", h.Admin.OpenAIOAuth.CreateWebImageShadow)
+		accounts.POST("/:id/web-image-shadow-conversion", h.Admin.OpenAIOAuth.ConvertLegacyWebImageShadow)
 
 		// Claude OAuth routes
 		accounts.POST("/generate-auth-url", h.Admin.OAuth.GenerateAuthURL)

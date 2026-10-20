@@ -56,7 +56,7 @@ func (s *sparkShadowRepoStub) GetByID(_ context.Context, id int64) (*Account, er
 func (s *sparkShadowRepoStub) ListShadowsByParent(_ context.Context, parentID int64) ([]*Account, error) {
 	var result []*Account
 	for _, acc := range s.accounts {
-		if acc.ParentAccountID != nil && *acc.ParentAccountID == parentID && acc.QuotaDimension == QuotaDimensionSpark {
+		if acc.ParentAccountID != nil && *acc.ParentAccountID == parentID {
 			cp := *acc
 			result = append(result, &cp)
 		}

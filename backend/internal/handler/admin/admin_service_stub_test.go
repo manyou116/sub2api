@@ -833,3 +833,23 @@ func (s *stubAdminService) CreateShadow(ctx context.Context, parentID int64, opt
 
 // Ensure stub implements interface.
 var _ service.AdminService = (*stubAdminService)(nil)
+
+func (s *stubAdminService) CreateWebImageShadow(ctx context.Context, parentID int64, opts service.WebImageShadowOptions) (*service.Account, error) {
+	shadow := &service.Account{ID: 9002, Name: opts.Name, Platform: service.PlatformOpenAI,
+		Type: service.AccountTypeOAuth, ParentAccountID: &parentID, QuotaDimension: service.QuotaDimensionWebImages,
+		Concurrency: 1, Priority: 50, Status: service.StatusActive, Schedulable: true}
+	if opts.Concurrency != nil {
+		shadow.Concurrency = *opts.Concurrency
+	}
+	if opts.Priority != nil {
+		shadow.Priority = *opts.Priority
+	}
+	if opts.GroupIDs != nil {
+		shadow.GroupIDs = *opts.GroupIDs
+	}
+	return shadow, nil
+}
+
+func (s *stubAdminService) ConvertLegacyWebImageShadow(ctx context.Context, parentID int64, opts service.WebImageShadowConversionOptions) (*service.WebImageShadowConversion, error) {
+	return &service.WebImageShadowConversion{ParentID: parentID, Applied: opts.Apply}, nil
+}

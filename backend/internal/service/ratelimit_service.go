@@ -1201,7 +1201,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 	// 套到影子会把 spark 误耦合到 global 窗口——即便 spark 仍有配额也会被冷却到 global reset,
 	// 单影子场景直接变成无可用账号(外审第8轮 P1)。整段跳过;影子的 codex_* 仅由 account_usage 的
 	// QueryUsage→persistOpenAICodexProbeSnapshot 维护,枯竭由调度守卫处理。
-	if account.IsShadow() {
+	if account.IsSparkShadow() {
 		if account.ParentAccountID != nil {
 			notifyOpenAIAutoReset(*account.ParentAccountID)
 		}
@@ -1769,7 +1769,7 @@ func (s *RateLimitService) persistOpenAICodexSnapshot(ctx context.Context, accou
 	}
 	// spark 影子的 codex_* 仅由 QueryUsage(/wham/usage bengalfox 道)更新,不能被 /responses 的
 	// x-codex-* 全局头快照污染(外审第7轮 P1,与 updateCodexUsageSnapshot 同口径)。
-	if account.IsShadow() {
+	if account.IsSparkShadow() {
 		return
 	}
 	snapshot := ParseCodexRateLimitHeaders(headers)

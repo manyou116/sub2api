@@ -16,18 +16,22 @@ func resolveCredentialAccount(ctx context.Context, repo AccountRepository, accou
 	}
 	parent, err := repo.GetByID(ctx, *account.ParentAccountID)
 	if err != nil {
-		return nil, fmt.Errorf("resolve spark shadow parent %d: %w", *account.ParentAccountID, err)
+		return nil, fmt.Errorf("resolve credential shadow parent %d: %w", *account.ParentAccountID, err)
 	}
 	if parent == nil {
-		return nil, fmt.Errorf("spark shadow parent %d not found", *account.ParentAccountID)
+		return nil, fmt.Errorf("credential shadow parent %d not found", *account.ParentAccountID)
 	}
 	// 防御:创建路径已禁二级影子(G6),此处再挡一层——畸形数据/手工 DB 写出的影子→影子链
 	// 会让凭据解析停在无凭据的一级影子(只解一层),fail-closed 比静默返回坏母更安全(外审第6轮)。
 	if parent.IsShadow() {
-		return nil, fmt.Errorf("spark shadow parent %d is itself a shadow", parent.ID)
+		return nil, fmt.Errorf("credential shadow parent %d is itself a shadow", parent.ID)
 	}
-	if !parent.IsOpenAIOAuth() {
-		return nil, fmt.Errorf("spark shadow parent %d is not OpenAI OAuth", parent.ID)
+	if account.IsWebImageShadow() {
+		if err := ValidateWebImageShadowParent(parent); err != nil {
+			return nil, err
+		}
+	} else if !parent.IsOpenAIOAuth() {
+		return nil, fmt.Errorf("credential shadow parent %d is not OpenAI OAuth", parent.ID)
 	}
 	return parent, nil
 }

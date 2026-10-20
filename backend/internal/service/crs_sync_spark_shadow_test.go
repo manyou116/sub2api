@@ -70,7 +70,7 @@ func TestGuardCRSShadowParentInvariant(t *testing.T) {
 	// 翻成 OpenAI api_key 被拒。
 	err := guardCRSShadowParentInvariant(ctx, repo, mother, PlatformOpenAI, AccountTypeAPIKey)
 	require.Error(t, err, "must reject converting a shadow parent to openai api_key")
-	require.Contains(t, err.Error(), "spark-shadow parent")
+	require.Contains(t, err.Error(), "credential-shadow parent")
 
 	// 跨平台改成 Anthropic OAuth(Type 仍 OAuth、仅 Platform 变)也被拒——第8轮只查 Type 的版本会漏。
 	require.Error(t, guardCRSShadowParentInvariant(ctx, repo, mother, PlatformAnthropic, AccountTypeOAuth),

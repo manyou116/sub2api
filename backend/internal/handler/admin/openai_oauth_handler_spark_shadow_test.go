@@ -104,3 +104,28 @@ func TestCreateShadow_BadBody(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
+
+func TestWebImageShadowCreationPreservesExplicitValues(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewOpenAIOAuthHandler(nil, &stubAdminService{}, nil, nil)
+	router := gin.New()
+	router.POST("/accounts/:id/web-image-shadow", h.CreateWebImageShadow)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/accounts/42/web-image-shadow", strings.NewReader(`{"priority":0,"concurrency":3,"group_ids":[]}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var response struct {
+		Data struct {
+			ParentAccountID int64  `json:"parent_account_id"`
+			QuotaDimension  string `json:"quota_dimension"`
+			Concurrency     int    `json:"concurrency"`
+			Priority        int    `json:"priority"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+	require.Equal(t, int64(42), response.Data.ParentAccountID)
+	require.Equal(t, service.QuotaDimensionWebImages, response.Data.QuotaDimension)
+	require.Equal(t, 3, response.Data.Concurrency)
+	require.Zero(t, response.Data.Priority)
+}

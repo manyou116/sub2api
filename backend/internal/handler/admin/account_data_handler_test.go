@@ -317,3 +317,38 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 	require.Len(t, adminSvc.createdAccounts, 1)
 	require.True(t, adminSvc.createdAccounts[0].SkipDefaultGroupBind)
 }
+
+func TestWebImageShadowExportRequiresSelectedParent(t *testing.T) {
+	for _, includeParent := range []bool{false, true} {
+		t.Run(map[bool]string{false: "shadow only", true: "parent and shadow"}[includeParent], func(t *testing.T) {
+			router, adminSvc := setupAccountDataRouter()
+			parentID := int64(21)
+			adminSvc.accounts = []service.Account{{ID: 22, Name: "web", Platform: service.PlatformOpenAI,
+				Type: service.AccountTypeOAuth, ParentAccountID: &parentID, QuotaDimension: service.QuotaDimensionWebImages,
+				Concurrency: 1, Priority: 0, Status: service.StatusActive, Schedulable: false}}
+			if includeParent {
+				adminSvc.accounts = append(adminSvc.accounts, service.Account{ID: parentID, Name: "parent",
+					Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth,
+					Credentials: map[string]any{"access_token": "selected-parent-token"}})
+			}
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/data", nil))
+			require.Equal(t, http.StatusOK, rec.Code)
+			var result struct {
+				Data DataPayload `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &result))
+			if includeParent {
+				require.Len(t, result.Data.Accounts, 1)
+				require.NotNil(t, result.Data.Accounts[0].WebImageShadow)
+				require.Zero(t, result.Data.Accounts[0].WebImageShadow.Priority)
+				require.False(t, result.Data.Accounts[0].WebImageShadow.Schedulable)
+				require.Zero(t, result.Data.SkippedShadows)
+			} else {
+				require.Empty(t, result.Data.Accounts)
+				require.Equal(t, 1, result.Data.SkippedShadows)
+				require.NotContains(t, rec.Body.String(), "selected-parent-token")
+			}
+		})
+	}
+}
