@@ -36,105 +36,11 @@ need_rg() {
 
 echo "== Fork hook check (see docs/FORK_HOOKS.md) =="
 
-# --- P1 webimg ---
-echo "-- P1 webimg --"
+# P1 currently retains only the independently tested protocol package.
+# New shadow integration invariants are added with their implementation commit.
+echo "-- P1 protocol --"
 need_file backend/internal/service/openaiimages/webdriver/types.go
-need_file backend/internal/service/openai_web_images_service.go
 need_file backend/migrations/177_add_web_image_rate_limit.sql
-need_file backend/internal/repository/account_repo_webimg.go
-need_file backend/internal/service/account_webimg.go
-need_file backend/internal/service/openai_account_scheduler_webimg.go
-need_rg "SetWebImageRateLimited repo (fork file)" \
-  "SetWebImageRateLimited" \
-  backend/internal/repository/account_repo_webimg.go
-need_rg "attachWebImageRateLimits (fork file)" \
-  "attachWebImageRateLimits" \
-  backend/internal/repository/account_repo_webimg.go
-need_rg "capacity list includes text-RL webimg accounts" \
-  "ListSchedulableCapacityByGroupIDs" \
-  backend/internal/repository/account_repo_webimg.go
-need_rg "IsWebImageRateLimited helper (fork file)" \
-  "IsWebImageRateLimited" \
-  backend/internal/service/account_webimg.go
-need_rg "web path skip text slot (fork file)" \
-  "acquireAccountSlotForSchedule" \
-  backend/internal/service/openai_account_scheduler_webimg.go
-need_rg "hot account_repo still attaches webimg cooldown" \
-  "attachWebImageRateLimits" \
-  backend/internal/repository/account_repo.go
-need_rg "hot scheduler still calls webimg cooldown gate" \
-  "accountBlockedByWebImageCooldown" \
-  backend/internal/service/openai_account_scheduler.go
-need_rg "webimg multipart image_N aliases" \
-  'strings.HasPrefix(name, "image_")' \
-  backend/internal/service/openai_images.go
-need_rg "webimg multipart bracket aliases" \
-  'strings.HasPrefix(name, "image[")' \
-  backend/internal/service/openai_images.go
-need_rg "webimg bulk default supports large accounts" \
-  "BulkMaxAccounts = 5000" \
-  backend/internal/service/openai_web_images_service.go
-need_rg "webimg bulk uses configured concurrency" \
-  "BulkProbeConcurrency" \
-  backend/internal/service/openai_web_images_service.go
-need_rg "webimg inflight-full helper" \
-  "IsInflightFull" \
-  backend/internal/service/openai_web_images_service.go
-need_rg "webimg scheduler inflight-full gate" \
-  "isWebImageInflightFullForRequest" \
-  backend/internal/service/openai_account_scheduler_webimg.go
-need_rg "hot scheduler filters webimg inflight saturation" \
-  "isWebImageInflightFullForRequest" \
-  backend/internal/service/openai_account_scheduler.go
-need_rg "frontend chunks large webimg bulk selections" \
-  "const chunkSize = 200" \
-  frontend/src/api/admin/accounts.ts
-
-# --- P1 webimg (extra call-site hooks) ---
-echo "-- P1 webimg call sites --"
-need_rg "UsesOpenAIWebImagesPath helper" \
-  "UsesOpenAIWebImagesPath" \
-  backend/internal/service/openai_images_legacy_web.go
-need_rg "ClearWebImageRateLimit repo" \
-  "ClearWebImageRateLimit" \
-  backend/internal/repository/account_repo_webimg.go
-need_rg "ClearRateLimit clears web image cooldown" \
-  "ClearWebImageRateLimit" \
-  backend/internal/service/ratelimit_service.go
-need_rg "webimg package import or path" \
-  "openaiimages" \
-  backend/internal/service/openai_web_images_service.go
-need_rg "chat image bridge endpoint resolver" \
-  "ResolveChatImageBridgeEndpoint" \
-  backend/internal/service/openai_chat_image_bridge.go
-need_rg "chat image bridge rewrites request path" \
-  "c.Request.URL.Path = imagesEndpoint" \
-  backend/internal/handler/openai_chat_image_bridge.go
-need_rg "admin update preserves webimg extra" \
-  "preserve openai_web_images" \
-  backend/internal/service/admin_account.go
-need_rg "wire injects webimg into capacity service" \
-  "SetWebImages" \
-  backend/cmd/server/wire_gen.go
-need_rg "wire injects webimg admin service" \
-  "SetOpenAIWebImagesService" \
-  backend/cmd/server/wire_gen.go
-bridge_line="$(grep -n "tryChatCompletionsImageBridge" backend/internal/handler/openai_chat_completions.go | head -n1 | cut -d: -f1 || true)"
-guard_line="$(grep -n "This model is not supported on the Chat Completions endpoint" backend/internal/handler/openai_chat_completions.go | head -n1 | cut -d: -f1 || true)"
-if [[ -n "$bridge_line" && -n "$guard_line" && "$bridge_line" -lt "$guard_line" ]]; then
-  ok "chat image bridge runs before GPT image endpoint guard"
-else
-  bad "chat image bridge must run before GPT image endpoint guard"
-fi
-
-# --- P4 capacity (lightweight) ---
-echo "-- P4 capacity --"
-need_rg "image concurrency capacity fields" \
-  "image_concurrency_used" \
-  backend/internal/service/group_capacity_service.go
-need_rg "scheduler webimg path check" \
-  "UsesOpenAIWebImagesPath" \
-  backend/internal/service/openai_account_scheduler_webimg.go
 
 # --- P5 kiro ---
 echo "-- P5 kiro --"
@@ -269,7 +175,7 @@ need_file backend/internal/repository/openai_capacity_cooldown_cache.go
 need_rg "capacity scheduler wrapper retains original flow" \
   "selectAccountWithSchedulerBase" backend/internal/service/openai_account_scheduler.go
 need_rg "capacity admission on scheduler candidates" \
-  "openAICapacityBlocked(ctx, account, requestedModel)" backend/internal/service/openai_images_legacy_web.go
+  "openAICapacityBlocked(ctx, account, requestedModel)" backend/internal/service/openai_gateway_scheduling.go
 need_rg "capacity observations on schedule result" \
   "observeOpenAICapacityResult(account, success" backend/internal/service/openai_account_scheduler.go
 need_rg "capacity switch policy before common failover" \

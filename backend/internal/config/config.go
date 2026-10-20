@@ -688,12 +688,14 @@ type PricingConfig struct {
 type ServerConfig struct {
 	Host                     string    `mapstructure:"host"`
 	Port                     int       `mapstructure:"port"`
-	Mode                     string    `mapstructure:"mode"`                  // debug/release
-	EnableServerTiming       bool      `mapstructure:"enable_server_timing"`  // Admin UI Server-Timing response header
-	FrontendURL              string    `mapstructure:"frontend_url"`          // 前端基础 URL，用于生成邮件中的外部链接
-	ReadHeaderTimeout        int       `mapstructure:"read_header_timeout"`   // 读取请求头超时（秒）
-	MaxHeaderBytes           int       `mapstructure:"max_header_bytes"`      // 请求头最大字节数（HTTP/2 映射为 header-list 上限）
-	IdleTimeout              int       `mapstructure:"idle_timeout"`          // 空闲连接超时（秒）
+	Mode                     string    `mapstructure:"mode"`                 // debug/release
+	EnableServerTiming       bool      `mapstructure:"enable_server_timing"` // Admin UI Server-Timing response header
+	FrontendURL              string    `mapstructure:"frontend_url"`         // 前端基础 URL，用于生成邮件中的外部链接
+	ReadHeaderTimeout        int       `mapstructure:"read_header_timeout"`  // 读取请求头超时（秒）
+	MaxHeaderBytes           int       `mapstructure:"max_header_bytes"`     // 请求头最大字节数（HTTP/2 映射为 header-list 上限）
+	IdleTimeout              int       `mapstructure:"idle_timeout"`         // 空闲连接超时（秒）
+	ShutdownTimeout          int       `mapstructure:"shutdown_timeout"`
+	ShutdownDrainDelay       int       `mapstructure:"shutdown_drain_delay"`
 	TrustedProxies           []string  `mapstructure:"trusted_proxies"`       // 可信代理列表（CIDR/IP）
 	TrustedProxiesConfigured bool      `mapstructure:"-" json:"-" yaml:"-"`   // 是否显式配置了可信代理列表
 	MaxRequestBodySize       int64     `mapstructure:"max_request_body_size"` // 全局最大请求体限制
@@ -2047,6 +2049,8 @@ func setDefaults() {
 	viper.SetDefault("server.read_header_timeout", 10) // 10秒读取请求头
 	viper.SetDefault("server.max_header_bytes", 64*1024)
 	viper.SetDefault("server.idle_timeout", 120) // 120秒空闲超时
+	viper.SetDefault("server.shutdown_timeout", 300)
+	viper.SetDefault("server.shutdown_drain_delay", 0)
 	viper.SetDefault("server.max_request_body_size", int64(256*1024*1024))
 	// H2C 默认配置
 	viper.SetDefault("server.h2c.enabled", false)
@@ -2735,6 +2739,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.IdleTimeout <= 0 {
 		return fmt.Errorf("server.idle_timeout must be positive")
+	}
+	if c.Server.ShutdownTimeout < 0 {
+		return fmt.Errorf("server.shutdown_timeout must be non-negative")
+	}
+	if c.Server.ShutdownDrainDelay < 0 {
+		return fmt.Errorf("server.shutdown_drain_delay must be non-negative")
 	}
 	if c.Server.MaxRequestBodySize < 0 {
 		return fmt.Errorf("server.max_request_body_size must be non-negative")

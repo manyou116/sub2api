@@ -150,6 +150,8 @@ feature-name tags.
 
 ## Local Dev Startup (this machine)
 
+Use `./backend/scripts/go.sh` for local Go commands; it uses this checkout's `.cache/go-build`. Do not create separate Go caches under `/tmp`.
+
 Prefer **air** for backend hot reload. Do not leave a stale `./tmp/main` on :8080
 while air is expected to own the port.
 
@@ -198,37 +200,18 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/v1/models \
 When debugging web images, always restart/use air so the binary matches source.
 Do not assume an old PID on :8080 has the latest code.
 
-## Fork Feature: OpenAI Web Images
+## Fork Feature: Web Image Shadows
 
-Goal: ChatGPT **Web image quota** reverse path for `gpt-image-2`, default off.
+The Web image control plane is being rebuilt on a clean fork baseline. The
+validated `backend/internal/service/openaiimages/webdriver/` protocol package is
+retained unchanged. Published migration 177 remains immutable for upgrade checksums.
 
-### Keep isolated (new files preferred)
-
-- `backend/internal/service/openaiimages/webdriver/` — reverse driver (SSE then poll)
-- `backend/internal/service/openai_web_images_service.go` — control plane (quota/inflight/redis)
-- `backend/internal/service/openai_images_legacy_web.go` — gateway entry for web path
-- `backend/internal/handler/admin/openai_web_images_handler.go` — admin API
-- `frontend/src/constants/openaiWebImages.ts` + capacity-cell integrations
-
-### Minimal upstream touch points
-
-- `config.Gateway.OpenAIWebImages` (runtime defaults only; no global enable switch)
-- `wire` Provide + `routes/admin` register
-- Scheduler hooks: `isAccountSchedulableForOpenAIRequest` / text-429 bypass for images only
-- `ForwardImages` → web path when account `extra.openai_web_images.enabled` (sole enable switch)
-
-### Do not commit (local only)
-
-- `backend/.air.toml`, `DEV_LOCAL.md`, `/tmp/*` stage logs
-- one-off debug cmds under `backend/cmd/webimg*`
-
-### Runtime contract
-
-- SSE open: no conversation GET poll
-- After SSE end: adaptive poll + 429 backoff (not image-quota cooldown)
-- Only Free-plan image-quota text → web cooldown / remaining=0
-
-
+- Read `docs/WEB_IMAGE_SHADOWS.md` for the approved behavior contract.
+- A `web_images` shadow is the sole ChatGPT Web image route; creation enables it.
+- Use ordinary account concurrency, priority, groups and schedulable state.
+- Keep credentials and upstream image quota/cooldown tied to the parent identity.
+- Do not restore the legacy Web enable switches, inflight counters, or slot bypasses.
+- Ordinary image APIs for other account types must continue to work.
 
 ## Release speed (this fork)
 

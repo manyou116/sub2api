@@ -10,7 +10,7 @@ Related docs:
 - `AGENTS.md` — hard rules (small diffs, default-off, isolated files)
 - `docs/FORK_MAINTENANCE.md` — tags / rebuild routine
 - `docs/FORK_DELTA.md` — historical large-delta notes
-- `docs/OPENAI_WEB_IMAGES.md` — webimg product behavior
+- `docs/WEB_IMAGE_SHADOWS.md` — Web shadow behavior contract
 - `deploy/upstream-sync/README.md` — auto-merge workflow
 
 Verify hooks any time:
@@ -27,10 +27,10 @@ Treat fork work as **replayable patches**, not a pile of drive-by commits.
 
 | ID | Name | What it owns | Preferred home (low conflict) |
 |----|------|--------------|-------------------------------|
-| **P1** | webimg | ChatGPT Web `gpt-image-2`, quota, inflight, durable cooldown, UI | `backend/internal/service/openaiimages/**`, `openai_web_images_*.go`, migration `177_*` |
+| **P1** | Web shadows | ChatGPT Web protocol, image-only shadow routing and parent quota | `backend/internal/service/openaiimages/**`, shadow adapters |
 | **P2** | grok | **Upstream-owned from v0.1.161 onward; do not replay fork Grok patches** | N/A |
 | **P3** | infra | graceful drain, GHCR release defaults, `v99.*-plus.N` tags, upstream-sync | `.github/**`, `deploy/upstream-sync/**`, small `main` drain |
-| **P4** | observ/capacity | text vs image concurrency accounting when webimg enabled | `group_capacity_service.go`, capacity UI cells |
+| **P4** | capacity | Account concurrency classified by account purpose | `group_capacity_service.go`, capacity UI |
 | **P5** | kiro | Kiro CodeWhisperer platform (chat, token, sticky+conversation cache) | `service/kiro_*.go`, `account_kiro.go`, `pkg/kiroeventstream/`, `handler/kiro_*.go`, `routes/kiro_admin.go` |
 
 **Rules**
@@ -52,27 +52,13 @@ Grok compatibility files, settings toggles, or free-usage cooldown patches.
 When a sync conflict touches Grok, prefer upstream unless the user explicitly
 approves a new fork-only Grok patch.
 
-### P1 — Web images
+### P1 — Web image shadows
 
-| Hook | File / area | Must contain / behavior |
-|------|-------------|-------------------------|
-| Driver package | `backend/internal/service/openaiimages/**` | isolated webdriver + quota parse |
-| Service | `openai_web_images_service.go` | inflight + cooldown (DB truth + cache) |
-| Multipart aliases | `openai_images.go` | edits accept `image`, `image[]`, `image[0]`, `image_0` style uploads |
-| Admin | `admin_account.go` UpdateAccount | preserves `openai_web_images` when extra omits key |
-| Path select | `openai_images_legacy_web.go` / images handler | `UsesOpenAIWebImagesPath` / legacy web path |
-| Chat bridge | `openai_chat_completions.go`, `openai_chat_image_bridge.go` | `tryChatCompletionsImageBridge` before GPT image endpoint guard; temporary path rewrite to `/v1/images/generations` or `/v1/images/edits` |
-| Scheduler | `openai_account_scheduler.go` | web image path does **not** consume text concurrency slots; filters `IsWebImageRateLimited` and `IsInflightFull` |
-| Durable RL | **`account_repo_webimg.go`** + `migrations/177_add_web_image_rate_limit.sql` | `SetWebImageRateLimited` / `ClearWebImageRateLimit` / `attachWebImageRateLimits` / capacity list |
-| Hot hook only | `account_repo.go` | one call: `attachWebImageRateLimits` after account load |
-| Clear RL | `ratelimit_service.go` | `ClearRateLimit` also clears web image DB cooldown (1 call) |
-| Account helpers | **`account_webimg.go`** | `IsWebImageRateLimited`, `IsSchedulableIgnoringTextRateLimit` (fields stay on `account.go`) |
-| Scheduler slot | **`openai_account_scheduler_webimg.go`** | `acquireAccountSlotForSchedule` skips text slots for web path; `isWebImageInflightFullForRequest` skips saturated web accounts |
-| Hot scheduler | `openai_account_scheduler.go` | `accountBlockedByWebImageCooldown(...)` + text-RL bypass call |
-| Default | `gateway.openai_web_images.default_enabled` + optional account `extra.openai_web_images.enabled` | global default (env `GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED`); account key only when present (inherit / force on / force off) |
-| Bulk admin | `openai_web_images_service.go`, `frontend/src/api/admin/accounts.ts` | bulk max default `5000`, backend concurrent patch/probe, frontend chunks large selections |
-
-
+The old account-level Web switches and separate inflight mechanism have been
+removed from this development baseline. The protocol driver is retained as an
+isolated dependency. See `WEB_IMAGE_SHADOWS.md` for the replacement contract.
+Do not reintroduce legacy control-plane hooks when merging upstream or old patches.
+Published migration 177 must remain byte-identical.
 
 ### P5 — Kiro platform
 
@@ -140,10 +126,8 @@ Account/gateway import cycles; EventStream decoder is the only isolated package
 
 ### P4 — Capacity split
 
-| Hook | Requirement |
-|------|-------------|
-| Group capacity | image max/used includes text-RL accounts that still can serve webimg |
-| Text slots | webimg generations do not inflate text `current_concurrency` |
+Web shadows will use the normal account concurrency service. Capacity reports
+must classify accounts by purpose, without a second Web inflight store.
 
 ---
 
@@ -192,8 +176,8 @@ chore(fork): hooks docs + VERSION  # P3 docs/tooling
 
 ```text
 [ ] check-fork-hooks.sh PASS
-[ ] P1: openaiimages package present; webimg default-off
-[ ] P1: migration 177 columns still attached on account load
+[ ] P1: protocol package present; no Web route without a Web shadow
+[ ] P1: published migration 177 remains immutable
 [ ] P3: VERSION / tag is v99.*-plus.*
 [ ] No second full rewrite of upstream Grok gateway
 [ ] Tests: unit tags for touched service tests
@@ -207,9 +191,6 @@ chore(fork): hooks docs + VERSION  # P3 docs/tooling
 
 - `backend/internal/service/openaiimages/**`
 - `backend/internal/service/openai_web_images_*.go`
-- `backend/internal/repository/account_repo_webimg.go`
-- `backend/internal/service/account_webimg.go`
-- `backend/internal/service/openai_account_scheduler_webimg.go`
 - `docs/FORK_*.md`, `docs/OPENAI_WEB_IMAGES.md`
 - `deploy/upstream-sync/**`
 
@@ -238,14 +219,8 @@ When adding fork behavior:
 4. After moving logic out of a hot file, update `check-fork-hooks.sh` in the **same commit**.
 5. Do not leave “temporary” copies of the same function in both hot and fork files.
 
-Already extracted (do not re-inline):
-
-| Logic | Fork file |
-|-------|-----------|
-| Webimg DB cooldown + capacity SQL | `repository/account_repo_webimg.go` |
-| Account webimg schedule helpers | `service/account_webimg.go` |
-| Scheduler text-slot skip | `service/openai_account_scheduler_webimg.go` |
-| Web driver | `service/openaiimages/**` |
+Retained protocol boundary: `backend/internal/service/openaiimages/webdriver/`.
+The replacement control-plane invariants are documented in `WEB_IMAGE_SHADOWS.md`.
 
 ## 8. OpenAI repeated capacity cooldown (default off)
 
