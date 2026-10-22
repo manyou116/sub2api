@@ -96,12 +96,24 @@ func TestCapacityCooldownSettingDefaultsValidationAndImmediateUpdate(t *testing.
 	v, err := svc.GetOpenAICapacityCooldownSettings(context.Background())
 	require.NoError(t, err)
 	require.False(t, v.Enabled)
+	require.False(t, v.SlowFirstOutputEnabled)
+	require.Equal(t, 10, v.SlowFirstOutputSeconds)
+	require.Equal(t, 30, v.SlowFirstOutputHighEffortSeconds)
+	require.Equal(t, 2, v.SlowFirstOutputThreshold)
 	require.Equal(t, 1, v.FailureThreshold)
 	for _, change := range []func(*OpenAICapacityCooldownSettings){
 		func(v *OpenAICapacityCooldownSettings) { v.WindowSeconds = 0 }, func(v *OpenAICapacityCooldownSettings) { v.WindowSeconds = 301 },
 		func(v *OpenAICapacityCooldownSettings) { v.FailureThreshold = 0 }, func(v *OpenAICapacityCooldownSettings) { v.FailureThreshold = 101 },
 		func(v *OpenAICapacityCooldownSettings) { v.CooldownSeconds = 0 }, func(v *OpenAICapacityCooldownSettings) { v.MaxCooldownSeconds = 1 },
 		func(v *OpenAICapacityCooldownSettings) { v.MaxCooldownSeconds = 7201 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputSeconds = 0 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputSeconds = 301 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputHighEffortSeconds = 9 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputHighEffortSeconds = 601 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputWindowSeconds = 0 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputWindowSeconds = 301 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputThreshold = 0 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputThreshold = 101 },
 	} {
 		bad := v
 		change(&bad)
@@ -137,6 +149,9 @@ func TestCapacityCooldownLegacyRatioIsIgnoredAndSavedCountsArePreserved(t *testi
 		require.Equal(t, 120, got.WindowSeconds)
 		require.Equal(t, 600, got.CooldownSeconds)
 		require.Equal(t, 7200, got.MaxCooldownSeconds)
+		require.False(t, got.SlowFirstOutputEnabled, "upgrades must not enable latency protection")
+		require.Equal(t, 10, got.SlowFirstOutputSeconds)
+		require.Equal(t, 2, got.SlowFirstOutputThreshold)
 		require.NoError(t, svc.SetOpenAICapacityCooldownSettings(context.Background(), got))
 		require.NotContains(t, repo.data[openAICapacityCooldownSettingKey], "failure_rate_percent")
 	}

@@ -57,6 +57,7 @@ func TestCapacityCooldownAdminSettingsContract(t *testing.T) {
 	require.Equal(t, service.DefaultOpenAICapacityCooldownSettings(), decode(call(http.MethodGet, "")))
 	want := service.DefaultOpenAICapacityCooldownSettings()
 	want.Enabled, want.SwitchAccountOnOverload, want.CooldownSeconds = true, false, 120
+	want.SlowFirstOutputEnabled, want.SlowFirstOutputSeconds, want.SlowFirstOutputThreshold = true, 15, 1
 	body, err := json.Marshal(want)
 	require.NoError(t, err)
 	require.Equal(t, want, decode(call(http.MethodPut, string(body))))
@@ -67,7 +68,9 @@ func TestCapacityCooldownAdminSettingsContract(t *testing.T) {
 	legacyBody := strings.TrimSuffix(string(body), "}") + `,"failure_rate_percent":50}`
 	require.Equal(t, want, decode(call(http.MethodPut, legacyBody)), "old clients may still send an ignored ratio")
 	require.JSONEq(t, string(body), repo.raw)
-	for _, bad := range []string{`{`, `{"window_seconds":0}`, `{"failure_threshold":0}`, `{"failure_threshold":101}`, `{"cooldown_seconds":601,"max_cooldown_seconds":600}`, `{"max_cooldown_seconds":7201}`} {
+	for _, bad := range []string{`{`, `{"window_seconds":0}`, `{"failure_threshold":0}`, `{"failure_threshold":101}`, `{"cooldown_seconds":601,"max_cooldown_seconds":600}`, `{"max_cooldown_seconds":7201}`,
+		`{"slow_first_output_seconds":0}`, `{"slow_first_output_high_effort_seconds":601}`, `{"slow_first_output_seconds":20,"slow_first_output_high_effort_seconds":10}`,
+		`{"slow_first_output_window_seconds":301}`, `{"slow_first_output_threshold":0}`, `{"slow_first_output_threshold":101}`} {
 		rec := call(http.MethodPut, bad)
 		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 		require.JSONEq(t, string(body), repo.raw, "invalid input must not overwrite persisted settings")

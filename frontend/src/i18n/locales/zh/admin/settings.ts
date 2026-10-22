@@ -1061,8 +1061,8 @@ export default {
         saveFailed: '保存过载冷却设置失败'
       },
       capacityCooldown: {
-        title: 'OpenAI 过载回避',
-        description: 'OAuth 文本请求在窗口内过载次数达到阈值时，整号进入“临时不可调度”，暂停所有文本模型，Web 生图除外。可在账号后台筛选、查看和恢复，独立于 429 配额限流。默认关闭。',
+        title: 'OpenAI 过载与首字慢回避',
+        description: '过载、首字慢分别开关和计数，任一规则达到阈值后整号进入“临时不可调度”，暂停所有文本模型，Web 生图除外。可在账号后台筛选、查看原因和恢复。默认关闭。',
         enabled: '启用过载保护',
         switchAccount: '过载时优先换账号重试',
         switchHint: '仅在尚未输出有效内容时换号，沿用现有换号次数上限；不重复提交已经输出内容的请求。',
@@ -1071,6 +1071,13 @@ export default {
         cooldown_seconds: '首次回避时长（秒）',
         max_cooldown_seconds: '最大回避时长（秒，不超过 7200）',
         recoveryHint: '设为 1 时，一次过载即回避；同一请求的重试只计一次，成功请求不稀释其他过载次数。冷却按首次时长的 1、2、5、10 倍递增并略微错开；到期后逐个验证三个真实请求再恢复，未恢复则继续冷却。',
+        slowEnabled: '启用首字慢回避',
+        slowHint: '从实际发送上游请求起，等待首段非空文本、思考或工具调用内容。超时记一次，即使最终成功也保留；当前请求继续执行，不因本规则取消或换号。仅统计 HTTP 上游 SSE，普通 JSON 和 WebSocket 不计数。',
+        slow_first_output_seconds: '首字等待阈值（秒，1–300）',
+        slow_first_output_high_effort_seconds: '高思考强度阈值（秒，high / xhigh / max）',
+        slow_first_output_window_seconds: '首字慢统计窗口（秒，1–300）',
+        slow_first_output_threshold: '首字慢次数阈值（1–100）',
+        slowRecoveryHint: '设为 1 时，一次首字慢即回避。与过载共用下方回避时长和渐进冷却；恢复验证须成功且首字达标。心跳和空事件不算首字，不计本地排队；首字慢后的同一次首字超时不再重复计入流超时处罚，已有硬超时与换号上限仍生效。',
         loadFailed: '加载过载回避设置失败',
         saved: '过载回避设置已保存',
         saveFailed: '保存过载回避设置失败'

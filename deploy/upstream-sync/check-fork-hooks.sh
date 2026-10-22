@@ -264,6 +264,15 @@ need_rg "swarm caddy routes to task DNS" \
   deploy/Caddyfile.swarm-local
 
 echo "-- OpenAI capacity cooldown --"
+need_file backend/internal/service/openai_slow_first_output.go
+need_rg "slow first-output metadata on native Responses" \
+  "withOpenAISlowFirstOutputMetadata" backend/internal/service/openai_gateway_forward.go
+need_rg "slow first-output metadata on OAuth passthrough" \
+  "withOpenAISlowFirstOutputMetadata" backend/internal/service/openai_gateway_passthrough.go
+need_rg "slow first-output observer on common HTTP dispatch" \
+  "startOpenAISlowFirstOutput" backend/internal/service/openai_plugin_transport.go
+need_rg "slow first-output owns pre-output timeout penalties" \
+  "openAISlowFirstOutputOwnsTimeout" backend/internal/service/ratelimit_service.go
 need_file backend/internal/service/openai_capacity_cooldown.go
 need_file backend/internal/repository/openai_capacity_cooldown_cache.go
 need_rg "capacity scheduler wrapper retains original flow" \

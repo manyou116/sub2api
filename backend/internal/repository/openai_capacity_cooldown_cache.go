@@ -14,14 +14,14 @@ import (
 func capacityKeys(accountID int64, _ string) []string {
 	prefix := "openai_capacity:{account_text_v1}:"
 	key := prefix + strconv.FormatInt(accountID, 10)
-	return []string{key, key + ":events", key + ":failures", key + ":successes", prefix + "blocked"}
+	return []string{key, key + ":events", key + ":failures", key + ":successes", prefix + "blocked", key + ":slow"}
 }
 
 var capacityCooldownScript = redis.NewScript(`
 local clock = redis.call('TIME')
 local now = tonumber(clock[1])*1000 + math.floor(tonumber(clock[2])/1000)
 local op, account, id = ARGV[1], ARGV[2], ARGV[3]
-local state, events, failures, successes, blocked = unpack(KEYS)
+local state, events, failures, successes, blocked, slow = unpack(KEYS)
 if op == 'blocked' then
   return redis.call('ZRANGEBYSCORE', blocked, now+1, '+inf')
 end
@@ -40,7 +40,7 @@ if op == 'reset' then
   redis.call('HDEL',state,'owner','lease')
   redis.call('EXPIRE',state,14400)
   redis.call('ZREM',blocked,account)
-  redis.call('DEL',events,failures,successes)
+  redis.call('DEL',events,failures,successes,slow)
   return result(1,0,0)
 end
 if op == 'release' then
@@ -78,11 +78,11 @@ if phase == 1 then
       generation = generation+1
       level = math.max(0,level-1)
       redis.call('HSET',state,'phase',0,'generation',generation,'level',level,'recovered',0)
-      redis.call('DEL',events,failures,successes)
+      redis.call('DEL',events,failures,successes,slow)
     end
     return result(1,0,0)
   end
-  if outcome ~= 1 then return result(1,0,0) end
+  if outcome ~= 1 and outcome ~= 3 then return result(1,0,0) end
 end
 local window = tonumber(ARGV[6])*1000
 for _,key in ipairs({events,failures,successes}) do
@@ -98,7 +98,18 @@ elseif outcome == 1 and not redis.call('ZSCORE',successes,id) then
 end
 for _,key in ipairs({events,failures,successes}) do redis.call('PEXPIRE',key,window+60000) end
 local n, f = redis.call('ZCARD',events), redis.call('ZCARD',failures)
-if phase == 1 or f >= tonumber(ARGV[7]) then
+local capacity_trip = f >= tonumber(ARGV[7])
+local slow_trip = false
+-- A successful completion never erases a slow first-output event.
+if outcome == 3 then
+  local slow_window = tonumber(ARGV[10])*1000
+  redis.call('ZREMRANGEBYSCORE',slow,'-inf',now-slow_window)
+  redis.call('ZADD',slow,'NX',now,id)
+  redis.call('PEXPIRE',slow,slow_window+60000)
+  f = redis.call('ZCARD',slow)
+  slow_trip = f >= tonumber(ARGV[11])
+end
+if phase == 1 or capacity_trip or slow_trip then
   level = math.min(level+1,4)
   local scale = ({1,2,5,10})[level]
   local jitter = (90 + tonumber(string.sub(redis.sha1hex(state..tostring(now)),1,6),16)%21)/100
@@ -109,7 +120,7 @@ if phase == 1 or f >= tonumber(ARGV[7]) then
   redis.call('EXPIRE',state,14400)
   redis.call('ZADD',blocked,until_ms,account)
   redis.call('EXPIRE',blocked,14400)
-  redis.call('DEL',events,failures,successes)
+  redis.call('DEL',events,failures,successes,slow)
   return result(0,0,1,f,n)
 end
 return result(1,0,0,f,n)
@@ -133,7 +144,8 @@ func (c *tempUnschedCache) AdmitOpenAICapacity(ctx context.Context, accountID in
 }
 
 func (c *tempUnschedCache) ObserveOpenAICapacity(ctx context.Context, accountID int64, model, id string, generation int64, outcome int, v service.OpenAICapacityCooldownSettings) (service.OpenAICapacityDecision, error) {
-	return c.capacityDecision(ctx, accountID, model, "record", id, generation, outcome, v.WindowSeconds, v.FailureThreshold, v.CooldownSeconds, v.MaxCooldownSeconds)
+	return c.capacityDecision(ctx, accountID, model, "record", id, generation, outcome, v.WindowSeconds, v.FailureThreshold, v.CooldownSeconds, v.MaxCooldownSeconds,
+		v.SlowFirstOutputWindowSeconds, v.SlowFirstOutputThreshold)
 }
 
 func (c *tempUnschedCache) ReleaseOpenAICapacity(ctx context.Context, accountID int64, model, id string, generation int64) error {

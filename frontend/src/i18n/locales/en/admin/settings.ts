@@ -1067,8 +1067,8 @@ export default {
         saveFailed: 'Failed to save overload cooldown settings'
       },
       capacityCooldown: {
-        title: 'OpenAI overload cooldown',
-        description: 'Pause all text models on an OAuth account when overloads reach the count threshold. The account appears under Temporarily unschedulable for filtering, details and recovery. Web image generation remains available. Independent of 429 quotas; disabled by default.',
+        title: 'OpenAI overload and slow first-output cooldown',
+        description: 'Overload and slow first output have separate switches and counters. Either rule can pause all text models on an OAuth account under Temporarily unschedulable for filtering, reasons and recovery. Web images remain available. Disabled by default.',
         enabled: 'Enable overload protection',
         switchAccount: 'Prefer another account on overload',
         switchHint: 'Switch only before meaningful output, using the existing account-switch limit. Requests with output are not replayed.',
@@ -1077,6 +1077,13 @@ export default {
         cooldown_seconds: 'Initial cooldown (seconds)',
         max_cooldown_seconds: 'Maximum cooldown (seconds, up to 7200)',
         recoveryHint: 'Set to 1 to cool down on the first overload. Retries count once per request; successful requests do not dilute other overloads. Cooldowns grow by 1, 2, 5 and 10 times the initial duration with slight jitter. Afterward, verify three real requests sequentially before restoring traffic; another overload restarts the cooldown.',
+        slowEnabled: 'Enable slow first-output cooldown',
+        slowHint: 'Measure from upstream dispatch to nonempty text, reasoning or tool-call content. Crossing the threshold counts even if the request later succeeds. The current request continues without cancellation or switching by this rule. Covers HTTP upstream SSE; plain JSON and WebSocket are excluded.',
+        slow_first_output_seconds: 'First-output threshold (seconds, 1–300)',
+        slow_first_output_high_effort_seconds: 'High-effort threshold (seconds, high / xhigh / max)',
+        slow_first_output_window_seconds: 'Slow first-output window (seconds, 1–300)',
+        slow_first_output_threshold: 'Slow first-output count threshold (1–100)',
+        slowRecoveryHint: 'Set to 1 to pause on the first slow request. Shares cooldown durations and escalation with overloads. Recovery requires success and timely content. Heartbeats, empty events and local queueing are excluded. The same pre-output timeout does not also incur a stream-timeout penalty; existing hard deadlines and switch limits still apply.',
         loadFailed: 'Failed to load overload cooldown settings',
         saved: 'Overload cooldown settings saved',
         saveFailed: 'Failed to save overload cooldown settings'

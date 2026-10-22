@@ -12,7 +12,10 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 const defaults = {
   enabled: false, switch_account_on_overload: true, window_seconds: 60,
-  failure_threshold: 1, cooldown_seconds: 60, max_cooldown_seconds: 600
+  failure_threshold: 1, cooldown_seconds: 60, max_cooldown_seconds: 600,
+  slow_first_output_enabled: false, slow_first_output_seconds: 10,
+  slow_first_output_high_effort_seconds: 30, slow_first_output_window_seconds: 60,
+  slow_first_output_threshold: 2
 }
 
 describe('OpenAI capacity cooldown settings', () => {
@@ -26,6 +29,7 @@ describe('OpenAI capacity cooldown settings', () => {
     const wrapper = mount(OpenAICapacityCooldownSettings)
     await flushPromises()
     expect(wrapper.get('#capacity-enabled').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#capacity-slow-enabled').attributes('aria-checked')).toBe('false')
     expect(wrapper.find('input').exists()).toBe(false)
     await wrapper.get('#capacity-enabled').trigger('click')
     await wrapper.get('#capacity-switch').trigger('click')
@@ -37,10 +41,50 @@ describe('OpenAI capacity cooldown settings', () => {
     await wrapper.get('[data-testid="capacity-save"]').trigger('click')
     await flushPromises()
     expect(mocks.save).toHaveBeenCalledWith({
+      ...defaults,
       enabled: true, switch_account_on_overload: false, window_seconds: 120,
       failure_threshold: 5, cooldown_seconds: 90, max_cooldown_seconds: 900
     })
     expect(mocks.success).toHaveBeenCalledOnce()
+  })
+
+  it('can enable latency protection with overload disabled and save a one-hit threshold', async () => {
+    const wrapper = mount(OpenAICapacityCooldownSettings)
+    await flushPromises()
+    await wrapper.get('#capacity-slow-enabled').trigger('click')
+    expect(wrapper.find('#capacity-failure_threshold').exists()).toBe(false)
+    expect(wrapper.find('#capacity-cooldown_seconds').exists()).toBe(true)
+    await wrapper.get('#capacity-slow_first_output_seconds').setValue(12)
+    await wrapper.get('#capacity-slow_first_output_high_effort_seconds').setValue(45)
+    await wrapper.get('#capacity-slow_first_output_window_seconds').setValue(120)
+    await wrapper.get('#capacity-slow_first_output_threshold').setValue(1)
+    await wrapper.get('[data-testid="capacity-save"]').trigger('click')
+    await flushPromises()
+    expect(mocks.save).toHaveBeenCalledWith({
+      ...defaults, slow_first_output_enabled: true, slow_first_output_seconds: 12,
+      slow_first_output_high_effort_seconds: 45, slow_first_output_window_seconds: 120,
+      slow_first_output_threshold: 1
+    })
+  })
+
+  it('validates latency counts, windows and high-effort thresholds before saving', async () => {
+    mocks.load.mockResolvedValue({ ...defaults, slow_first_output_enabled: true })
+    const wrapper = mount(OpenAICapacityCooldownSettings)
+    await flushPromises()
+    for (const [key, invalid, valid] of [
+      ['slow_first_output_seconds', 0, 10],
+      ['slow_first_output_high_effort_seconds', 9, 30],
+      ['slow_first_output_window_seconds', 301, 60],
+      ['slow_first_output_threshold', 0, 1]
+    ] as const) {
+      await wrapper.get(`#capacity-${key}`).setValue(invalid)
+      await wrapper.get('[data-testid="capacity-save"]').trigger('click')
+      expect(mocks.save).not.toHaveBeenCalled()
+      await wrapper.get(`#capacity-${key}`).setValue(valid)
+    }
+    await wrapper.get('[data-testid="capacity-save"]').trigger('click')
+    await flushPromises()
+    expect(mocks.save).toHaveBeenCalledOnce()
   })
 
   it('accepts a single overload and rejects thresholds outside 1–100', async () => {

@@ -7,6 +7,11 @@ export interface OpenAICapacityCooldownSettings {
   failure_threshold: number
   cooldown_seconds: number
   max_cooldown_seconds: number
+  slow_first_output_enabled: boolean
+  slow_first_output_seconds: number
+  slow_first_output_high_effort_seconds: number
+  slow_first_output_window_seconds: number
+  slow_first_output_threshold: number
 }
 
 const path = '/admin/settings/openai-capacity-cooldown'

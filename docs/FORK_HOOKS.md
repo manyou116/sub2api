@@ -268,3 +268,10 @@ so delayed results cannot reapply an old DB pause. Quota, 429, images and
 WebSocket ingress do not generate capacity observations.
 Run `TestCapacityCooldown` in repository/service/admin/handler
 packages, plus the settings component tests, when replaying these hooks.
+
+The independent slow first-output rule reuses this text pause and recovery
+circuit, with its own rolling counter. Preserve the metadata hooks in both
+Responses request builders and the observer around `doOpenAIUpstream`, plus
+the pre-output timeout ownership check. Successful slow requests must retain
+their slow event; only a successful request with timely meaningful content may
+advance recovery while this rule is enabled. Run `TestSlowFirstOutput` too.

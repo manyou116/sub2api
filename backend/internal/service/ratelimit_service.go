@@ -2869,6 +2869,9 @@ func (s *RateLimitService) HandleStreamTimeout(ctx context.Context, account *Acc
 	if account == nil {
 		return false
 	}
+	if openAISlowFirstOutputOwnsTimeout(account) {
+		return false
+	}
 
 	// 获取系统设置
 	if s.settingService == nil {

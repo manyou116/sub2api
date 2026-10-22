@@ -24,11 +24,11 @@
             <Toggle id="capacity-switch" v-model="form.switch_account_on_overload" />
           </div>
           <div class="grid gap-4 sm:grid-cols-2">
-            <div v-for="field in fields" :key="field.key">
+            <div v-for="field in overloadFields" :key="field.key">
               <label :for="`capacity-${field.key}`" class="mb-2 block text-sm font-medium">{{ t(`${prefix}.${field.key}`) }}</label>
               <input
                 :id="`capacity-${field.key}`" v-model.number="form[field.key]" type="number" class="input"
-                :min="field.key === 'max_cooldown_seconds' ? form.cooldown_seconds : field.min"
+                :min="field.min"
                 :max="field.max" step="1" required
                 @keydown.enter.stop.prevent="save"
               />
@@ -36,6 +36,36 @@
           </div>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(`${prefix}.recoveryHint`) }}</p>
         </template>
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label for="capacity-slow-enabled" class="text-sm font-medium">{{ t(`${prefix}.slowEnabled`) }}</label>
+            <p class="mt-1 text-xs text-gray-500">{{ t(`${prefix}.slowHint`) }}</p>
+          </div>
+          <Toggle id="capacity-slow-enabled" v-model="form.slow_first_output_enabled" />
+        </div>
+        <template v-if="form.slow_first_output_enabled">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div v-for="field in slowFields" :key="field.key">
+              <label :for="`capacity-${field.key}`" class="mb-2 block text-sm font-medium">{{ t(`${prefix}.${field.key}`) }}</label>
+              <input
+                :id="`capacity-${field.key}`" v-model.number="form[field.key]" type="number" class="input"
+                :min="field.key === 'slow_first_output_high_effort_seconds' ? form.slow_first_output_seconds : field.min"
+                :max="field.max" step="1" required @keydown.enter.stop.prevent="save"
+              />
+            </div>
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(`${prefix}.slowRecoveryHint`) }}</p>
+        </template>
+        <div v-if="form.enabled || form.slow_first_output_enabled" class="grid gap-4 sm:grid-cols-2">
+          <div v-for="field in cooldownFields" :key="field.key">
+            <label :for="`capacity-${field.key}`" class="mb-2 block text-sm font-medium">{{ t(`${prefix}.${field.key}`) }}</label>
+            <input
+              :id="`capacity-${field.key}`" v-model.number="form[field.key]" type="number" class="input"
+              :min="field.key === 'max_cooldown_seconds' ? form.cooldown_seconds : 1"
+              max="7200" step="1" required @keydown.enter.stop.prevent="save"
+            />
+          </div>
+        </div>
         <button type="button" data-testid="capacity-save" class="btn btn-primary" :disabled="loading || loadFailed || saving" @click="save">
           {{ saving ? t('common.saving') : t('common.save') }}
         </button>
@@ -60,13 +90,24 @@ const loadFailed = ref(false)
 const saving = ref(false)
 const form = reactive({
   enabled: false, switch_account_on_overload: true, window_seconds: 60,
-  failure_threshold: 1, cooldown_seconds: 60, max_cooldown_seconds: 600
+  failure_threshold: 1, cooldown_seconds: 60, max_cooldown_seconds: 600,
+  slow_first_output_enabled: false, slow_first_output_seconds: 10,
+  slow_first_output_high_effort_seconds: 30, slow_first_output_window_seconds: 60,
+  slow_first_output_threshold: 2
 })
-const fields = [
+const overloadFields = [
   { key: 'window_seconds', min: 1, max: 300 },
-  { key: 'failure_threshold', min: 1, max: 100 },
-  { key: 'cooldown_seconds', min: 1, max: 7200 },
-  { key: 'max_cooldown_seconds', min: 1, max: 7200 }
+  { key: 'failure_threshold', min: 1, max: 100 }
+] as const
+const slowFields = [
+  { key: 'slow_first_output_seconds', min: 1, max: 300 },
+  { key: 'slow_first_output_high_effort_seconds', min: 1, max: 600 },
+  { key: 'slow_first_output_window_seconds', min: 1, max: 300 },
+  { key: 'slow_first_output_threshold', min: 1, max: 100 }
+] as const
+const cooldownFields = [
+  { key: 'cooldown_seconds' },
+  { key: 'max_cooldown_seconds' }
 ] as const
 
 async function load() {
