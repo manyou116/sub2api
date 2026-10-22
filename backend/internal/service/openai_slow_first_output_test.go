@@ -275,11 +275,20 @@ func TestSlowFirstOutputPendingProbeSettlesBeforeCancellationReleasesLease(t *te
 	selection := &AccountSelectionResult{Account: &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth}}
 	require.True(t, svc.admitOpenAICapacity(svc.withOpenAICapacityCooldown(ctx, false), selection, "gpt-6.1-sol"))
 	a := selection.Account.capacityAttempt
+	o := slowOutputObserver(t, ctx, selection.Account, time.Hour)
+	o.mu.Lock() // Model a timer that passed its cancellation check but has not published its result yet.
 	pending := make(chan struct{})
+	cancel()
+	select {
+	case <-store.released:
+		o.mu.Unlock()
+		t.Fatal("cancellation released the lease while the slow timer was still deciding")
+	case <-time.After(20 * time.Millisecond):
+	}
 	a.slowMu.Lock()
 	a.slowRecordDone = pending
 	a.slowMu.Unlock()
-	cancel()
+	o.mu.Unlock()
 	select {
 	case <-store.released:
 		t.Fatal("cancellation raced ahead of a pending slow-probe result")

@@ -182,6 +182,12 @@ func (s *OpenAIGatewayService) admitOpenAICapacity(ctx context.Context, selectio
 		context.AfterFunc(ctx, func() {
 			a := account.capacityAttempt
 			a.slowMu.Lock()
+			observer := a.slowOutput
+			a.slowMu.Unlock()
+			if observer != nil {
+				observer.finish(false) // Join any timer already recording before cancellation.
+			}
+			a.slowMu.Lock()
 			pending := a.slowRecordDone
 			a.slowMu.Unlock()
 			if pending != nil {
