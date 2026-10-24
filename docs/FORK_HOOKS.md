@@ -7,7 +7,7 @@
 
 Related docs:
 
-- `AGENTS.md` — hard rules (small diffs, default-off, isolated files)
+- `AGENTS.md` — hard rules (small diffs, reversible changes, isolated files)
 - `docs/FORK_MAINTENANCE.md` — tags / rebuild routine
 - `docs/FORK_DELTA.md` — historical large-delta notes
 - `docs/OPENAI_WEB_IMAGES.md` — webimg product behavior

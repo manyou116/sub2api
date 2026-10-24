@@ -16,15 +16,16 @@ Preserve `.agents/skills/` when replaying the fork onto a new upstream base.
 # AI Development Rules
 
 This fork must stay easy to rebase onto upstream. Keep every change small,
-isolated, reversible, and off by default unless the user explicitly asks for
-different behavior.
+isolated and reversible. Choose activation behavior according to the feature
+and the user's requirements; fork-only features do not require a default-off switch.
 
 ## Hard Rules
 
 1. Do not rewrite upstream behavior unless explicitly requested.
 2. Prefer config switches, account `extra` fields, channel `features_config`,
    or small adapters over editing core flow.
-3. New fork-only features must default to off.
+3. Choose feature switches only when operationally useful; an explicit UI action
+   can be the entry point for on-demand features.
 4. Do not add dependencies unless the user explicitly approves them.
 5. Do not touch more than 3 production files for one feature unless the user
    approves the larger scope first.
@@ -40,12 +41,13 @@ different behavior.
 
 Use this shape whenever possible:
 
-1. one clear config, account `extra`, or channel feature flag
+1. one clear entry point; use a config, account `extra`, or channel feature flag
+   when the feature needs an operational switch
 2. one small decision point in the existing flow
 3. one isolated helper/service/file for fork behavior
 4. one direct test for the new behavior
 
-Example:
+Example for a feature that needs an operational switch:
 
 ```go
 if account.IsForkFeatureEnabled() {
