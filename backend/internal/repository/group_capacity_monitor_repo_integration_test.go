@@ -138,11 +138,14 @@ func TestGroupCapacityMonitorReadSnapshot_RealSQLScopesAndReadOnly(t *testing.T)
 	require.InDelta(t, 2, found.Post5Cost, 1e-8)
 	require.InDelta(t, 2, found.Post7Cost, 1e-8)
 	var pool, route, via, shared float64
+	var poolRequests, routeRequests int64
 	for _, bin := range snapshot.History {
 		pool += bin.PoolAccountCost
 		route += bin.GroupRouteCost
 		via += bin.PoolViaGroupCost
 		shared += bin.PoolOtherCost
+		poolRequests += bin.PoolRequests
+		routeRequests += bin.GroupRouteRequests
 		require.False(t, bin.StartAt.Before(snapshot.AsOf.Truncate(time.Hour).Add(-7*24*time.Hour)))
 		require.False(t, bin.EndAt.After(snapshot.AsOf))
 	}
@@ -151,6 +154,9 @@ func TestGroupCapacityMonitorReadSnapshot_RealSQLScopesAndReadOnly(t *testing.T)
 	require.InDelta(t, 6, via, 1e-8)
 	require.InDelta(t, 6, shared, 1e-8)
 	require.InDelta(t, pool, via+shared, 1e-8)
+	require.Equal(t, int64(3), poolRequests, "the pool's own-group request must appear only once across UNION ALL branches")
+	require.Equal(t, int64(2), routeRequests, "route totals include the overlapping current member and the route-only former member once each")
+	require.InDelta(t, 1300, snapshot.UnclassifiedCost, 1e-8, "image and Spark records stay in the pool's unclassified cost once")
 	var afterExtra string
 	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT extra::text FROM accounts WHERE id=$1", current.ID).Scan(&afterExtra))
 	var before, after any

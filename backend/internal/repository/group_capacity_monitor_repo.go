@@ -29,21 +29,25 @@ const capacityMonitorTextUsage = `ul.billing_mode = 'token'
 
 const capacityMonitorAccountCost = `COALESCE(ul.account_stats_cost,ul.total_cost) * COALESCE(ul.account_rate_multiplier,1)`
 
-func (r *groupCapacityMonitorRepository) ReadSnapshot(ctx context.Context, groupID int64, history time.Duration) (*service.GroupCapacityMonitorSnapshot, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+func (r *groupCapacityMonitorRepository) ReadSnapshot(ctx context.Context, groupID int64, history time.Duration) (_ *service.GroupCapacityMonitorSnapshot, err error) {
+	// Three bounded queries run sequentially in the same consistent snapshot.
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	stage := "begin snapshot"
+	defer func() { err = capacityMonitorSnapshotError(ctx, stage, err) }()
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(ctx, `SET LOCAL statement_timeout = '4500ms'`); err != nil {
+	if _, err = tx.ExecContext(ctx, `SET LOCAL statement_timeout = '8s'`); err != nil {
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx, `SET LOCAL lock_timeout = '1s'`); err != nil {
 		return nil, err
 	}
 	snapshot := &service.GroupCapacityMonitorSnapshot{Accounts: []service.CapacityMonitorAccount{}, History: []service.CapacityMonitorHistory{}, SharedUsage: []service.CapacityMonitorSharedUsage{}}
+	stage = "group"
 	err = tx.QueryRowContext(ctx, `SELECT transaction_timestamp(),name FROM groups WHERE id=$1 AND deleted_at IS NULL`, groupID).Scan(&snapshot.AsOf, &snapshot.GroupName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, service.ErrCapacityMonitorNotFound
@@ -51,28 +55,37 @@ func (r *groupCapacityMonitorRepository) ReadSnapshot(ctx context.Context, group
 	if err != nil {
 		return nil, err
 	}
+	stage = "member identities"
+	// Extract JSON identity fields once per account and aggregate only identities
+	// needed by this group, while retaining duplicates outside the current pool.
 	rows, err := tx.QueryContext(ctx, `
- WITH provider_identities AS MATERIALIZED (
- SELECT credentials->>'chatgpt_account_id' AS account_key,credentials->>'chatgpt_user_id' AS user_key,
- COALESCE(quota_dimension,'global') AS scope,COUNT(*) AS copies
- FROM accounts WHERE deleted_at IS NULL AND platform='openai' AND type='oauth' AND parent_account_id IS NULL
- AND COALESCE(credentials->>'chatgpt_account_id','')<>'' AND COALESCE(credentials->>'chatgpt_user_id','')<>''
- GROUP BY 1,2,3)
- SELECT a.id,a.platform,a.type,COALESCE(a.quota_dimension,'global'),a.parent_account_id,a.status,a.schedulable,
- a.expires_at,a.auto_pause_on_expired,a.rate_limit_reset_at,a.overload_until,a.temp_unschedulable_until,COALESCE(a.temp_unschedulable_reason,''),
- CASE WHEN COALESCE(a.credentials->>'chatgpt_account_id','')<>'' AND COALESCE(a.credentials->>'chatgpt_user_id','')<>''
- THEN md5((a.credentials->>'chatgpt_account_id')||chr(31)||(a.credentials->>'chatgpt_user_id')||chr(31)||COALESCE(a.quota_dimension,'global')) ELSE '' END,
- CASE WHEN COALESCE(a.credentials->>'plan_type','')<>'' THEN (a.credentials->>'plan_type')||'|'||a.rate_multiplier::text ELSE '' END,
+ WITH members AS MATERIALIZED (
+ SELECT a.id,a.platform,a.type,COALESCE(a.quota_dimension,'global') AS quota_dimension,a.parent_account_id,a.status,a.schedulable,
+ a.expires_at,a.auto_pause_on_expired,a.rate_limit_reset_at,a.overload_until,a.temp_unschedulable_until,COALESCE(a.temp_unschedulable_reason,'') AS temp_reason,
+ CASE WHEN COALESCE(f.chatgpt_account_id,'')<>'' AND COALESCE(f.chatgpt_user_id,'')<>''
+ THEN md5(f.chatgpt_account_id||chr(31)||f.chatgpt_user_id||chr(31)||COALESCE(a.quota_dimension,'global')) ELSE '' END AS identity_key,
+ CASE WHEN COALESCE(f.plan_type,'')<>'' THEN f.plan_type||'|'||a.rate_multiplier::text ELSE '' END AS plan,
  jsonb_build_object('codex_usage_updated_at',a.extra->'codex_usage_updated_at',
  'codex_5h_used_percent',a.extra->'codex_5h_used_percent','codex_7d_used_percent',a.extra->'codex_7d_used_percent',
  'codex_5h_reset_at',a.extra->'codex_5h_reset_at','codex_7d_reset_at',a.extra->'codex_7d_reset_at',
- 'codex_5h_window_minutes',a.extra->'codex_5h_window_minutes','codex_7d_window_minutes',a.extra->'codex_7d_window_minutes'),
- EXISTS(SELECT 1 FROM account_groups shared WHERE shared.account_id=a.id AND shared.group_id<>$1),
- COALESCE(identity.copies,0)>1
+ 'codex_5h_window_minutes',a.extra->'codex_5h_window_minutes','codex_7d_window_minutes',a.extra->'codex_7d_window_minutes') AS extra,
+ EXISTS(SELECT 1 FROM account_groups shared WHERE shared.account_id=a.id AND shared.group_id<>$1) AS shared
  FROM accounts a JOIN account_groups ag ON ag.account_id=a.id
- LEFT JOIN provider_identities identity ON identity.account_key=a.credentials->>'chatgpt_account_id'
- AND identity.user_key=a.credentials->>'chatgpt_user_id' AND identity.scope=COALESCE(a.quota_dimension,'global')
- WHERE ag.group_id=$1 AND a.deleted_at IS NULL ORDER BY a.id LIMIT 1001`, groupID)
+ CROSS JOIN LATERAL jsonb_to_record(CASE WHEN jsonb_typeof(a.credentials)='object' THEN a.credentials ELSE '{}'::jsonb END)
+ AS f(chatgpt_account_id text,chatgpt_user_id text,plan_type text)
+ WHERE ag.group_id=$1 AND a.deleted_at IS NULL ORDER BY a.id LIMIT 1001
+ ), needed AS MATERIALIZED (
+ SELECT DISTINCT identity_key FROM members WHERE platform='openai' AND type='oauth' AND parent_account_id IS NULL AND identity_key<>''
+ ), provider_keys AS MATERIALIZED (
+ SELECT md5(f.chatgpt_account_id||chr(31)||f.chatgpt_user_id||chr(31)||COALESCE(a.quota_dimension,'global')) AS identity_key
+ FROM accounts a CROSS JOIN LATERAL jsonb_to_record(CASE WHEN jsonb_typeof(a.credentials)='object' THEN a.credentials ELSE '{}'::jsonb END)
+ AS f(chatgpt_account_id text,chatgpt_user_id text)
+ WHERE a.deleted_at IS NULL AND a.platform='openai' AND a.type='oauth' AND a.parent_account_id IS NULL
+ AND COALESCE(f.chatgpt_account_id,'')<>'' AND COALESCE(f.chatgpt_user_id,'')<>'' AND EXISTS(SELECT 1 FROM needed)
+ ), duplicates AS MATERIALIZED (
+ SELECT p.identity_key,COUNT(*) AS copies FROM provider_keys p JOIN needed n ON n.identity_key=p.identity_key GROUP BY p.identity_key
+ )
+ SELECT m.*,COALESCE(d.copies,0)>1 FROM members m LEFT JOIN duplicates d ON d.identity_key=m.identity_key ORDER BY m.id`, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +112,7 @@ func (r *groupCapacityMonitorRepository) ReadSnapshot(ctx context.Context, group
 	if len(snapshot.Accounts) > 1000 {
 		return nil, service.ErrCapacityMonitorBudget
 	}
+	stage = "window costs"
 	if err = r.readMonitorWindowCosts(ctx, tx, snapshot); err != nil {
 		return nil, err
 	}
@@ -110,13 +124,28 @@ func (r *groupCapacityMonitorRepository) ReadSnapshot(ctx context.Context, group
 			ids = append(ids, a.ID)
 		}
 	}
+	stage = "history"
 	if err = r.readMonitorHistory(ctx, tx, snapshot, groupID, ids, start); err != nil {
 		return nil, err
 	}
+	stage = "commit"
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	return snapshot, nil
+}
+
+func capacityMonitorSnapshotError(ctx context.Context, stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pq.Error
+	if ctx.Err() != nil {
+		err = errors.Join(err, ctx.Err())
+	} else if errors.As(err, &pgErr) && pgErr.Code == "57014" {
+		err = errors.Join(err, context.DeadlineExceeded)
+	}
+	return fmt.Errorf("capacity monitor %s: %w", stage, err)
 }
 
 func (r *groupCapacityMonitorRepository) readMonitorWindowCosts(ctx context.Context, tx *sql.Tx, snapshot *service.GroupCapacityMonitorSnapshot) error {
@@ -182,15 +211,21 @@ func (r *groupCapacityMonitorRepository) readMonitorWindowCosts(ctx context.Cont
 }
 
 func (r *groupCapacityMonitorRepository) readMonitorHistory(ctx context.Context, tx *sql.Tx, snapshot *service.GroupCapacityMonitorSnapshot, groupID int64, ids []int64, start time.Time) error {
-	// Pool and route are deliberately independent predicates. The route includes
-	// former members, and the pool includes usage through every shared group.
-	query := `WITH records AS (
- SELECT ul.*,(` + capacityMonitorTextUsage + `) AS is_text,
- ul.account_id=ANY($1::bigint[]) AS in_pool,
+	// Pool IDs are already eligible, so only route-only former members require
+	// an account join. Excluding pool IDs keeps UNION ALL records disjoint.
+	query := `WITH records AS MATERIALIZED (
+ SELECT ul.created_at,ul.group_id,TRUE AS in_pool,(` + capacityMonitorTextUsage + `) AS is_text,
  (` + capacityMonitorAccountCost + `) AS account_cost
- FROM usage_logs ul LEFT JOIN accounts a ON a.id=ul.account_id
+ FROM usage_logs ul
  WHERE ul.created_at>=$2 AND ul.created_at<$3
- AND (ul.account_id=ANY($1::bigint[]) OR (ul.group_id=$4 AND a.platform='openai' AND a.type='oauth' AND a.parent_account_id IS NULL AND COALESCE(a.quota_dimension,'global')='global'))
+ AND ul.account_id=ANY($1::bigint[])
+ UNION ALL
+ SELECT ul.created_at,ul.group_id,FALSE AS in_pool,(` + capacityMonitorTextUsage + `) AS is_text,
+ (` + capacityMonitorAccountCost + `) AS account_cost
+ FROM usage_logs ul JOIN accounts a ON a.id=ul.account_id
+ WHERE ul.created_at>=$2 AND ul.created_at<$3 AND ul.group_id=$4
+ AND NOT(ul.account_id=ANY($1::bigint[]))
+ AND a.platform='openai' AND a.type='oauth' AND a.parent_account_id IS NULL AND COALESCE(a.quota_dimension,'global')='global'
  )
  SELECT date_trunc('hour',records.created_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket,group_id,COALESCE(g.name,''),
  COALESCE(SUM(account_cost) FILTER(WHERE in_pool AND is_text),0),

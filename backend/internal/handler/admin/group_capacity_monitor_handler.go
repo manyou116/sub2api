@@ -1,8 +1,10 @@
 package admin
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -35,6 +37,7 @@ func (h *GroupHandler) GetCapacityMonitor(c *gin.Context) {
 	}
 	key := fmt.Sprintf("%s:%d:%d:%d", service.CapacityMonitorModelVersion, id, history, horizon)
 	cache := h.capacityMonitorCache
+	started := time.Now()
 	entry, hit, err := cache.GetOrLoad(key, func() (any, error) { return h.capacityMonitor.Get(c.Request.Context(), id, history, horizon) })
 	if err != nil {
 		switch {
@@ -43,7 +46,12 @@ func (h *GroupHandler) GetCapacityMonitor(c *gin.Context) {
 		case errors.Is(err, service.ErrCapacityMonitorBudget):
 			response.ErrorWithDetails(c, http.StatusUnprocessableEntity, "Group exceeds capacity monitor query budget", "CAPACITY_MONITOR_BUDGET", nil)
 		default:
-			response.ErrorWithDetails(c, http.StatusServiceUnavailable, "Unable to load capacity monitor snapshot", "CAPACITY_MONITOR_UNAVAILABLE", nil)
+			slog.Error("group_capacity_monitor_snapshot_failed", "group_id", id, "history", history.String(), "horizon", horizon.String(), "elapsed_ms", time.Since(started).Milliseconds(), "error", err)
+			if errors.Is(err, context.DeadlineExceeded) {
+				response.ErrorWithDetails(c, http.StatusServiceUnavailable, "Capacity monitor query timed out; please retry", "CAPACITY_MONITOR_TIMEOUT", nil)
+			} else {
+				response.ErrorWithDetails(c, http.StatusServiceUnavailable, "Unable to load capacity monitor snapshot", "CAPACITY_MONITOR_UNAVAILABLE", nil)
+			}
 		}
 		return
 	}

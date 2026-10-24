@@ -2,6 +2,9 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -33,7 +36,13 @@ func TestCapacityMonitorHandlerMapsRepositoryErrors(t *testing.T) {
 	for _, test := range []struct {
 		err    error
 		status int
-	}{{service.ErrCapacityMonitorNotFound, 404}, {service.ErrCapacityMonitorBudget, 422}, {context.DeadlineExceeded, 503}} {
+		reason string
+	}{
+		{service.ErrCapacityMonitorNotFound, 404, ""},
+		{service.ErrCapacityMonitorBudget, 422, "CAPACITY_MONITOR_BUDGET"},
+		{fmt.Errorf("capacity monitor history: %w", context.DeadlineExceeded), 503, "CAPACITY_MONITOR_TIMEOUT"},
+		{errors.New("private database failure"), 503, "CAPACITY_MONITOR_UNAVAILABLE"},
+	} {
 		repo := &capacityMonitorHandlerRepo{err: test.err}
 		cfg := &config.Config{}
 		h := NewGroupHandlerWithCapacityMonitor(nil, nil, nil, cfg, service.NewGroupCapacityMonitorService(repo))
@@ -42,6 +51,14 @@ func TestCapacityMonitorHandlerMapsRepositoryErrors(t *testing.T) {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/groups/24/capacity-monitor", nil))
 		require.Equal(t, test.status, w.Code)
+		if test.reason != "" {
+			var body struct {
+				Reason string `json:"reason"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			require.Equal(t, test.reason, body.Reason)
+		}
+		require.NotContains(t, w.Body.String(), "private database failure")
 	}
 }
 
