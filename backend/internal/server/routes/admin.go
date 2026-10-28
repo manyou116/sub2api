@@ -334,6 +334,7 @@ func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		groups.GET("/all", h.Admin.Group.GetAll)
 		groups.GET("/usage-summary", h.Admin.Group.GetUsageSummary)
 		groups.GET("/capacity-summary", h.Admin.Group.GetCapacitySummary)
+		groups.GET("/:id/capacity-monitor", h.Admin.Group.GetCapacityMonitor)
 		groups.GET("/live-capability", h.Admin.Group.GetLiveCapability)
 		groups.PUT("/sort-order", h.Admin.Group.UpdateSortOrder)
 		groups.GET("/:id/model-allowlist-candidates", h.Admin.Group.GetGroupModelAllowlistCandidates)

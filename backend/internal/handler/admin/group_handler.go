@@ -25,6 +25,8 @@ type GroupHandler struct {
 	adminService         service.AdminService
 	dashboardService     *service.DashboardService
 	groupCapacityService *service.GroupCapacityService
+	capacityMonitor      *service.GroupCapacityMonitorService
+	capacityMonitorCache *snapshotCache
 	cfg                  *config.Config
 }
 

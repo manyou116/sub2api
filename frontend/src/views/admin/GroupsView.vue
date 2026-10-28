@@ -384,6 +384,15 @@
           <template #cell-actions="{ row }">
             <div class="flex items-center gap-1">
               <button
+                type="button"
+                data-testid="group-capacity-monitor"
+                @click="capacityMonitorGroup = row"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+              >
+                <Icon name="chart" size="sm" />
+                <span class="text-xs">{{ t('admin.groups.capacityMonitor.title') }}</span>
+              </button>
+              <button
                 @click="handleEdit(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
               >
@@ -4276,6 +4285,13 @@
       </template>
     </BaseDialog>
 
+    <GroupCapacityMonitorModal
+      v-if="capacityMonitorGroup"
+      :show="capacityMonitorGroup !== null"
+      :group="capacityMonitorGroup"
+      @close="capacityMonitorGroup = null"
+    />
+
     <!-- Group Rate Multipliers Modal -->
     <GroupRateMultipliersModal
       :show="showRateMultipliersModal"
@@ -4295,7 +4311,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, reactive, computed, onMounted, onUnmounted, watch, defineAsyncComponent } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
 import { useAuthStore } from "@/stores/auth";
@@ -4822,6 +4838,8 @@ type GroupUsageSummary = {
 
 const usageMap = ref<Map<number, GroupUsageSummary>>(new Map());
 const usageLoading = ref(false);
+const GroupCapacityMonitorModal = defineAsyncComponent(() => import("@/features/group-capacity-monitor/GroupCapacityMonitorModal.vue"));
+const capacityMonitorGroup = ref<AdminGroup | null>(null);
 const capacityMap = ref<
   Map<
     number,
