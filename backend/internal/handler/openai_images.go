@@ -163,6 +163,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
+	capacityExcluded := false
 	var lastFailoverErr *service.UpstreamFailoverError
 	stopJSONKeepalive := func() {}
 	jsonKeepaliveStarted := false
@@ -195,9 +196,14 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				}
 				message := cls.Message
 				if !cls.ModelNotFound {
-					message = "No available compatible accounts"
+					message = "No available image capacity or compatible accounts"
 				}
 				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
+				return
+			}
+			if capacityExcluded && errors.Is(err, service.ErrNoAvailableAccounts) {
+				markOpsRoutingCapacityLimited(c)
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "capacity_error", "No available image account capacity; retry later", streamStarted)
 				return
 			}
 			if lastFailoverErr != nil {
@@ -234,17 +240,26 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		reqLog.Debug("openai.images.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, parsed.Stream, &streamStarted, reqLog)
-		if slotResult == openAISlotAcquireProfitVetoed {
-			// Images 调度不装利润门，此分支实际不可达；防御性排除重选并受同一否决上限约束。
-			if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
-				h.handleOpenAIProfitVetoExhausted(c, streamStarted, reqLog, profitVetoCount)
+		// ChatGPT Web image path has its own inflight slots (web max_inflight).
+		// Do not consume text account concurrency so capacity UI stays split correctly.
+		var accountReleaseFunc func()
+		if h.gatewayService != nil && h.gatewayService.UsesOpenAIWebImagesPath(account) {
+			// Drop any text slot the scheduler may have acquired on fallback paths.
+			service.ReleaseAccountTextSlotIfWebImages(h.gatewayService, selection)
+		} else {
+			var slotResult openAISlotAcquireResult
+			accountReleaseFunc, slotResult = h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, parsed.Stream, &streamStarted, reqLog)
+			if slotResult == openAISlotAcquireProfitVetoed {
+				// Images 调度不装利润门，此分支实际不可达；防御性排除重选并受同一否决上限约束。
+				if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
+					h.handleOpenAIProfitVetoExhausted(c, streamStarted, reqLog, profitVetoCount)
+					return
+				}
+				continue
+			}
+			if slotResult != openAISlotAcquireOK {
 				return
 			}
-			continue
-		}
-		if slotResult != openAISlotAcquireOK {
-			return
 		}
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
@@ -280,6 +295,16 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 					zap.Error(err),
 				)
 			} else {
+				var capacityErr *service.OpenAIWebImagesCapacityError
+				if errors.As(err, &capacityErr) {
+					if failoverClientGone(c) {
+						return
+					}
+					failedAccountIDs[account.ID] = struct{}{}
+					capacityExcluded = true
+					reqLog.Debug("openai.images.local_capacity_reselect", zap.Int64("account_id", account.ID), zap.String("reason", capacityErr.Reason))
+					continue
+				}
 				var imageUpstreamErr *service.OpenAIImagesUpstreamError
 				if errors.As(err, &imageUpstreamErr) {
 					retryableServerError := service.IsOpenAIImagesRetryableUpstreamError(imageUpstreamErr)
@@ -347,7 +372,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 						return
 					}
 					switchCount++
-					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
+					if !h.gatewayService.UsesOpenAIWebImagesPath(account) && h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
