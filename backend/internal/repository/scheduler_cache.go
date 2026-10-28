@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -42,6 +41,8 @@ const (
 	defaultSchedulerSnapshotMGetChunkSize  = 128
 	defaultSchedulerSnapshotWriteChunkSize = 256
 	schedulerLastUsedUpdateChunkSize       = 256
+	schedulerSnapshotReadBatchPages        = 8
+	schedulerSnapshotReadBatchAccounts     = 1024
 
 	// snapshotGraceTTLSeconds 旧快照过期的宽限期（秒）。
 	// 替代立即 DEL，让正在读取旧版本的 reader 有足够时间完成 ZRANGE。
@@ -139,6 +140,7 @@ redis.call('SREM', KEYS[3], ARGV[1])
 local currentActive = redis.call('GET', KEYS[5])
 if currentActive ~= false then
     redis.call('EXPIRE', ARGV[2] .. currentActive, tonumber(ARGV[3]))
+    redis.call('EXPIRE', ARGV[2] .. currentActive .. ':uniform', tonumber(ARGV[3]))
 end
 redis.call('DEL', KEYS[4], KEYS[5])
 return currentEpoch
@@ -174,6 +176,7 @@ redis.call('SREM', KEYS[3], ARGV[1])
 local currentActive = redis.call('GET', KEYS[5])
 if currentActive ~= false then
     redis.call('EXPIRE', ARGV[2] .. currentActive, tonumber(ARGV[3]))
+    redis.call('EXPIRE', ARGV[2] .. currentActive .. ':uniform', tonumber(ARGV[3]))
 end
 redis.call('DEL', KEYS[4], KEYS[5])
 return currentEpoch
@@ -206,14 +209,14 @@ return 0
 	// 返回 1 = 已激活, 0 = 版本过旧未激活
 	activateSnapshotScript = redis.NewScript(`
 if redis.call('EXISTS', KEYS[6]) == 1 then
-    redis.call('DEL', KEYS[4])
+    redis.call('DEL', KEYS[4], KEYS[4] .. ':uniform')
     return -1
 end
 
 local currentEpoch = tonumber(redis.call('GET', KEYS[5]))
 local expectedEpoch = tonumber(ARGV[5])
 if currentEpoch == nil or expectedEpoch == nil or currentEpoch ~= expectedEpoch then
-    redis.call('DEL', KEYS[4])
+    redis.call('DEL', KEYS[4], KEYS[4] .. ':uniform')
     return -2
 end
 
@@ -223,7 +226,7 @@ local newVersion = tonumber(ARGV[1])
 if currentActive ~= false then
 	local curVersion = tonumber(currentActive)
 	if curVersion and newVersion < curVersion then
-		redis.call('DEL', KEYS[4])
+		redis.call('DEL', KEYS[4], KEYS[4] .. ':uniform')
 		return 0
 	end
 end
@@ -234,6 +237,7 @@ redis.call('SADD', KEYS[3], ARGV[2])
 
 if currentActive ~= false and currentActive ~= ARGV[1] then
 	redis.call('EXPIRE', ARGV[3] .. currentActive, tonumber(ARGV[4]))
+	redis.call('EXPIRE', ARGV[3] .. currentActive .. ':uniform', tonumber(ARGV[4]))
 end
 
 return 1
@@ -344,30 +348,57 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 		return nil, false, nil
 	}
 
-	keys := make([]string, 0, len(ids))
+	chunkSize := c.mgetChunkSize
+	if chunkSize <= 0 {
+		chunkSize = defaultSchedulerSnapshotMGetChunkSize
+	}
+	masters := make([]*service.Account, 0, len(ids))
 	lastUsedKeys := make([]string, 0, len(ids))
-	for _, id := range ids {
-		keys = append(keys, schedulerAccountMetaKey(id))
-		lastUsedKeys = append(lastUsedKeys, schedulerLastUsedKey(id))
-	}
-	values, err := c.mgetChunked(ctx, keys)
-	if err != nil {
-		return nil, false, err
-	}
-
-	masters := make([]*service.Account, 0, len(values))
-	for _, val := range values {
-		if val == nil {
-			c.dropSnapshotEntry(bucketKey)
-			return nil, false, nil
-		}
-		account, err := decodeCachedAccount(val)
-		if err != nil {
+	lastUsedValues := make([]any, 0, len(ids))
+	for start := 0; start < len(ids); {
+		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
-		masters = append(masters, account)
+		// Bound both pipelined replies and raw JSON lifetime. The final account
+		// pool remains complete and follows the pinned snapshot's ID order.
+		batchEnd := start + min(schedulerSnapshotReadBatchAccounts, len(ids)-start)
+		pipe := c.rdb.Pipeline()
+		pages := make([]struct{ metadata, lastUsed *redis.SliceCmd }, 0, schedulerSnapshotReadBatchPages)
+		for len(pages) < schedulerSnapshotReadBatchPages && start < batchEnd {
+			end := start + min(chunkSize, batchEnd-start)
+			keys := make([]string, end-start)
+			pageLastUsedKeys := make([]string, end-start)
+			for i, id := range ids[start:end] {
+				keys[i] = schedulerAccountMetaKey(id)
+				pageLastUsedKeys[i] = schedulerLastUsedKey(id)
+			}
+			pages = append(pages, struct{ metadata, lastUsed *redis.SliceCmd }{
+				metadata: pipe.MGet(ctx, keys...),
+				lastUsed: pipe.MGet(ctx, pageLastUsedKeys...),
+			})
+			lastUsedKeys = append(lastUsedKeys, pageLastUsedKeys...)
+			start = end
+		}
+		if _, err := pipe.Exec(ctx); err != nil {
+			return nil, false, err
+		}
+		for _, page := range pages {
+			values := page.metadata.Val()
+			pageLastUsedValues := page.lastUsed.Val()
+			for i, val := range values {
+				if val == nil {
+					c.dropSnapshotEntry(bucketKey)
+					return nil, false, nil
+				}
+				account, err := decodeCachedAccount(val)
+				if err != nil {
+					return nil, false, err
+				}
+				masters = append(masters, account)
+				lastUsedValues = append(lastUsedValues, pageLastUsedValues[i])
+			}
+		}
 	}
-	// 母本发布进缓存前由本 goroutine 完成预处理，发布后只读。
 	for _, master := range masters {
 		master.PrepareSharedSnapshot()
 	}
@@ -383,7 +414,7 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 	}
 	c.storeSnapshotEntry(bucketKey, entry)
 
-	accounts, err := c.snapshotAccountsFromEntry(ctx, entry)
+	accounts, err := schedulerSnapshotAccountsFromValues(entry, lastUsedValues)
 	if err != nil {
 		return nil, false, err
 	}
@@ -404,6 +435,10 @@ func (c *schedulerCache) snapshotAccountsFromEntry(ctx context.Context, entry *s
 	if err != nil {
 		return nil, err
 	}
+	return schedulerSnapshotAccountsFromValues(entry, lastUsedValues)
+}
+
+func schedulerSnapshotAccountsFromValues(entry *schedulerSnapshotEntry, lastUsedValues []any) ([]*service.Account, error) {
 	if len(lastUsedValues) != len(entry.accounts) {
 		return nil, fmt.Errorf("unexpected scheduler last_used value count: got %d, want %d", len(lastUsedValues), len(entry.accounts))
 	}
@@ -662,11 +697,14 @@ func (c *schedulerCache) allocateSnapshotVersion(ctx context.Context, bucket ser
 }
 
 func (c *schedulerCache) writeSnapshotVersionAndReturnAccountIDs(ctx context.Context, bucket service.SchedulerBucket, version string, accounts []service.Account) ([]int64, error) {
-	accountIDs, err := c.writeAccountIDs(ctx, accounts)
+	accountIDs, proof, err := c.writeAccountIDsWithPriorityProof(ctx, accounts)
 	if err != nil {
 		return nil, err
 	}
 	if err := c.writeSnapshotAccountIDs(ctx, bucket, version, accountIDs); err != nil {
+		return nil, err
+	}
+	if err := c.writeSnapshotPriorityProof(ctx, bucket, version, proof); err != nil {
 		return nil, err
 	}
 	return accountIDs, nil
@@ -786,6 +824,11 @@ func (c *schedulerCache) DeleteAccount(ctx context.Context, accountID int64) err
 		return nil
 	}
 	id := strconv.FormatInt(accountID, 10)
+	if schedulerBoundedProbeEnabled() {
+		return deleteSchedulerAccountWithPriorityScript.Run(ctx, c.rdb, []string{
+			schedulerPriorityLedgerKey, schedulerAccountKey(id), schedulerAccountMetaKey(id), schedulerLastUsedKey(id), schedulerAccountMetaRevisionKey,
+		}, id, newSchedulerAccountMetaRevision()).Err()
+	}
 	// 删除精简记录与推进全局修订号在同一个 MULTI 中原子执行：读到删除结果的读者也读到新修订号，
 	// 进程内快照缓存不会给出已删除的账号。
 	pipe := c.rdb.TxPipeline()
@@ -978,93 +1021,8 @@ func decodeCachedAccount(val any) (*service.Account, error) {
 // 漏检由进程内快照缓存的最长复用时长兜底。
 // 任一块执行出错时，此前已执行的块与出错的块都可能已有精简记录生效，返回时启动后台写入全局修订号。
 func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service.Account) ([]int64, error) {
-	if len(accounts) == 0 {
-		return nil, nil
-	}
-
-	type metaWrite struct {
-		platform string
-		previous *redis.StatusCmd
-	}
-	pipe := c.rdb.Pipeline()
-	accountIDs := make([]int64, 0, len(accounts))
-	platforms := make([]string, 0, 1)
-	writes := make([]metaWrite, 0, min(len(accounts), c.writeChunkSize))
-	pending := 0
-	execFailed := false
-	platformChanged := false
-	defer func() {
-		if execFailed {
-			c.scheduleGlobalAccountMetaRevision(ctx)
-		}
-	}()
-	exec := func() error {
-		cmds, err := pipe.Exec(ctx)
-		if err != nil && !errors.Is(err, redis.Nil) {
-			execFailed = true
-			return err
-		}
-		// SET ... GET 在键原本不存在时返回 redis.Nil，不算失败；其余命令的错误逐条检查。
-		for _, cmd := range cmds {
-			if cmdErr := cmd.Err(); cmdErr != nil && !errors.Is(cmdErr, redis.Nil) {
-				execFailed = true
-				return cmdErr
-			}
-		}
-		for _, write := range writes {
-			if schedulerMetaPlatformChanged(write.previous, write.platform) {
-				platformChanged = true
-			}
-		}
-		writes = writes[:0]
-		pipe = c.rdb.Pipeline()
-		pending = 0
-		return nil
-	}
-
-	for _, account := range accounts {
-		fullPayload, metaPayload, err := marshalSchedulerCacheAccount(account)
-		if err != nil {
-			slog.Warn("scheduler cache skips account with unencodable payload",
-				"account_id", account.ID,
-				"error", err,
-			)
-			continue
-		}
-		if pending >= c.writeChunkSize {
-			if err := exec(); err != nil {
-				return nil, err
-			}
-		}
-
-		id := strconv.FormatInt(account.ID, 10)
-		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
-		writes = append(writes, metaWrite{
-			platform: account.Platform,
-			previous: pipe.SetArgs(ctx, schedulerAccountMetaKey(id), metaPayload, redis.SetArgs{Get: true}),
-		})
-		// Keep the hot LastUsedAt side key untouched: a lagging snapshot rebuild
-		// must not overwrite a newer scheduler update.
-		accountIDs = append(accountIDs, account.ID)
-		if !slices.Contains(platforms, account.Platform) {
-			platforms = append(platforms, account.Platform)
-		}
-		pending++
-	}
-
-	if pending == 0 {
-		return accountIDs, nil
-	}
-	for _, platform := range platforms {
-		pipe.Set(ctx, schedulerAccountMetaRevisionKeyForPlatform(platform), newSchedulerAccountMetaRevision(), 0)
-	}
-	if err := exec(); err != nil {
-		return nil, err
-	}
-	if platformChanged {
-		c.advanceGlobalAccountMetaRevision(ctx)
-	}
-	return accountIDs, nil
+	ids, _, err := c.writeAccountIDsWithPriorityProof(ctx, accounts)
+	return ids, err
 }
 
 // schedulerMetaPlatformChanged 判断 SET ... GET 取回的旧精简记录是否属于另一个平台；
@@ -1074,6 +1032,10 @@ func schedulerMetaPlatformChanged(previous *redis.StatusCmd, platform string) bo
 	if err != nil {
 		return false
 	}
+	return schedulerMetaRawPlatformChanged(raw, platform)
+}
+
+func schedulerMetaRawPlatformChanged(raw string, platform string) bool {
 	if !gjson.Valid(raw) {
 		return true
 	}
