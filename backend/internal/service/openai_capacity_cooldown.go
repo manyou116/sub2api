@@ -34,6 +34,15 @@ func IsOpenAICapacityCooldownReason(reason string) bool {
 	return strings.HasPrefix(reason, OpenAICapacityCooldownReasonPrefix)
 }
 
+// ClearAccountRuntimeLimits connects legacy admin error-reset actions to the
+// same recovery used by recover-state, including Redis counters and leases.
+func (s *OpenAIGatewayService) ClearAccountRuntimeLimits(ctx context.Context, accountID int64) error {
+	if s == nil || s.rateLimitService == nil {
+		return errors.New("account runtime recovery service unavailable")
+	}
+	return s.rateLimitService.ClearRateLimit(ctx, accountID)
+}
+
 type OpenAICapacityDecision struct {
 	Allowed, Probe, Tripped bool
 	Generation, UntilMS     int64
