@@ -536,6 +536,11 @@ func (r *accountRepository) updateLockedAccount(
 	if err != nil {
 		return nil, err
 	}
+	if account.Platform == service.PlatformOpenAI && account.Type == service.AccountTypeOAuth {
+		if err := preserveOpenAIReconcileExtra(ctx, client, account, extra); err != nil {
+			return nil, err
+		}
+	}
 	account.Extra = extra
 
 	schedulable := account.Schedulable

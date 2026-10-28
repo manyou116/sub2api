@@ -271,6 +271,7 @@ export default {
         schedulerScore: 'Scheduler Score',
         status: 'Status',
         schedulable: 'Schedulable',
+        rateLimitReconcile: 'Quota Reconcile',
         todayStats: 'Today Stats',
         groups: 'Groups',
         usageWindows: 'Usage Windows',
@@ -519,6 +520,15 @@ export default {
       bulkSchedulableDisabled: 'Successfully disabled scheduling for {count} account(s)',
       bulkSchedulablePartial: 'Scheduling updated partially: {success} succeeded, {failed} failed',
       bulkSchedulableResultUnknown: 'Bulk scheduling result incomplete. Please retry or refresh.',
+      rateLimitReconcile: {
+        enabled: 'Enabled',
+        disabled: 'Off',
+        help: 'Off by default. OpenAI OAuth parent accounts only. Checks opted-in accounts while rate limited without consuming reset credits. At least 10 minutes between checks; failures back off.',
+        limited: 'Still limited',
+        failed: 'Check failed; retry later',
+        recovered: 'Recovered',
+        state_changed: 'Account changed; awaiting recheck'
+      },
       bulkActions: {
         webImagesEnableShort: 'Web On',
         webImagesDisableShort: 'Web Off',
@@ -541,11 +551,15 @@ export default {
         deleteSuccess: 'Deleted {count} account(s)',
         enableScheduling: 'Enable Scheduling',
         disableScheduling: 'Disable Scheduling',
+        enableRateLimitReconcile: 'Enable Quota Reconcile',
+        disableRateLimitReconcile: 'Disable Quota Reconcile',
         resetStatus: 'Reset Status',
         refreshToken: 'Refresh Token',
         probeUpstreamBilling: 'Probe Upstream Rate',
         resetStatusSuccess: 'Successfully reset {count} account(s) status',
         refreshTokenSuccess: 'Successfully refreshed {count} account(s) token',
+        rateLimitReconcileEnabled: 'Enabled quota reconciliation for {count} account(s)',
+        rateLimitReconcileDisabled: 'Disabled quota reconciliation for {count} account(s)',
         partialSuccess: 'Partially completed: {success} succeeded, {failed} failed'
       },
       bulkEdit: {
@@ -1126,11 +1140,12 @@ export default {
 	  },
       autoResetCredit: {
 	    title: 'Automatically use reset credits',
-	    hint: 'Uses the earliest-expiring available credit only when actual usage reaches a threshold. Off by default; the account remains paused if no credit is available or reset fails.',
-	    threshold5h: '5h auto-reset threshold (%)',
-	    threshold7d: '7d auto-reset threshold (%)',
-	    thresholdHint: 'Each window is evaluated independently. Enter 0.1–100; both default to 100.',
-	    thresholdInvalid: 'Automatic reset-credit thresholds must be between 0.1% and 100%.'
+	    hint: 'Uses the earliest-expiring credit when actual upstream usage reaches the enabled window\'s threshold. Both switches are off by default; thresholds default to 100%.',
+	    enable5h: '5h automatic reset credits',
+	    enable7d: '7d automatic reset credits',
+        threshold5h: '5h threshold (%)',
+        threshold7d: '7d threshold (%)',
+        thresholdInvalid: 'Reset-credit thresholds must be between 0.1% and 100%.'
 	  },
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {

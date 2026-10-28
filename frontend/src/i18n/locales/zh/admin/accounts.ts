@@ -116,6 +116,7 @@ export default {
         schedulerScore: '调度权值',
         status: '状态',
         schedulable: '调度',
+        rateLimitReconcile: '额度自动核对',
         todayStats: '今日统计',
         groups: '分组',
         usageWindows: '用量窗口',
@@ -639,6 +640,15 @@ export default {
       bulkSchedulableDisabled: '成功停止 {count} 个账号的调度',
       bulkSchedulablePartial: '部分调度更新成功：成功 {success} 个，失败 {failed} 个',
       bulkSchedulableResultUnknown: '批量调度结果不完整，请稍后重试或刷新列表',
+      rateLimitReconcile: {
+        enabled: '已开启',
+        disabled: '未开启',
+        help: '默认关闭；仅支持 OpenAI OAuth 主账号。只核对仍在限流中的已选账号，不消耗重置卡。每账号至少间隔 10 分钟，失败时逐步延长。',
+        limited: '仍受限',
+        failed: '核对失败，稍后重试',
+        recovered: '已恢复',
+        state_changed: '账号状态已变化，等待重查'
+      },
       bulkActions: {
         webImagesEnableShort: '开 Web 生图',
         webImagesDisableShort: '关 Web 生图',
@@ -661,11 +671,15 @@ export default {
         deleteSuccess: '已成功删除 {count} 个账号',
         enableScheduling: '批量启用调度',
         disableScheduling: '批量停止调度',
+        enableRateLimitReconcile: '开启额度核对',
+        disableRateLimitReconcile: '关闭额度核对',
         resetStatus: '批量重置状态',
         refreshToken: '批量刷新令牌',
         probeUpstreamBilling: '探测上游倍率',
         resetStatusSuccess: '已成功重置 {count} 个账号状态',
         refreshTokenSuccess: '已成功刷新 {count} 个账号令牌',
+        rateLimitReconcileEnabled: '已为 {count} 个账号开启额度自动核对',
+        rateLimitReconcileDisabled: '已为 {count} 个账号关闭额度自动核对',
         partialSuccess: '操作部分完成：{success} 成功，{failed} 失败'
       },
       bulkEdit: {
@@ -1229,11 +1243,12 @@ export default {
 	  },
       autoResetCredit: {
 	    title: '自动使用重置卡',
-	    hint: '仅在实际用量达到阈值时使用最早到期的可用卡；默认关闭。无卡或失败时账号保持暂停。',
-	    threshold5h: '5h 自动用卡阈值(%)',
-	    threshold7d: '7d 自动用卡阈值(%)',
-	    thresholdHint: '两个窗口独立判断，任一达到自身阈值即触发。可填写 0.1–100，默认均为 100。',
-	    thresholdInvalid: '自动使用重置卡阈值必须在 0.1% 到 100% 之间。'
+	    hint: '已启用窗口的上游实际用量达到设定比例时，使用最早到期的可用卡；两个开关默认关闭，阈值默认 100%。',
+	    enable5h: '5h 自动使用重置卡',
+	    enable7d: '7d 自动使用重置卡',
+        threshold5h: '5h 用卡阈值 (%)',
+        threshold7d: '7d 用卡阈值 (%)',
+        thresholdInvalid: '自动用卡阈值必须在 0.1% 到 100% 之间。'
 	  },
       // Quota control (Anthropic OAuth/SetupToken only)
       quotaControl: {
