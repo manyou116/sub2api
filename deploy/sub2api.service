@@ -12,6 +12,8 @@ WorkingDirectory=/opt/sub2api
 ExecStart=/opt/sub2api/sub2api
 Restart=always
 RestartSec=5
+# Allow in-flight API requests to finish (should be >= server.shutdown_timeout)
+TimeoutStopSec=320
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=sub2api
@@ -28,6 +30,8 @@ ReadWritePaths=/opt/sub2api
 Environment=GIN_MODE=release
 Environment=SERVER_HOST=0.0.0.0
 Environment=SERVER_PORT=8080
+Environment=SERVER_SHUTDOWN_TIMEOUT=300
+Environment=SERVER_SHUTDOWN_DRAIN_DELAY=0
 
 [Install]
 WantedBy=multi-user.target

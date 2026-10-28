@@ -131,6 +131,20 @@ class ReleaseMatrixTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'does not match'):
                 release.plan(args)
 
+    def test_fork_tag_plan_and_archive_keep_full_version(self):
+        version = '99.0.2.8-plus.1'
+        args = argparse.Namespace(ref='v' + version, dry_run=False, simple=True)
+        with patch.dict(os.environ, {'GITHUB_OUTPUT': 'outputs'}), patch.object(subprocess, 'check_output', return_value='a' * 40 + '\n'):
+            release.plan(args)
+        output = dict(line.split('=', 1) for line in Path('outputs').read_text().splitlines())
+        self.assertEqual(output['version'], version)
+        self.assertEqual(release.VERSION_FILE.read_text(), version + '\n')
+        self.assertEqual(json.loads(output['matrix'])['include'], [{'goos': 'linux', 'goarch': 'amd64'}])
+        self.assertEqual(release.archive_name(version, release.targets(True)[0]), f'sub2api_{version}_linux_amd64.tar.gz')
+        for invalid in ('98.0.2.8-plus.1', '99.0.2.8/escape', '99.0.2.8.1'):
+            with self.subTest(version=invalid), self.assertRaises(ValueError):
+                release.archive_name(invalid, release.targets(True)[0])
+
     def test_dry_run_plan_resolves_matrix_without_a_new_tag(self):
         with patch.dict(os.environ, {'GITHUB_OUTPUT': 'outputs', 'GITHUB_REPOSITORY_OWNER': 'ExampleOwner'}), patch.object(subprocess, 'check_output', return_value='a' * 40 + '\n'):
             release.plan(argparse.Namespace(ref='feature/matrix', dry_run=True, simple=False))
