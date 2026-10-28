@@ -2,12 +2,29 @@ package service
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func newIPv4TestServer(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("local test listener unavailable: %v", err)
+	}
+
+	server := httptest.NewUnstartedServer(handler)
+	server.Listener = listener
+	server.Start()
+	t.Cleanup(server.Close)
+
+	return server
+}
 
 func TestFinalizeProxyQualityResult_ScoreAndGrade(t *testing.T) {
 	result := &ProxyQualityCheckResult{
@@ -28,13 +45,12 @@ func TestFinalizeProxyQualityResult_ScoreAndGrade(t *testing.T) {
 }
 
 func TestRunProxyQualityTarget_CloudflareChallenge(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Header().Set("cf-ray", "test-ray-123")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte("<!DOCTYPE html><title>Just a moment...</title><script>window._cf_chl_opt={};</script>"))
 	}))
-	defer server.Close()
 
 	target := proxyQualityTarget{
 		Target: "openai",
@@ -52,11 +68,10 @@ func TestRunProxyQualityTarget_CloudflareChallenge(t *testing.T) {
 }
 
 func TestRunProxyQualityTarget_AllowedStatusPass(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"models":[]}`))
 	}))
-	defer server.Close()
 
 	target := proxyQualityTarget{
 		Target: "gemini",
@@ -73,11 +88,10 @@ func TestRunProxyQualityTarget_AllowedStatusPass(t *testing.T) {
 }
 
 func TestRunProxyQualityTarget_AllowedStatusPassForUnauthorized(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 	}))
-	defer server.Close()
 
 	target := proxyQualityTarget{
 		Target: "openai",
@@ -110,14 +124,13 @@ func TestProxyQualityTargets_IncludesGrok(t *testing.T) {
 }
 
 func TestRunProxyQualityTarget_GrokUnauthorizedPasses(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newIPv4TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("unexpected method: %s", r.Method)
 		}
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
 	}))
-	defer server.Close()
 
 	target := proxyQualityTarget{
 		Target: "grok",

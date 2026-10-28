@@ -786,6 +786,11 @@ func shouldFailoverOpenAIPassthroughResponse(account *Account, statusCode int, r
 	if isOpenAIRequestBodyTooLargeError(statusCode, "", responseBody) {
 		return true
 	}
+	// Reuse the model cooldown and bounded account failover before committing
+	// a Codex rejection that this OAuth account cannot serve the model.
+	if isOpenAIOAuthAccount(account) && isOpenAICodexPlanGatedModelError(statusCode, responseBody) {
+		return true
+	}
 	if account != nil && account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode) {
 		return true
 	}
