@@ -11,6 +11,154 @@ import (
 )
 
 func (r *opsRepository) GetThroughputTrend(ctx context.Context, filter *service.OpsDashboardFilter, bucketSeconds int) (*service.OpsThroughputTrendResponse, error) {
+	if canUseHourlyThroughputPreaggregation(filter, bucketSeconds) {
+		result, err := r.getThroughputTrendPreaggregated(ctx, filter)
+		if result != nil || err != nil {
+			return result, err
+		}
+	}
+	return r.getThroughputTrendRaw(ctx, filter, bucketSeconds)
+}
+
+// 长窗口且无维度过滤时才使用小时预聚合，避免改变过滤查询语义。
+func canUseHourlyThroughputPreaggregation(filter *service.OpsDashboardFilter, bucketSeconds int) bool {
+	if filter == nil || bucketSeconds != 3600 || filter.QueryMode == service.OpsQueryModeRaw {
+		return false
+	}
+	return strings.TrimSpace(filter.Platform) == "" && (filter.GroupID == nil || *filter.GroupID <= 0)
+}
+
+// 用预聚合覆盖稳定小时，首尾不足一小时的区间仍查询原始日志。
+func (r *opsRepository) getThroughputTrendPreaggregated(ctx context.Context, filter *service.OpsDashboardFilter) (*service.OpsThroughputTrendResponse, error) {
+	start := filter.StartTime.UTC()
+	end := filter.EndTime.UTC()
+	fullStart := utcCeilToHour(start)
+	fullEnd := utcFloorToHour(preaggSafeEnd(end))
+	if !fullStart.Before(fullEnd) {
+		return nil, nil
+	}
+
+	type hourlyRow struct {
+		bucket  time.Time
+		success int64
+		errors  int64
+		tokens  int64
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT bucket_start, success_count, error_count_total, token_consumed
+FROM ops_metrics_hourly
+WHERE bucket_start >= $1 AND bucket_start < $2
+  AND platform IS NULL AND group_id IS NULL
+ORDER BY bucket_start ASC`, fullStart, fullEnd)
+	if err != nil {
+		return nil, err
+	}
+	hourly := make([]hourlyRow, 0, int(fullEnd.Sub(fullStart)/time.Hour))
+	for rows.Next() {
+		var row hourlyRow
+		if err := rows.Scan(&row.bucket, &row.success, &row.errors, &row.tokens); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		hourly = append(hourly, row)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(hourly) == 0 {
+		return nil, service.ErrOpsPreaggregatedNotPopulated
+	}
+
+	switchRows, err := r.db.QueryContext(ctx, `
+SELECT date_trunc('hour', created_at) AS bucket,
+       COALESCE(SUM(CASE
+         WHEN split_part(ev->>'kind', ':', 1) IN ('failover', 'retry_exhausted_failover', 'failover_on_400') THEN 1
+         ELSE 0
+       END), 0) AS switch_count
+FROM ops_error_logs
+CROSS JOIN LATERAL jsonb_array_elements(
+  COALESCE(NULLIF(upstream_errors, 'null'::jsonb), '[]'::jsonb)
+) AS ev
+WHERE created_at >= $1 AND created_at < $2
+  AND is_count_tokens = FALSE
+  AND upstream_errors IS NOT NULL
+GROUP BY 1`, fullStart, fullEnd)
+	if err != nil {
+		return nil, err
+	}
+	switchCounts := make(map[int64]int64)
+	for switchRows.Next() {
+		var bucket time.Time
+		var count int64
+		if err := switchRows.Scan(&bucket, &count); err != nil {
+			_ = switchRows.Close()
+			return nil, err
+		}
+		switchCounts[bucket.UTC().Unix()] = count
+	}
+	if err := switchRows.Close(); err != nil {
+		return nil, err
+	}
+	pointsByBucket := make(map[int64]*service.OpsThroughputTrendPoint, len(hourly))
+	for _, row := range hourly {
+		bucket := row.bucket.UTC()
+		pointsByBucket[bucket.Unix()] = &service.OpsThroughputTrendPoint{
+			BucketStart:   bucket,
+			RequestCount:  row.success + row.errors,
+			TokenConsumed: row.tokens,
+			SwitchCount:   switchCounts[bucket.Unix()],
+			QPS:           roundTo1DP(float64(row.success+row.errors) / 3600.0),
+			TPS:           roundTo1DP(float64(row.tokens) / 3600.0),
+		}
+	}
+
+	mergeRaw := func(fragmentStart, fragmentEnd time.Time) error {
+		if !fragmentStart.Before(fragmentEnd) {
+			return nil
+		}
+		fragmentFilter := *filter
+		fragmentFilter.StartTime = fragmentStart
+		fragmentFilter.EndTime = fragmentEnd
+		raw, err := r.getThroughputTrendRaw(ctx, &fragmentFilter, 3600)
+		if err != nil {
+			return err
+		}
+		for _, point := range raw.Points {
+			if point != nil && point.RequestCount != 0 {
+				pointsByBucket[point.BucketStart.UTC().Unix()] = point
+			}
+		}
+		return nil
+	}
+	if err := mergeRaw(start, fullStart); err != nil {
+		return nil, err
+	}
+	if err := mergeRaw(fullEnd, end); err != nil {
+		return nil, err
+	}
+
+	points := make([]*service.OpsThroughputTrendPoint, 0, len(pointsByBucket))
+	for _, point := range pointsByBucket {
+		points = append(points, point)
+	}
+	points = fillOpsThroughputBuckets(start, end, 3600, points)
+
+	byPlatform, err := r.getThroughputBreakdownByPlatform(ctx, start, end)
+	if err != nil {
+		return nil, err
+	}
+	return &service.OpsThroughputTrendResponse{
+		Bucket:     opsBucketLabel(3600),
+		Points:     points,
+		ByPlatform: byPlatform,
+		TopGroups:  nil,
+	}, nil
+}
+
+func (r *opsRepository) getThroughputTrendRaw(ctx context.Context, filter *service.OpsDashboardFilter, bucketSeconds int) (*service.OpsThroughputTrendResponse, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("nil ops repository")
 	}
