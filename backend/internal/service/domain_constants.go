@@ -53,9 +53,14 @@ const (
 	PlatformCommandCode = domain.PlatformCommandCode
 	PlatformCline       = domain.PlatformCline
 	PlatformComposite   = domain.PlatformComposite
-	// PlatformKiro is retained for unsupported-platform threshold tests and legacy
-	// account rows. Scheduling-threshold evaluation never pauses kiro accounts.
-	PlatformKiro = "kiro"
+	PlatformKiro        = domain.PlatformKiro
+)
+
+const (
+	KiroAuthMethodSocial = domain.KiroAuthMethodSocial
+	KiroAuthMethodIdC    = domain.KiroAuthMethodIdC
+	KiroDefaultRegion    = domain.KiroDefaultRegion
+	KiroIDEUserAgentTmpl = domain.KiroIDEUserAgentTmpl
 )
 
 // 账号接入模式（国产供应商）：按量付费 vs Coding Plan。

@@ -158,8 +158,14 @@ need_rg "PlatformKiro constant" \
   "PlatformKiro" \
   backend/internal/domain/constants.go
 need_rg "group platform accepts kiro" \
-  "oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek minimax opencode_go typesafe kiro composite" \
+  "group_platform" \
   backend/internal/handler/admin/group_handler.go
+need_rg "Kiro registered in platform catalog" \
+  '{ID: PlatformKiro, DisplayName: "Kiro", Gateway: PlatformGatewayKiro}' \
+  backend/internal/domain/platforms.go
+need_rg "group platform validator uses catalog" \
+  'domain.IsGroupPlatform' \
+  backend/internal/handler/admin/platform_validation.go
 need_rg "gateway kiro chat route" \
   "KiroChatCompletions" \
   backend/internal/server/routes/gateway.go

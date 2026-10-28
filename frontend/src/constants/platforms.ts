@@ -16,12 +16,16 @@ export type PlatformOption<T extends string = string> = {
  */
 export const CONCRETE_PLATFORM_OPTIONS: PlatformOption<AccountPlatform>[] = reactive([])
 
+/** Concrete providers supported by Composite model routes. */
+export const COMPOSITE_ROUTE_PLATFORM_OPTIONS: PlatformOption<GroupPlatform>[] = reactive([])
+
 /** Platforms that can own a group. */
 export const GROUP_PLATFORM_OPTIONS: PlatformOption<GroupPlatform>[] = reactive([])
 
 watchSyncEffect(() => {
   const concrete = listPlatforms().map(spec => ({ value: spec.id, label: spec.display_name }))
   CONCRETE_PLATFORM_OPTIONS.splice(0, CONCRETE_PLATFORM_OPTIONS.length, ...concrete)
+  COMPOSITE_ROUTE_PLATFORM_OPTIONS.splice(0, COMPOSITE_ROUTE_PLATFORM_OPTIONS.length, ...concrete.filter(spec => spec.value !== 'kiro'))
   GROUP_PLATFORM_OPTIONS.splice(0, GROUP_PLATFORM_OPTIONS.length, ...concrete, {
     value: 'composite',
     label: 'Composite'
