@@ -2270,7 +2270,7 @@ func (r *accountRepository) ListActiveAllowingTextRateLimitByPlatforms(ctx conte
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
-			tempUnschedulablePredicate(),
+			webImageTempUnschedulablePredicate(),
 			notExpiredPredicate(now),
 			// Intentionally omit RateLimitResetAt/OverloadUntil filters.
 		).
@@ -2486,13 +2486,20 @@ func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until t
 func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
 	result, err := r.sql.ExecContext(ctx, `
 		UPDATE accounts
-		SET temp_unschedulable_until = $1,
-			temp_unschedulable_reason = $2,
+		SET temp_unschedulable_until = GREATEST(temp_unschedulable_until, $1),
+			temp_unschedulable_reason = CASE
+				WHEN temp_unschedulable_until > NOW()
+					AND left(COALESCE(temp_unschedulable_reason, ''), length($4)) <> $4
+					AND left($2, length($4)) = $4 THEN temp_unschedulable_reason
+				ELSE $2 END,
 			updated_at = NOW()
 		WHERE id = $3
 			AND deleted_at IS NULL
-			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1)
-	`, until, reason, id)
+			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1
+				OR (temp_unschedulable_until > NOW()
+					AND left(COALESCE(temp_unschedulable_reason, ''), length($4)) = $4
+					AND left($2, length($4)) <> $4))
+	`, until, reason, id, service.OpenAICapacityCooldownReasonPrefix)
 	if err != nil {
 		return err
 	}
@@ -3346,8 +3353,12 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 		preds = append(preds, dbaccount.SchedulableEQ(true))
 		if !opts.ignoreTransientState {
 			now := time.Now()
+			tempPredicate := tempUnschedulablePredicate()
+			if opts.includeTextRateLimited {
+				tempPredicate = webImageTempUnschedulablePredicate()
+			}
 			preds = append(preds,
-				tempUnschedulablePredicate(),
+				tempPredicate,
 				notExpiredPredicate(now),
 			)
 			if !opts.includeTextRateLimited {

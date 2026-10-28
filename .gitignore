@@ -135,6 +135,7 @@ docs/*
 !docs/admin-api-keys.md
 !docs/FORK_HOOKS.md
 !docs/OPENAI_WEB_IMAGES.md
+!docs/OPENAI_CAPACITY_COOLDOWN.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md

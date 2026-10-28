@@ -22,6 +22,7 @@ import (
 )
 
 type Account struct {
+	capacityAttempt         *openAICapacityAttempt // Request-local; never stored in scheduler snapshots.
 	ID                      int64
 	Name                    string
 	Notes                   *string

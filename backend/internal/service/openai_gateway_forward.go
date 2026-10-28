@@ -1410,6 +1410,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if err != nil {
 		return nil, err
 	}
+	req = withOpenAISlowFirstOutputMetadata(req, account, body)
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
 
 	// Build authentication for this request. Agent Identity signs a fresh

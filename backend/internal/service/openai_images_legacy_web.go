@@ -68,13 +68,18 @@ func (s *OpenAIGatewayService) isOpenAIAccountRuntimeBlockedForRequest(ctx conte
 		_, blocked := s.webImages.getCooldownCache(ctx, account.ID)
 		return blocked || account.IsWebImageRateLimited() || s.webImageSharedQuotaBlocked(ctx, account)
 	}
-	return s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel)
+	return s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) || openAICapacityBlocked(ctx, account, requestedModel)
 }
 
 func (s *OpenAIGatewayService) webImageSharedQuotaBlocked(ctx context.Context, account *Account) bool {
 	model := s.webImages.ResolveUpstream(account).UpstreamModel
 	if !webdriver.IsWorkModeModel(model) {
 		return false
+	}
+	if IsOpenAICapacityCooldownReason(account.TempUnschedulableReason) {
+		copy := *account
+		copy.TempUnschedulableUntil, copy.TempUnschedulableReason = nil, ""
+		account = &copy // Work Mode also exempts this text-only pause, not its quotas.
 	}
 	if !account.IsSchedulableForModelWithContext(ctx, model) || s.isOpenAIAccountRequestRuntimeBlocked(account, model) {
 		return true

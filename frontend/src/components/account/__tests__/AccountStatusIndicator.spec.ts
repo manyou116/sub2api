@@ -51,6 +51,20 @@ function makeAccount(overrides: Partial<Account>): Account {
 }
 
 describe('AccountStatusIndicator', () => {
+  it('OpenAI 过载暂停在额度限流同时存在时仍可打开临时不可调度详情', async () => {
+    const account = makeAccount({
+      platform: 'openai',
+      rate_limit_reset_at: '2099-07-11T13:00:00Z',
+      temp_unschedulable_until: '2099-07-11T12:30:00Z',
+      temp_unschedulable_reason: '{"source":"openai_capacity_cooldown","scope":"account","model":"gpt-6.1-sol"}'
+    })
+    const wrapper = mount(AccountStatusIndicator, { props: { account }, global: { stubs: { Icon: true } } })
+    const details = wrapper.get('button')
+    expect(details.text()).toBe('admin.accounts.status.tempUnschedulable')
+    await details.trigger('click')
+    expect(wrapper.emitted('show-temp-unsched')).toEqual([[account]])
+  })
+
   it('Claude 5 系列模型限流时显示 Opus 和 Sonnet 的短别名', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

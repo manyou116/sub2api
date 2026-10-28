@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
+	dbaccount "github.com/Wei-Shaw/sub2api/ent/account"
+	dbpredicate "github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
@@ -13,6 +15,13 @@ import (
 // Fork-owned account repository extensions for ChatGPT Web image durable cooldown
 // and capacity inventory that includes text-rate-limited webimg-capable accounts.
 // Keep bulk logic here so upstream account_repo.go merges stay small.
+
+func webImageTempUnschedulablePredicate() dbpredicate.Account {
+	return dbaccount.Or(tempUnschedulablePredicate(), dbaccount.And(
+		dbaccount.PlatformEQ(service.PlatformOpenAI),
+		dbaccount.TempUnschedulableReasonHasPrefix(service.OpenAICapacityCooldownReasonPrefix),
+	))
+}
 
 func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Context, groupIDs []int64) ([]service.GroupAccountCapacityRow, error) {
 	groupIDs = uniquePositiveInt64s(groupIDs)
@@ -39,6 +48,8 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 					RateLimitResetAt:         acc.RateLimitResetAt,
 					OverloadUntil:            acc.OverloadUntil,
 					WebImageRateLimitResetAt: acc.WebImageRateLimitResetAt,
+					TempUnschedulableUntil:   acc.TempUnschedulableUntil,
+					TempUnschedulableReason:  acc.TempUnschedulableReason,
 					Platform:                 acc.Platform,
 					Type:                     acc.Type,
 				})
@@ -61,6 +72,8 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			a.rate_limit_reset_at,
 			a.overload_until,
 			a.web_image_rate_limit_reset_at,
+			a.temp_unschedulable_until,
+			COALESCE(a.temp_unschedulable_reason, ''),
 			a.platform,
 			a.type
 		FROM account_groups ag
@@ -69,10 +82,11 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			AND a.deleted_at IS NULL
 			AND a.status = $2
 			AND a.schedulable = TRUE
-			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= $3)
+			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= $3
+				OR (a.platform = 'openai' AND left(COALESCE(a.temp_unschedulable_reason, ''), length($4)) = $4))
 			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
 		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC
-	`, pq.Array(groupIDs), service.StatusActive, time.Now())
+	`, pq.Array(groupIDs), service.StatusActive, time.Now(), service.OpenAICapacityCooldownReasonPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -93,6 +107,8 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			&row.RateLimitResetAt,
 			&row.OverloadUntil,
 			&row.WebImageRateLimitResetAt,
+			&row.TempUnschedulableUntil,
+			&row.TempUnschedulableReason,
 			&row.Platform,
 			&row.Type,
 		); err != nil {

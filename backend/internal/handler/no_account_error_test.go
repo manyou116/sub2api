@@ -76,6 +76,35 @@ func TestClassifySelectionFailureError_RateLimitedPool(t *testing.T) {
 	require.Equal(t, fallback, classifySelectionFailureError(fmt.Errorf("no available accounts"), fallback))
 }
 
+func TestClassifySelectionFailureError_MixedFailuresDoNotReportAllRateLimited(t *testing.T) {
+	fallback := noAccountErrorClassification{Status: http.StatusServiceUnavailable, ErrType: "api_error", Message: "Service temporarily unavailable"}
+	for _, details := range []string{
+		"pool=36, filtered: model_rate_limited=1 runtime_blocked=35",
+		"pool=3, filtered: model_rate_limited=1 not_schedulable=2",
+		"pool=3, filtered: model_rate_limited=1 quota_auto_pause_7d=2",
+		"pool=3, filtered: rate_limited=1 quota_auto_pause_5h=2",
+		"pool=3, filtered: model_rate_limited=1 concurrency_full=2",
+		"pool=3, filtered: model_rate_limited=1 shadow_parent_unhealthy=2",
+		"pool=3, filtered: model_rate_limited=1 future_block_reason=2",
+	} {
+		t.Run(details, func(t *testing.T) {
+			got := classifySelectionFailureError(fmt.Errorf("no available OpenAI accounts (%s)", details), fallback)
+			require.Equal(t, fallback, got, "mixed capacity failures must retain 503")
+		})
+	}
+	for _, details := range []string{
+		"pool=3, filtered: model_rate_limited=3 runtime_blocked=0",
+		"pool=3, filtered: model_not_supported=2 model_rate_limited=1",
+		"pool=3, filtered: excluded=2 model_rate_limited=1",
+		"total=3 eligible=0 rate_limited=3",
+	} {
+		t.Run(details, func(t *testing.T) {
+			got := classifySelectionFailureError(fmt.Errorf("no available OpenAI accounts (%s)", details), fallback)
+			require.Equal(t, http.StatusTooManyRequests, got.Status, "genuine rate-limited pools retain 429")
+		})
+	}
+}
+
 func TestClassifyNoAccountError_NilAPIKey_Falls503(t *testing.T) {
 	c := newTestGinContextWithRequest()
 	fd := &fakeDiagnoser{resp: service.ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: false}}

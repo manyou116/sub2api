@@ -1377,7 +1377,26 @@ func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int
 	return account, nil
 }
 
+// Production's runtime blocker also supplies the unified DB/cache recovery.
+// Keep the narrow extension compatible with other platforms' legacy blockers.
+type accountRuntimeLimitsClearer interface {
+	ClearAccountRuntimeLimits(context.Context, int64) error
+}
+
+var _ accountRuntimeLimitsClearer = (*OpenAIGatewayService)(nil)
+
 func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Account, error) {
+	if clearer, ok := s.runtimeBlocker.(accountRuntimeLimitsClearer); ok {
+		// Clear Redis under the recovery lock before reporting any DB reset as
+		// successful. This advances generation to fence old in-flight results.
+		if err := clearer.ClearAccountRuntimeLimits(ctx, id); err != nil {
+			return nil, err
+		}
+		if err := s.accountRepo.ClearError(ctx, id); err != nil {
+			return nil, err
+		}
+		return s.accountRepo.GetByID(ctx, id)
+	}
 	if err := s.accountRepo.ClearError(ctx, id); err != nil {
 		return nil, err
 	}

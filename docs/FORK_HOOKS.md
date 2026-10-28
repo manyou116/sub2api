@@ -246,3 +246,32 @@ Already extracted (do not re-inline):
 | Account webimg schedule helpers | `service/account_webimg.go` |
 | Scheduler text-slot skip | `service/openai_account_scheduler_webimg.go` |
 | Web driver | `service/openaiimages/**` |
+
+## 8. OpenAI repeated capacity cooldown (default off)
+
+`docs/OPENAI_CAPACITY_COOLDOWN.md` describes the independent setting and runtime
+contract. Keep the Lua state machine in `repository/openai_capacity_cooldown_cache.go`
+and the scheduling adapter in `service/openai_capacity_cooldown.go`. The original
+scheduler remains in `selectAccountWithSchedulerBase`; its wrapper performs
+optional admission and reselects when a probe lease loses a race.
+
+Preserve the runtime-blocked check, result/error observation hooks, and the
+optional capacity switch policy in the common failover constructor. The OAuth
+passthrough HTTP error branch must also consult `shouldSwitchOpenAICapacity`
+before committing a 503 response. Preserve the separate admin GET/PUT routes
+and settings card. Capacity pauses now cover the account's text models and
+project into the existing temporary-unschedulable fields for admin filtering.
+Preserve the Web-image exception for this reason alone, including Work Mode
+and the candidate/capacity queries. Auth/transport pauses must retain priority.
+Admin recovery must reset the shared Redis generation under the control lock
+so delayed results cannot reapply an old DB pause. Quota, 429, images and
+WebSocket ingress do not generate capacity observations.
+Run `TestCapacityCooldown` in repository/service/admin/handler
+packages, plus the settings component tests, when replaying these hooks.
+
+The independent slow first-output rule reuses this text pause and recovery
+circuit, with its own rolling counter. Preserve the metadata hooks in both
+Responses request builders and the observer around `doOpenAIUpstream`, plus
+the pre-output timeout ownership check. Successful slow requests must retain
+their slow event; only a successful request with timely meaningful content may
+advance recovery while this rule is enabled. Run `TestSlowFirstOutput` too.

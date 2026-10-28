@@ -232,3 +232,19 @@ func TestGetAllGroupCapacityCountsWebImageForTextRateLimitedAccounts(t *testing.
 	// Image max: account 10 (3) + 12 (1) = 4; account 11 web-limited excluded.
 	require.Equal(t, 4, results[0].ImageConcurrencyMax)
 }
+
+func TestCapacityCooldownGroupCapacityRetainsOnlyWebImageSlots(t *testing.T) {
+	until := time.Now().Add(time.Hour)
+	repo := &groupCapacityAccountRepoStub{rows: []GroupAccountCapacityRow{{
+		GroupID: 1, AccountID: 42, Concurrency: 10, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		TempUnschedulableUntil: &until, TempUnschedulableReason: OpenAICapacityCooldownReasonPrefix + `"error_message":"text overload"}`,
+		Extra: map[string]any{"openai_web_images": map[string]any{"enabled": true, "max_inflight": 3}},
+	}}}
+	svc := NewGroupCapacityService(repo, &groupCapacityGroupRepoStub{groupIDs: []int64{1}}, nil, nil, nil)
+	svc.SetWebImages(NewOpenAIWebImagesService(&config.Config{}, nil, nil))
+	result, err := svc.GetAllGroupCapacity(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Zero(t, result[0].ConcurrencyMax)
+	require.Equal(t, 3, result[0].ImageConcurrencyMax)
+}
