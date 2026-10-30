@@ -43,6 +43,7 @@ git diff OLD_REF TARGET_REF -- backend/migrations
 | 账号重置与隐藏状态恢复，plus.17 / 404cd8b90 | retained | 清 DB/Redis 冷却、对延迟结果 fencing、重置后刷新 | TestAdminService_ClearAccountError；TestOpenAIResetQuota；server account-reset integration |
 | 分组额度/消耗监控，plus.15/16、f2ddd6e7c | retained | 按需查询、额度样本/资源去重、大数据查询优化 | TestCapacityMonitor；GroupCapacityMonitor repository integration；feature UI tests |
 | ops 长窗口预聚合，v99.0.2.19-plus.2 / 85fc470b3 | retained | 无过滤长窗口预聚合、raw 边界及过滤查询、singleflight | ops_repo_trends_preagg_test.go；ops snapshot tests |
+| Codex OAuth 上游请求压缩，v99.0.2.19-plus.4 | retained | `OPENAI_OAUTH_REQUEST_COMPRESSION.md`：官方 HTTP 流式 JSON ≥64 KiB 默认 zstd；账号 extra 可关闭；明确编码拒绝才原文重试一次；插件/SSE 保持原有路径 | TestOpenAIOAuthRequestCompression*；完整网关回归 |
 | API Key 生图统计、优雅退出、部署/安全工具链 | retained | 生图观测计数、graceful drain、Swarm 配置、Go/前端安全版本和 release skill | APIContracts；concurrency/cleanup tests；shell/release checks；security CI |
 | versioned OAuth credential delivery，d1c834f9d | explicitly reverted，f6658be72 | 明确撤销，禁止仅因历史存在而恢复 | 保留 revert 决策 |
 | 代理调度摘要展示，d4721673d | explicitly reverted，5845edeea | 明确撤销，禁止自动回放 | 保留 revert 决策 |
