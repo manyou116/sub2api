@@ -342,25 +342,10 @@ gateway:
     max_session_duration_seconds: 3600
   # OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
   # ---------------------------------------------------------------------------
-  # OpenAI Web Images (fork): ChatGPT Web picture_v2 path for gpt-image-2.
-  # Global default_enabled applies to all OpenAI OAuth accounts that have NOT
-  # set account.extra.openai_web_images.enabled. Per-account UI can inherit /
-  # force-on / force-off. Env: GATEWAY_OPENAI_WEB_IMAGES_DEFAULT_ENABLED=true
-  # ---------------------------------------------------------------------------
-  openai_web_images:
-    # Fleet-wide enable (opt-in). Account override only when extra has "enabled".
-    default_enabled: false
-    inflight_backend: redis
-    default_max_inflight: 1
-    quota_cache_ttl_seconds: 300
-    probe_on_schedule: true
-    unknown_quota_policy: optimistic
-    rate_limit_cooldown_seconds: 600
-    poll_timeout_seconds: 180
-    default_model_mode: auto
-    default_upstream_model: gpt-5-6-thinking
-    default_thinking_effort: extended
-    keep_conversation_after: false
+  # Web / Work image shadows (fork): create linked accounts in the admin UI.
+  # No fleet-wide enabled flag or separate inflight pool; use each shadow's
+  # ordinary concurrency and scheduling switch. See docs/WEB_IMAGE_SHADOWS.md.
+  # Legacy parent configurations require the explicit preview/conversion API.
 
   openai_ws:
     # 新版 WS mode 路由（默认关闭）。关闭时忽略账号级 WS mode（包括 http_bridge），保持 legacy ctx_pool 行为。

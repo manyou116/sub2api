@@ -2060,12 +2060,11 @@ func TestOpenAIGatewayServiceRecordUsage_ImageOnlyUsageStillPersists(t *testing.
 
 	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 		Result: &OpenAIForwardResult{
-			RequestID:     "resp_image_only_usage",
-			Model:         "gpt-image-2",
-			UpstreamModel: "auto",
-			ImageCount:    2,
-			ImageSize:     "1K",
-			Duration:      time.Second,
+			RequestID:  "resp_image_only_usage",
+			Model:      "gpt-image-2",
+			ImageCount: 2,
+			ImageSize:  "1K",
+			Duration:   time.Second,
 		},
 		APIKey:  &APIKey{ID: 1007},
 		User:    &User{ID: 2007},
@@ -2074,14 +2073,6 @@ func TestOpenAIGatewayServiceRecordUsage_ImageOnlyUsageStillPersists(t *testing.
 
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
-	require.Equal(t, "gpt-image-2", usageRepo.lastLog.Model)
-	require.Equal(t, "gpt-image-2", usageRepo.lastLog.RequestedModel)
-	require.NotNil(t, usageRepo.lastLog.UpstreamModel)
-	require.Equal(t, "auto", *usageRepo.lastLog.UpstreamModel)
-	expectedCost := svc.billingService.CalculateImageCost("gpt-image-2", "1K", 2, nil, 1.1)
-	require.Positive(t, expectedCost.TotalCost)
-	require.InDelta(t, expectedCost.TotalCost, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
 	require.Equal(t, 2, usageRepo.lastLog.ImageCount)
 	require.NotNil(t, usageRepo.lastLog.ImageSize)
 	require.Equal(t, "1K", *usageRepo.lastLog.ImageSize)

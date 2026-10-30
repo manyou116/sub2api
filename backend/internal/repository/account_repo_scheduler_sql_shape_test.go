@@ -45,13 +45,11 @@ func TestSchedulerGroupQuerySQLAvoidsWideDistinctAndPreservesOrder(t *testing.T)
 	mock.ExpectQuery(`FROM "groups"`).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "name", "platform", "status"}).
 			AddRow(int64(7), "scheduler-sql-test", service.PlatformOpenAI, service.StatusActive))
-	mock.ExpectQuery(`FROM accounts`).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "web_image_rate_limited_at", "web_image_rate_limit_reset_at"}))
 
 	accounts, err := repo.ListSchedulableByGroupIDAndPlatform(context.Background(), 7, service.PlatformOpenAI)
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
-	require.Len(t, queries, 5)
+	require.Len(t, queries, 4)
 	require.Len(t, accounts, 2)
 	require.Equal(t, int64(29), accounts[0].ID)
 	require.Equal(t, int64(11), accounts[1].ID)

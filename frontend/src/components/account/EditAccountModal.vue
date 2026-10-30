@@ -26,6 +26,8 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <WebImageShadowSettings v-if="isWebShadow" v-model="webImageSettings" :account-id="account.id" :mode="imageShadowMode(account)" :parent-id="account.parent_account_id" />
+      <template v-if="!isWebShadow">
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
@@ -1918,7 +1920,7 @@
         </div>
       </div>
 
-      <div v-if="!isSparkShadow">
+      <div v-if="!isCredentialShadow">
         <div class="mb-1 flex items-center gap-2">
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
@@ -1931,6 +1933,8 @@
         :platform="account.platform"
         :type="account.type"
       />
+
+      </template>
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
@@ -2014,6 +2018,7 @@
         </p>
       </div>
 
+      <template v-if="!isWebShadow">
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
@@ -2132,108 +2137,6 @@
               </button>
             </div>
           </div>
-        </div>
-      </div>
-
-      <!-- OpenAI Web Images (picture_v2) -->
-      <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
-        class="border-t border-gray-200 pt-4 dark:border-dark-600"
-        data-testid="edit-openai-web-images"
-      >
-        <div class="mb-3">
-          <label class="input-label mb-0">{{ t('admin.accounts.webImages.title') }}</label>
-          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            {{ t('admin.accounts.webImages.desc') }}
-          </p>
-        </div>
-        <div class="space-y-3">
-          <div>
-            <label class="input-label" for="edit-openai-web-images-enable-mode">{{ t('admin.accounts.webImages.enableMode') }}</label>
-            <select
-              id="edit-openai-web-images-enable-mode"
-              v-model="openAIWebImagesEnableMode"
-              class="input"
-              data-testid="edit-openai-web-images-enable-mode"
-            >
-              <option value="inherit">{{ t('admin.accounts.webImages.enableModeInherit') }}</option>
-              <option value="on">{{ t('admin.accounts.webImages.enableModeOn') }}</option>
-              <option value="off">{{ t('admin.accounts.webImages.enableModeOff') }}</option>
-            </select>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.webImages.enableModeHint') }}</p>
-          </div>
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label class="input-label" for="edit-openai-web-images-max-inflight">{{ t('admin.accounts.webImages.maxInflight') }}</label>
-              <input
-                id="edit-openai-web-images-max-inflight"
-                v-model.number="openAIWebImagesMaxInflight"
-                type="number"
-                min="1"
-                max="20"
-                class="input"
-                data-testid="edit-openai-web-images-max-inflight"
-              />
-            </div>
-            <div>
-              <label class="input-label" for="edit-openai-web-images-priority">{{ t('admin.accounts.webImages.priority') }}</label>
-              <input
-                id="edit-openai-web-images-priority"
-                v-model.number="openAIWebImagesPriority"
-                type="number"
-                class="input"
-                data-testid="edit-openai-web-images-priority"
-              />
-            </div>
-          </div>
-          <div>
-            <label class="input-label" for="edit-openai-web-images-model-mode">{{ t('admin.accounts.webImages.modelMode') }}</label>
-            <select
-              id="edit-openai-web-images-model-mode"
-              v-model="openAIWebImagesModelMode"
-              class="input"
-              data-testid="edit-openai-web-images-model-mode"
-            >
-              <option value="auto">{{ t('admin.accounts.webImages.modelModeAuto') }}</option>
-              <option value="fixed">{{ t('admin.accounts.webImages.modelModeFixed') }}</option>
-            </select>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.webImages.modelModeHint') }}</p>
-          </div>
-          <div v-if="openAIWebImagesModelMode === 'fixed'" class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label class="input-label" for="edit-openai-web-images-model">{{ t('admin.accounts.webImages.upstreamModel') }}</label>
-              <select id="edit-openai-web-images-model" v-model="openAIWebImagesModel" class="input" data-testid="edit-openai-web-images-model">
-                <option v-for="m in openAIWebImagesModelOptions" :key="m.value" :value="m.value">{{ m.label }}</option>
-              </select>
-            </div>
-            <div>
-              <label class="input-label" for="edit-openai-web-images-effort">{{ t('admin.accounts.webImages.thinkingEffort') }}</label>
-              <select id="edit-openai-web-images-effort" v-model="openAIWebImagesThinkingEffort" class="input" data-testid="edit-openai-web-images-effort">
-                <option v-for="e in openAIWebImagesEffortOptions" :key="e.value" :value="e.value">{{ e.label }}</option>
-              </select>
-            </div>
-          </div>
-          <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input
-              v-model="openAIWebImagesProbeAfter"
-              type="checkbox"
-              class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              data-testid="edit-openai-web-images-probe-after"
-            />
-            {{ t('admin.accounts.webImages.probeAfterApply') }}
-          </label>
-          <label class="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300">
-            <input
-              v-model="openAIWebImagesRequireDownloadAttachment"
-              type="checkbox"
-              class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-              data-testid="edit-openai-web-images-require-download-attachment"
-            />
-            <span>
-              <span class="block">{{ t('admin.accounts.webImages.requireDownloadAttachment') }}</span>
-              <span class="block text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.webImages.requireDownloadAttachmentHint') }}</span>
-            </span>
-          </label>
         </div>
       </div>
 
@@ -2627,7 +2530,7 @@
 
       <!-- OpenAI API 长上下文计费开关 -->
       <div
-        v-if="account?.platform === 'openai' && !isSparkShadow && !hideAccountLongContextBilling && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="account?.platform === 'openai' && !isCredentialShadow && !hideAccountLongContextBilling && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2733,7 +2636,7 @@
 
       <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isCredentialShadow"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2914,7 +2817,7 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isCredentialShadow"
         class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
         data-testid="auto-reset-credit-settings"
       >
@@ -3338,6 +3241,8 @@
         </div>
       </div>
 
+      </template>
+
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div>
           <label class="input-label">{{ t('common.status') }}</label>
@@ -3467,12 +3372,6 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
-import {
-  OPENAI_WEB_IMAGES_DEFAULT_EFFORT,
-  OPENAI_WEB_IMAGES_DEFAULT_MODEL,
-  OPENAI_WEB_IMAGES_EFFORT_OPTIONS,
-  OPENAI_WEB_IMAGES_MODEL_OPTIONS
-} from '@/constants/openaiWebImages'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 
@@ -3502,6 +3401,8 @@ import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
+import WebImageShadowSettings from './WebImageShadowSettings.vue'
+import { isImageShadow, imageShadowMode, readWebImageSettings, type WebImageSettings } from './webImageShadow'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
@@ -3613,9 +3514,10 @@ const selectableGroups = computed(() => {
   return Array.from(groups.values())
 })
 
-// Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
-// 故隐藏代理选择器。
-const isSparkShadow = computed(() => props.account?.parent_account_id != null)
+// Credential shadows inherit parent identity and proxy.
+const isCredentialShadow = computed(() => props.account?.parent_account_id != null)
+const isWebShadow = computed(() => isImageShadow(props.account))
+const webImageSettings = ref<WebImageSettings>(readWebImageSettings(null))
 
 const hideAccountLongContextBilling = computed(() => {
   return allSelectedGroupsEnableLongContextPricing(form.group_ids, props.groups)
@@ -4257,17 +4159,6 @@ type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
 const codexFingerprintMode = ref<CodexFingerprintMode>('off')
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
-type OpenAIWebImagesEnableMode = 'inherit' | 'on' | 'off'
-const openAIWebImagesEnableMode = ref<OpenAIWebImagesEnableMode>('inherit')
-const openAIWebImagesMaxInflight = ref(1)
-const openAIWebImagesPriority = ref(0)
-const openAIWebImagesModelMode = ref<'auto' | 'fixed'>('auto')
-const openAIWebImagesModel = ref(OPENAI_WEB_IMAGES_DEFAULT_MODEL)
-const openAIWebImagesThinkingEffort = ref(OPENAI_WEB_IMAGES_DEFAULT_EFFORT)
-const openAIWebImagesProbeAfter = ref(false)
-const openAIWebImagesRequireDownloadAttachment = ref(false)
-const openAIWebImagesModelOptions = OPENAI_WEB_IMAGES_MODEL_OPTIONS
-const openAIWebImagesEffortOptions = OPENAI_WEB_IMAGES_EFFORT_OPTIONS
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
 const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
@@ -4699,6 +4590,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedChannelWarningDetails.value = null
   mixedChannelWarningRawMessage.value = ''
   mixedChannelWarningAction.value = null
+  webImageSettings.value = readWebImageSettings(newAccount)
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
   form.proxy_id = newAccount.proxy_id
@@ -4763,14 +4655,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   codexCLIOnlyAppServerEnabled.value = false
   codexFingerprintMode.value = 'off'
   codexImageToolMode.value = 'inherit'
-  openAIWebImagesEnableMode.value = 'inherit'
-  openAIWebImagesMaxInflight.value = 1
-  openAIWebImagesPriority.value = 0
-  openAIWebImagesModelMode.value = 'auto'
-  openAIWebImagesModel.value = OPENAI_WEB_IMAGES_DEFAULT_MODEL
-  openAIWebImagesThinkingEffort.value = OPENAI_WEB_IMAGES_DEFAULT_EFFORT
-  openAIWebImagesProbeAfter.value = false
-  openAIWebImagesRequireDownloadAttachment.value = false
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
   webSearchEmulationMode.value = 'default'
@@ -4827,27 +4711,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexFingerprintMode.value = (['off', 'device', 'session', 'full'].includes(fpMode || '')
         ? fpMode as CodexFingerprintMode
         : 'off')
-      const webCfg = (extra?.openai_web_images && typeof extra.openai_web_images === 'object')
-        ? (extra.openai_web_images as Record<string, unknown>)
-        : null
-      if (webCfg && Object.prototype.hasOwnProperty.call(webCfg, 'enabled') && typeof webCfg.enabled === 'boolean') {
-        openAIWebImagesEnableMode.value = webCfg.enabled ? 'on' : 'off'
-      } else {
-        openAIWebImagesEnableMode.value = 'inherit'
-      }
-      openAIWebImagesMaxInflight.value = typeof webCfg?.max_inflight === 'number' && webCfg.max_inflight > 0
-        ? webCfg.max_inflight
-        : 1
-      openAIWebImagesPriority.value = typeof webCfg?.priority === 'number' ? webCfg.priority : 0
-      openAIWebImagesModelMode.value = webCfg?.model_mode === 'fixed' ? 'fixed' : 'auto'
-      openAIWebImagesModel.value = typeof webCfg?.model === 'string' && webCfg.model
-        ? webCfg.model
-        : OPENAI_WEB_IMAGES_DEFAULT_MODEL
-      openAIWebImagesThinkingEffort.value = typeof webCfg?.thinking_effort === 'string' && webCfg.thinking_effort
-        ? webCfg.thinking_effort
-        : OPENAI_WEB_IMAGES_DEFAULT_EFFORT
-      openAIWebImagesProbeAfter.value = false
-      openAIWebImagesRequireDownloadAttachment.value = webCfg?.require_download_attachment === true
     }
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
@@ -5738,21 +5601,6 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
   try {
     let updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
     updatedAccount = await persistGrokMediaEligibility(accountID, updatedAccount)
-    // Web images uses dedicated control-plane API (account.extra.openai_web_images + runtime).
-    if (props.account?.platform === 'openai' && props.account?.type === 'oauth') {
-      await adminAPI.accounts.patchOpenAIWebImages(accountID, {
-        enabled_mode: openAIWebImagesEnableMode.value,
-        max_inflight: Number(openAIWebImagesMaxInflight.value) || 1,
-        priority: Number(openAIWebImagesPriority.value) || 0,
-        model_mode: openAIWebImagesModelMode.value,
-        model: openAIWebImagesModelMode.value === 'fixed' ? openAIWebImagesModel.value : '',
-        thinking_effort: openAIWebImagesModelMode.value === 'fixed' ? openAIWebImagesThinkingEffort.value : '',
-        require_download_attachment: openAIWebImagesRequireDownloadAttachment.value
-      })
-      if (openAIWebImagesProbeAfter.value) {
-        await adminAPI.accounts.probeOpenAIWebImages(accountID)
-      }
-    }
     appStore.showSuccess(t('admin.accounts.accountUpdated'))
     emit('updated', updatedAccount)
     handleClose()
@@ -5782,8 +5630,18 @@ const handleSubmit = async () => {
     return
   }
 
+  if (isWebShadow.value) {
+    const { proxy_id: _proxyID, ...fields } = form
+    await submitUpdateAccount(accountID, {
+      ...fields,
+      expires_at: form.expires_at ?? 0,
+      load_factor: form.load_factor || 0,
+      extra: { openai_web_images: { ...webImageSettings.value } }
+    })
+    return
+  }
   const updatePayload: Record<string, unknown> = { ...form }
-  if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value &&
+  if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isCredentialShadow.value &&
       [autoResetCredit5hThreshold.value, autoResetCredit7dThreshold.value].some(value => !Number.isFinite(value) || value < 0.1 || value > 100)) {
     appStore.showError(t('admin.accounts.autoResetCredit.thresholdInvalid'))
     return
@@ -6109,7 +5967,7 @@ const handleSubmit = async () => {
 
     // OpenAI/Grok OAuth: persist model mapping to credentials
     if ((props.account.platform === 'openai' || props.account.platform === 'grok') && props.account.type === 'oauth') {
-      const currentCredentials = isSparkShadow.value
+      const currentCredentials = isCredentialShadow.value
         ? {}
         : (updatePayload.credentials as Record<string, unknown>) ||
           ((props.account.credentials as Record<string, unknown>) || {})
@@ -6174,7 +6032,7 @@ const handleSubmit = async () => {
     // OpenAI: 手动覆盖订阅档位 plan_type（Plus / Pro 20x / Pro 5x / Business Standard / Business Premium / Free）。
     // 仅 OAuth 非影子账号：
     // 影子账号凭据由母账号管理(且后端会 sanitize),setup-token 无订阅调度语义。
-    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value) {
+    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isCredentialShadow.value) {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
@@ -6362,7 +6220,7 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_responses_flatten_namespaces
       }
-      if (isSparkShadow.value) {
+      if (isCredentialShadow.value) {
         delete newExtra.openai_long_context_billing_enabled
       } else {
         newExtra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
@@ -6409,7 +6267,7 @@ const handleSubmit = async () => {
 		} else {
 			delete newExtra.auto_pause_7d_disabled
 		}
-		if (props.account.type === 'oauth' && !isSparkShadow.value) {
+		if (props.account.type === 'oauth' && !isCredentialShadow.value) {
 			newExtra.auto_reset_credit_5h_enabled = autoResetCredit5hEnabled.value
 			newExtra.auto_reset_credit_7d_enabled = autoResetCredit7dEnabled.value
 			newExtra.auto_reset_credit_5h_threshold = autoResetCredit5hThreshold.value / 100

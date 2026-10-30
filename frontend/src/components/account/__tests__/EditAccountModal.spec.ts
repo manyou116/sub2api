@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import {
   BUILTIN_PLATFORM_CATALOG,
   resetPlatformCatalog,
@@ -33,6 +33,15 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       update: updateAccountMock,
+      getWebImageStatus: vi.fn().mockResolvedValue({ parent_account_id: 1, quota_known: false, remaining: null }),
+      getImageShadowModels: vi.fn().mockResolvedValue({
+        recommended: { web: 'gpt-5-6-thinking', work: 'gpt-5.6-luna-wm' },
+        models: [
+          { id: 'gpt-5-6-thinking', label: 'GPT-5.6 Sol', modes: ['web'], thinking_efforts: ['standard', 'extended'], default_thinking_effort: 'standard', verified: true },
+          { id: 'gpt-5.6-luna-wm', label: 'GPT-5.6 Luna WM', modes: ['work'], thinking_efforts: ['standard', 'extended'], default_thinking_effort: 'standard', verified: true },
+          { id: 'auto', label: 'Auto', modes: ['web'], thinking_efforts: [], default_thinking_effort: '', verified: true }
+        ]
+      }),
       checkMixedChannelRisk: checkMixedChannelRiskMock
     },
     settings: {
@@ -1172,6 +1181,29 @@ describe('EditAccountModal', () => {
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.base_url).toBe('https://api.x.ai/v1')
+  })
+
+  it('edits Web image settings and ordinary scheduling fields without parent credentials or proxy', async () => {
+    const account = { ...buildOpenAISparkShadowAccount(), quota_dimension: 'web_images', extra: { openai_web_images: { model_mode: 'fixed', model: 'gpt-5-6-thinking', thinking_effort: 'extended', require_download_attachment: true } } }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'ProxySelector' }).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="edit-openai-flatten-namespaces-toggle"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="web-image-model"]').element).toHaveProperty('value', 'gpt-5-6-thinking')
+    expect(wrapper.get('[data-testid="web-image-model"]').findAll('option').map(option => option.attributes('value')))
+      .toEqual(['', 'gpt-5-6-thinking', 'auto'])
+    await wrapper.get('[data-testid="web-image-model"]').setValue('auto')
+    await wrapper.get('[data-testid="set-shadow-group"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.group_ids).toEqual([7])
+    expect(payload.concurrency).toBe(account.concurrency)
+    expect(payload.priority).toBe(account.priority)
+    expect(payload).not.toHaveProperty('credentials')
+    expect(payload).not.toHaveProperty('proxy_id')
+    expect(payload.extra).toEqual({ openai_web_images: { model_mode: 'fixed', model: 'auto', thinking_effort: '', require_download_attachment: true } })
+    wrapper.unmount()
   })
 
   it('only submits model mapping credentials when saving an OpenAI spark shadow account', async () => {

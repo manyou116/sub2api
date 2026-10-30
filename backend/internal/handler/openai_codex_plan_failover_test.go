@@ -126,7 +126,7 @@ func TestCodexPlanHandlerSwitchesAndKeepsOtherModels(t *testing.T) {
 				require.NoError(t, err)
 				require.False(t, account.IsSchedulableForModel("gpt-6.1-sol"))
 				require.True(t, account.IsSchedulableForModel("gpt-5.4"))
-				require.True(t, account.IsSchedulableIgnoringTextRateLimit())
+				require.True(t, account.IsSchedulable())
 				require.Empty(t, repo.setErrorIDs)
 				require.Empty(t, repo.setTempIDs)
 				require.Empty(t, repo.rateLimitIDs)

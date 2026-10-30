@@ -530,7 +530,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		clearBinding()
 		return nil, false, nil
 	}
-	if shouldClearStickySession(account, req.RequestedModel) || account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() || !s.service.isAccountSchedulableForOpenAIRequest(ctx, account, req.RequiredImageCapability) {
+	if shouldClearStickySession(account, req.RequestedModel) || account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() || !account.IsSchedulable() {
 		clearBinding()
 		return nil, false, nil
 	}
@@ -573,21 +573,21 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		)
 		return nil, true, nil
 	}
-	selection, acquireErr := s.acquireAccountSlotForSchedule(ctx, account, req)
+	result, acquireErr := s.service.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
 	if acquireErr != nil && req.DisableStickyEscape {
 		return nil, false, acquireErr
 	}
-	if acquireErr == nil && selection != nil && selection.Acquired {
+	if acquireErr == nil && result != nil && result.Acquired {
 		if !req.PreserveStickyBinding {
 			_ = s.service.refreshStickySessionTTL(ctx, req.GroupID, sessionHash, s.service.openAIWSSessionStickyTTL())
 		}
-		return attachSelectionProfitGate(ctx, selection), false, nil
+		return attachSelectionProfitGate(ctx, &AccountSelectionResult{Account: account, Acquired: true, ReleaseFunc: result.ReleaseFunc}), false, nil
 	}
 
 	cfg := s.service.schedulingConfig()
 	// WaitPlan.MaxConcurrency 使用 Concurrency（非 EffectiveLoadFactor），因为 WaitPlan 控制的是 Redis 实际并发槽位等待。
 	if s.service.concurrencyService != nil {
-		if escapeCfg.enabled && !req.DisableStickyEscape && acquireErr == nil && selection != nil && !selection.Acquired {
+		if escapeCfg.enabled && !req.DisableStickyEscape && acquireErr == nil && result != nil && !result.Acquired {
 			errorRate, ttft, _ := s.stats.snapshot(accountID)
 			slog.Info("sticky_escape_triggered",
 				"account_id", accountID,
@@ -1183,30 +1183,20 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 		if candidate.account == nil {
 			continue
 		}
-		skipTextSlot := shouldSkipAccountTextSlotForWebImages(s.service, ctx, candidate.account, req.RequestedModel, req.RequiredImageCapability)
-		if !skipTextSlot && candidate.loadKnown && candidate.account.Concurrency > 0 &&
+		if candidate.loadKnown && candidate.account.Concurrency > 0 &&
 			candidate.loadInfo.CurrentConcurrency >= candidate.account.Concurrency {
 			continue
 		}
 
-		var (
-			result     *AcquireResult
-			attempted  bool
-			acquireErr error
-		)
-		if skipTextSlot {
-			result = &AcquireResult{Acquired: true, ReleaseFunc: func() {}}
-		} else {
-			result, attempted, acquireErr = s.tryAcquireOpenAIAccountSlot(ctx, candidate.account.ID, candidate.account.Concurrency, budget)
-			if !attempted {
-				break
-			}
-			if acquireErr != nil {
-				return nil, compactBlocked, acquireErr
-			}
-			if result == nil || !result.Acquired {
-				continue
-			}
+		result, attempted, acquireErr := s.tryAcquireOpenAIAccountSlot(ctx, candidate.account.ID, candidate.account.Concurrency, budget)
+		if !attempted {
+			break
+		}
+		if acquireErr != nil {
+			return nil, compactBlocked, acquireErr
+		}
+		if result == nil || !result.Acquired {
+			continue
 		}
 
 		fresh := s.service.resolveFreshSchedulableOpenAIAccount(ctx, candidate.account, req.Platform, req.RequestedModel, false, req.RequiredCapability)
@@ -1229,11 +1219,7 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 			continue
 		}
 
-		freshSkipTextSlot := shouldSkipAccountTextSlotForWebImages(s.service, ctx, fresh, req.RequestedModel, req.RequiredImageCapability)
-		if freshSkipTextSlot && !skipTextSlot {
-			release(result)
-			result = &AcquireResult{Acquired: true, ReleaseFunc: func() {}}
-		} else if !freshSkipTextSlot && (skipTextSlot || fresh.Concurrency != candidate.account.Concurrency) {
+		if fresh.Concurrency != candidate.account.Concurrency {
 			release(result)
 			result, attempted, acquireErr = s.tryAcquireOpenAIAccountSlot(ctx, fresh.ID, fresh.Concurrency, budget)
 			if !attempted {
@@ -1332,7 +1318,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			isGrokModelQuotaBlocked(account.ID, upstreamModel, now) {
 			continue
 		}
-		result, acquireErr := s.acquireAccountSlotForSchedule(ctx, account, req)
+		result, acquireErr := s.service.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
 		if acquireErr != nil {
 			return nil, acquireErr
 		}
@@ -1340,7 +1326,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			if req.SessionHash != "" && !req.PreserveStickyBinding {
 				_ = s.service.bindOpenAIStickySessionDuringSelection(ctx, req.GroupID, req.SessionHash, account.ID)
 			}
-			return attachSelectionProfitGate(ctx, result), nil
+			return attachSelectionProfitGate(ctx, &AccountSelectionResult{Account: account, Acquired: true, ReleaseFunc: result.ReleaseFunc}), nil
 		}
 		if s.service.concurrencyService != nil {
 			cfg := s.service.schedulingConfig()
@@ -1414,13 +1400,6 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	if err != nil {
 		return nil, 0, 0, 0, err
 	}
-	// ListSchedulable excludes accounts in a text-rate-limit window. Web image
-	// quota is independent, so add those accounts back for image requests only.
-	if req.RequiredImageCapability != "" || isOpenAIImageGenerationModel(req.RequestedModel) {
-		if extra, e2 := s.service.listAccountsAllowingTextRateLimit(ctx, req.GroupID, req.Platform); e2 == nil && len(extra) > 0 {
-			accounts = mergeAccountsByID(accounts, extra)
-		}
-	}
 	if len(accounts) == 0 {
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary(""))
 	}
@@ -1456,6 +1435,7 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	filterStats := openAISelectionFilterStats{pool: len(accounts)}
 	filtered := make([]*Account, 0, len(accounts))
 	loadReq := make([]AccountWithConcurrency, 0, len(accounts))
+	candidateCtx := s.service.webImageCandidateContext(ctx, accounts)
 	for i := range accounts {
 		account := &accounts[i]
 		if req.ExcludedIDs != nil {
@@ -1468,22 +1448,22 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 			filterStats.exclude("platform_mismatch")
 			continue
 		}
-		if !s.service.isAccountSchedulableForOpenAIRequest(ctx, account, req.RequiredImageCapability) {
+		if !account.IsSchedulable() {
 			filterStats.exclude("not_schedulable")
 			continue
 		}
-		if s.service.isOpenAIAccountRuntimeBlockedForRequest(ctx, account, req.RequiredImageCapability, req.RequestedModel) {
+		if s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) || openAICapacityBlocked(ctx, account, req.RequestedModel) {
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
 		// require_privacy_set is a group-scoped eligibility gate. Do not mutate the
 		// shared account: another group may intentionally allow accounts whose
 		// upstream privacy setting has not been confirmed.
-		if schedGroup != nil && schedGroup.RequirePrivacySet && !account.IsPrivacySet() {
+		if schedGroup != nil && schedGroup.RequirePrivacySet && !s.service.openAIRequestPrivacySet(candidateCtx, account) {
 			filterStats.exclude("privacy_not_set")
 			continue
 		}
-		if compatible, reason := s.isAccountRequestCompatibleReason(ctx, account, req); !compatible {
+		if compatible, reason := s.isAccountRequestCompatibleReason(candidateCtx, account, req); !compatible {
 			filterStats.exclude(reason)
 			continue
 		}
@@ -1763,6 +1743,11 @@ func (s *defaultOpenAIAccountScheduler) isAccountTransportCompatible(account *Ac
 }
 
 func (s *defaultOpenAIAccountScheduler) lookupShadowParentAccount(ctx context.Context, id int64) *Account {
+	if state, ok := ctx.Value(webImageCandidateKey{}).(*webImageCandidateState); ok {
+		if parent, exists := state.parents[id]; exists {
+			return parent
+		}
+	}
 	if s == nil || s.service == nil {
 		return nil
 	}
@@ -1791,21 +1776,26 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	if imageShadowRouteMismatch(ctx, account, req.RequestedModel) {
+		return false, "image_shadow_mode_mismatch"
+	}
+	if account.IsImageShadow() {
+		if s == nil || s.service == nil {
+			return false, "web_image_service_unavailable"
+		}
+		if reason := s.service.webImageSchedulingReason(ctx, account, req.RequestedModel); reason != "" {
+			return false, reason
+		}
+	}
 	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
 		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
 			return false, "account_model_not_owned"
 		}
 	}
-	if req.RequirePrivacySet && !account.IsPrivacySet() {
+	if req.RequirePrivacySet && (s == nil || s.service == nil || !s.service.openAIRequestPrivacySet(ctx, account)) {
 		return false, "privacy_not_set"
 	}
-	if accountBlockedByWebImageCooldown(account, req) {
-		return false, "web_image_cooldown"
-	}
-	if s != nil && s.service != nil && s.service.isWebImageInflightFullForRequest(ctx, account, req.RequiredImageCapability, req.RequestedModel) {
-		return false, "web_image_inflight_full"
-	}
-	if s != nil && s.service != nil && s.service.isOpenAIAccountRuntimeBlockedForRequest(ctx, account, req.RequiredImageCapability, req.RequestedModel) {
+	if (s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel)) || openAICapacityBlocked(ctx, account, req.RequestedModel) {
 		return false, "runtime_blocked"
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(ctx, account) {
@@ -1815,17 +1805,15 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	// TopK candidate pool can be filled with paused accounts and the later fresh/DB
 	// rechecks won't reach healthy accounts that fell outside TopK — manifesting as
 	// "no available accounts" even though healthy ones exist.
-	if s == nil || s.service == nil || !s.service.shouldBypassTextRateLimitForWebImages(account, req.RequiredImageCapability, req.RequestedModel) {
-		if paused, decision := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
-			if decision.reason != "" {
-				return false, decision.reason
-			}
-			reason := "quota_auto_pause"
-			if decision.window != "" {
-				reason += "_" + decision.window
-			}
-			return false, reason
+	if paused, decision := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+		if decision.reason != "" {
+			return false, decision.reason
 		}
+		reason := "quota_auto_pause"
+		if decision.window != "" {
+			reason += "_" + decision.window
+		}
+		return false, reason
 	}
 	// 母账号健康联动：影子账号的凭据来自母账号，母账号不可调度时影子也不应被选中。
 	// Parent-health gate: shadow borrows the parent's credentials; an unschedulable
@@ -2165,6 +2153,10 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 	excludedIDs map[int64]struct{},
 	requiredCapability OpenAIImagesCapability,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	ctx, routeErr := s.imageShadowRoutingContext(ctx, groupID, requestedModel)
+	if routeErr != nil {
+		return nil, OpenAIAccountScheduleDecision{}, routeErr
+	}
 	selection, decision, err := s.selectAccountWithScheduler(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", requiredCapability, false, PlatformOpenAI, false, false)
 	if err == nil && selection != nil && selection.Account != nil {
 		return selection, decision, nil
@@ -2407,8 +2399,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 				if selection == nil || selection.Account == nil {
 					return selection, decision, nil
 				}
-				if accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) &&
-					!s.isWebImageInflightFullForRequest(ctx, selection.Account, requiredImageCapability, requestedModel) {
+				if accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) {
 					applyLegacySelectionDecision(&decision, selection)
 					return selection, decision, nil
 				}
@@ -2435,8 +2426,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 				return selection, decision, nil
 			}
 			if s.isOpenAIAccountTransportCompatible(selection.Account, requiredTransport) &&
-				accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) &&
-				!s.isWebImageInflightFullForRequest(ctx, selection.Account, requiredImageCapability, requestedModel) {
+				accountSupportsOpenAICapabilities(selection.Account, requiredCapability, requiredImageCapability) {
 				applyLegacySelectionDecision(&decision, selection)
 				return selection, decision, nil
 			}
@@ -3197,27 +3187,4 @@ func calcLoadSkewByMoments(sum float64, sumSquares float64, count int) float64 {
 		variance = 0
 	}
 	return math.Sqrt(variance)
-}
-
-func mergeAccountsByID(base []Account, extra []Account) []Account {
-	if len(extra) == 0 {
-		return base
-	}
-	seen := make(map[int64]struct{}, len(base)+len(extra))
-	out := make([]Account, 0, len(base)+len(extra))
-	for i := range base {
-		if _, ok := seen[base[i].ID]; ok {
-			continue
-		}
-		seen[base[i].ID] = struct{}{}
-		out = append(out, base[i])
-	}
-	for i := range extra {
-		if _, ok := seen[extra[i].ID]; ok {
-			continue
-		}
-		seen[extra[i].ID] = struct{}{}
-		out = append(out, extra[i])
-	}
-	return out
 }

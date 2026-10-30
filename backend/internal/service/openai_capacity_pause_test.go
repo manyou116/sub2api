@@ -4,7 +4,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -38,7 +37,6 @@ func TestCapacityCooldownPersistsExistingTempUnschedStatusAndWebException(t *tes
 	require.Equal(t, 1, repo.setCalls)
 	require.False(t, account.IsSchedulable(), "the DB projection must block all text models")
 	require.True(t, IsOpenAICapacityCooldownReason(account.TempUnschedulableReason))
-	require.True(t, account.IsSchedulableIgnoringTextRateLimit(), "web images bypass only this text pause")
 	state, err := svc.rateLimitService.GetTempUnschedStatus(context.Background(), 42)
 	require.NoError(t, err)
 	require.Equal(t, TempUnschedScopeAccount, state.Scope)
@@ -51,7 +49,6 @@ func TestCapacityCooldownPersistsExistingTempUnschedStatusAndWebException(t *tes
 	state, err = svc.rateLimitService.GetTempUnschedStatus(context.Background(), 42)
 	require.NoError(t, err)
 	require.Equal(t, account.TempUnschedulableReason, state.ErrorMessage)
-	require.False(t, account.IsSchedulableIgnoringTextRateLimit())
 }
 
 func TestCapacityCooldownManualRecoveryResetsCircuitAndFencesLateProjection(t *testing.T) {
@@ -89,37 +86,4 @@ func TestCapacityCooldownRecoveryReportsRedisFailureBeforeClearingDB(t *testing.
 	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, store)
 	require.Error(t, svc.ClearTempUnschedulable(context.Background(), 42))
 	require.Zero(t, repo.clearTempUnschedCalls)
-}
-
-func TestCapacityCooldownWebExemptionDoesNotBypassOtherPauseReasons(t *testing.T) {
-	until := time.Now().Add(time.Hour)
-	for _, reason := range []string{"", "token refresh retry exhausted: timeout", `{"source":"authentication","error_message":"unauthorized"}`} {
-		account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, TempUnschedulableUntil: &until, TempUnschedulableReason: reason}
-		require.False(t, account.IsSchedulableIgnoringTextRateLimit(), reason)
-	}
-	state := struct {
-		Source string `json:"source"`
-		TempUnschedState
-	}{openAICapacityCooldownKeyword, TempUnschedState{Scope: TempUnschedScopeAccount}}
-	raw, err := json.Marshal(state)
-	require.NoError(t, err)
-	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, TempUnschedulableUntil: &until, TempUnschedulableReason: string(raw), WebImageRateLimitResetAt: &until}
-	require.False(t, account.IsSchedulableIgnoringTextRateLimit(), "web-image quota cooldown still wins")
-}
-
-func TestCapacityCooldownWorkModeWebImagesExemptOnlyTextCapacity(t *testing.T) {
-	until := time.Now().Add(time.Hour)
-	account := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
-		TempUnschedulableUntil: &until, TempUnschedulableReason: OpenAICapacityCooldownReasonPrefix + `"error_message":"text capacity"}`,
-		Extra: map[string]any{"openai_web_images": map[string]any{"enabled": true, "model_mode": "fixed", "model": "gpt-5.6-luna-wm"}}}
-	svc := &OpenAIGatewayService{webImages: NewOpenAIWebImagesService(&config.Config{}, nil, nil)}
-	require.Equal(t, "gpt-5.6-luna-wm", svc.webImages.ResolveUpstream(account).UpstreamModel)
-	require.True(t, svc.isAccountSchedulableForOpenAIRequest(context.Background(), account, OpenAIImagesCapabilityBasic))
-	require.NotNil(t, account.TempUnschedulableUntil, "checking Web eligibility must not alter the shared snapshot")
-	require.False(t, svc.isAccountSchedulableForOpenAIRequest(context.Background(), account, ""))
-	account.TempUnschedulableReason = "authentication failed"
-	require.False(t, svc.isAccountSchedulableForOpenAIRequest(context.Background(), account, OpenAIImagesCapabilityBasic))
-	account.TempUnschedulableReason = OpenAICapacityCooldownReasonPrefix + `"error_message":"text capacity"}`
-	account.WebImageRateLimitResetAt = &until
-	require.False(t, svc.isAccountSchedulableForOpenAIRequest(context.Background(), account, OpenAIImagesCapabilityBasic))
 }

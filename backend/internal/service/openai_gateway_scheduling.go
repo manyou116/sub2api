@@ -393,6 +393,12 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account == nil {
 		return "account_nil"
 	}
+	if imageShadowRouteMismatch(ctx, account, requestedModel) {
+		return "image_shadow_mode_mismatch"
+	}
+	if account.IsImageShadow() && (requestedModel == "" || !OpenAIImageGenerationIntentFromContext(ctx) || !IsGPTImageGenerationModel(account.GetMappedModel(requestedModel))) {
+		return "web_image_only"
+	}
 	// account_model composite routes publish an alias that only accounts with an
 	// explicit model mapping own. Both scheduler modes (advanced and legacy) must
 	// enforce ownership before any priority/sticky/transport consideration; a
@@ -406,21 +412,13 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account.Platform != platform || !account.IsOpenAICompatible() {
 		return "platform_mismatch"
 	}
-	// Image models: do not inherit text/Codex RateLimitResetAt. Web image path has its own quota.
-	if isOpenAIImageGenerationModel(requestedModel) {
-		if !account.IsSchedulableIgnoringTextRateLimit() {
-			return "not_schedulable"
-		}
-		if account.isModelRateLimitedWithContext(ctx, requestedModel) {
-			return "model_rate_limited"
-		}
-	} else if !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
+	if !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 		if account.IsSchedulable() {
 			return "model_rate_limited"
 		}
 		return "not_schedulable"
 	}
-	if account.IsOpenAI() && !isOpenAIImageGenerationModel(requestedModel) {
+	if account.IsOpenAI() {
 		if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
 			// Debug level: this fires per-candidate on the scheduling hot path, so Info
 			// would amplify into log spam once several accounts cross the threshold.
@@ -1004,7 +1002,7 @@ func (s *OpenAIGatewayService) tryStickySessionHit(ctx context.Context, groupID 
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
-	if s.isOpenAIAccountRuntimeBlockedForRequest(ctx, account, "", requestedModel) {
+	if (s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) || s.webImageSchedulingReason(ctx, account, requestedModel) != "") || openAICapacityBlocked(ctx, account, requestedModel) {
 		_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 		return nil
 	}
@@ -1170,7 +1168,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		if err != nil {
 			return nil, err
 		}
-		result, err := s.tryAcquireAccountSlotForOpenAIRequest(ctx, account, requestedModel, "")
+		result, err := s.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
 		if err == nil && result != nil && result.Acquired {
 			selection, selectErr := s.newAcquiredSelectionResult(ctx, account, result.ReleaseFunc)
 			return markStickySessionHit(selection, stickyHit), selectErr
@@ -1207,11 +1205,6 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		accounts, err = s.listSchedulableAccounts(ctx, groupID, platform)
 		if err != nil {
 			return err
-		}
-		if isOpenAIImageGenerationModel(requestedModel) {
-			if extra, e2 := s.listAccountsAllowingTextRateLimit(ctx, groupID, platform); e2 == nil && len(extra) > 0 {
-				accounts = mergeAccountsByID(accounts, extra)
-			}
 		}
 		if len(accounts) == 0 {
 			return noAvailableOpenAISelectionError(requestedModel, false, openAISelectionFilterStats{}.summary(""))
@@ -1253,7 +1246,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if !s.openAIAccountMatchesSchedulingGroup(account, groupID) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
-					} else if s.isOpenAIAccountRuntimeBlockedForRequest(ctx, account, "", requestedModel) {
+					} else if (s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) || s.webImageSchedulingReason(ctx, account, requestedModel) != "") || openAICapacityBlocked(ctx, account, requestedModel) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
 					} else if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, account, requestedModel, requireCompact) {
 						_ = s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
@@ -1348,7 +1341,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			filterStats.exclude("shadow_parent_unhealthy")
 			continue
 		}
-		if s.isOpenAIAccountRuntimeBlockedForRequest(ctx, acc, "", requestedModel) {
+		if (s.isOpenAIAccountRequestRuntimeBlocked(acc, requestedModel) || s.webImageSchedulingReason(ctx, acc, requestedModel) != "") || openAICapacityBlocked(ctx, acc, requestedModel) {
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
@@ -1457,7 +1450,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, fresh, requestedModel, requireCompact) {
 				continue
 			}
-			result, err := s.tryAcquireAccountSlotForOpenAIRequest(ctx, fresh, requestedModel, "")
+			result, err := s.tryAcquireAccountSlot(ctx, fresh.ID, fresh.Concurrency)
 			if err == nil && result != nil && result.Acquired {
 				selection, selectErr := s.newAcquiredSelectionResult(ctx, fresh, result.ReleaseFunc)
 				if selectErr != nil {
@@ -1496,7 +1489,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, fresh, requestedModel, requireCompact) {
 				continue
 			}
-			result, err := s.tryAcquireAccountSlotForOpenAIRequest(ctx, fresh, requestedModel, "")
+			result, err := s.tryAcquireAccountSlot(ctx, fresh.ID, fresh.Concurrency)
 			if err == nil && result != nil && result.Acquired {
 				selection, selectErr := s.newAcquiredSelectionResult(ctx, fresh, result.ReleaseFunc)
 				if selectErr != nil {
@@ -1598,28 +1591,6 @@ func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, grou
 	return accounts, nil
 }
 
-// listAccountsAllowingTextRateLimit loads active accounts including those currently text-rate-limited.
-// Used to supplement image scheduling so Web-image OAuth accounts are not hidden by Codex/text 429.
-func (s *OpenAIGatewayService) listAccountsAllowingTextRateLimit(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
-	if s == nil || s.accountRepo == nil {
-		return nil, nil
-	}
-	platform = NormalizeOpenAICompatiblePlatform(platform)
-	var (
-		accounts []Account
-		err      error
-	)
-	if groupID != nil {
-		accounts, err = s.accountRepo.ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(ctx, *groupID, []string{platform})
-	} else {
-		accounts, err = s.accountRepo.ListActiveAllowingTextRateLimitByPlatforms(ctx, []string{platform})
-	}
-	if err != nil {
-		return nil, err
-	}
-	return accounts, nil
-}
-
 func (s *OpenAIGatewayService) tryAcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int) (*AcquireResult, error) {
 	if s.concurrencyService == nil {
 		return &AcquireResult{Acquired: true, ReleaseFunc: func() {}}, nil
@@ -1659,7 +1630,7 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAIAccountBeforeProfit(
 	if !parentHealthyForShadow(fresh, s.parentAccountLookup(ctx)) {
 		return nil
 	}
-	if s.isOpenAIAccountRuntimeBlockedForRequest(ctx, fresh, "", requestedModel) {
+	if (s.isOpenAIAccountRequestRuntimeBlocked(fresh, requestedModel) || s.webImageSchedulingReason(ctx, fresh, requestedModel) != "") || openAICapacityBlocked(ctx, fresh, requestedModel) {
 		return nil
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, fresh) {
@@ -1702,7 +1673,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.schedulerSnapshot == nil || s.accountRepo == nil {
-		if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !account.IsPrivacySet() {
+		if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !s.openAIRequestPrivacySet(ctx, account) {
 			return nil
 		}
 		if !isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, account, platform, requestedModel, requireCompact, requiredCapability) {
@@ -1727,7 +1698,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if !s.openAIAccountMatchesSchedulingGroup(latest, groupID) {
 		return nil
 	}
-	if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !latest.IsPrivacySet() {
+	if s.openAIGroupRequiresPrivacySet(ctx, groupID) && !s.openAIRequestPrivacySet(ctx, latest) {
 		return nil
 	}
 	if !isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, latest, platform, requestedModel, requireCompact, requiredCapability) {
@@ -1736,7 +1707,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if !parentHealthyForShadow(latest, s.parentAccountLookup(ctx)) {
 		return nil
 	}
-	if s.isOpenAIAccountRuntimeBlockedForRequest(ctx, latest, "", requestedModel) {
+	if (s.isOpenAIAccountRequestRuntimeBlocked(latest, requestedModel) || s.webImageSchedulingReason(ctx, latest, requestedModel) != "") || openAICapacityBlocked(ctx, latest, requestedModel) {
 		return nil
 	}
 	if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, latest) {

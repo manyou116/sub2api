@@ -46,10 +46,6 @@ func (r *rateLimitClearRepoStub) ClearRateLimit(ctx context.Context, id int64) e
 	r.clearRateLimitCalls++
 	return r.clearRateLimitErr
 }
-func (r *rateLimitClearRepoStub) SetWebImageRateLimited(context.Context, int64, time.Time) error {
-	return nil
-}
-func (r *rateLimitClearRepoStub) ClearWebImageRateLimit(context.Context, int64) error { return nil }
 
 func (r *rateLimitClearRepoStub) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
 	r.clearAntigravityCalls++

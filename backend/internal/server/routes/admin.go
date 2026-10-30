@@ -424,15 +424,6 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/batch-refresh-tier", h.Admin.Account.BatchRefreshTier)
 		accounts.POST("/bulk-update", h.Admin.Account.BulkUpdate)
 		accounts.POST("/batch-delete", h.Admin.Account.BatchDelete)
-		accounts.PATCH("/:id/openai-web-images", h.Admin.Account.PatchOpenAIWebImages)
-		accounts.GET("/:id/openai-web-images/status", h.Admin.Account.GetOpenAIWebImagesStatus)
-		accounts.POST("/:id/openai-web-images/probe", h.Admin.Account.ProbeOpenAIWebImages)
-		accounts.POST("/:id/openai-web-images/clear-cooldown", h.Admin.Account.ClearOpenAIWebImagesCooldown)
-		accounts.POST("/openai-web-images/bulk", h.Admin.Account.BulkOpenAIWebImages)
-		accounts.POST("/openai-web-images/bulk-probe", h.Admin.Account.BulkProbeOpenAIWebImages)
-		accounts.POST("/openai-web-images/bulk-clear-cooldown", h.Admin.Account.BulkClearOpenAIWebImagesCooldown)
-		accounts.GET("/openai-web-images/jobs/:id", h.Admin.Account.GetOpenAIWebImagesJob)
-		accounts.GET("/openai-web-images/overview", h.Admin.Account.OverviewOpenAIWebImages)
 		accounts.POST("/batch-clear-error", h.Admin.Account.BatchClearError)
 		accounts.POST("/batch-refresh", h.Admin.Account.BatchRefresh)
 
@@ -441,6 +432,13 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 
 		// Spark 影子账号
 		accounts.POST("/:id/shadow", h.Admin.OpenAIOAuth.CreateShadow)
+		accounts.POST("/:id/web-image-shadow", h.Admin.OpenAIOAuth.CreateWebImageShadow)
+		accounts.POST("/web-image-shadows", h.Admin.OpenAIOAuth.CreateWebImageShadows)
+		accounts.GET("/image-shadow-models", h.Admin.OpenAIOAuth.ImageShadowModels)
+		accounts.POST("/:id/web-image-shadow-conversion", h.Admin.OpenAIOAuth.ConvertLegacyWebImageShadow)
+		accounts.POST("/web-image/status", h.Admin.OpenAIOAuth.BatchWebImageStatus)
+		accounts.GET("/:id/web-image/status", h.Admin.OpenAIOAuth.WebImageStatus)
+		accounts.POST("/:id/web-image/probe", h.Admin.OpenAIOAuth.ProbeWebImage)
 
 		// Claude OAuth routes
 		accounts.POST("/generate-auth-url", h.Admin.OAuth.GenerateAuthURL)

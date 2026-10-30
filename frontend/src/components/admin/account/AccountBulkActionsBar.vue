@@ -1,5 +1,5 @@
 <template>
-  <div class="mb-4 flex flex-col gap-2 rounded-lg bg-primary-50 p-3 dark:bg-primary-900/20 sm:flex-row sm:items-center sm:justify-between">
+  <div class="mb-4 flex items-center justify-between rounded-lg bg-primary-50 p-3 dark:bg-primary-900/20">
     <div class="flex flex-wrap items-center gap-2">
       <span v-if="allResultsSelected" class="text-sm font-medium text-primary-900 dark:text-primary-100">
         {{ t('admin.accounts.bulkActions.selectedAll', { count: selectedIds.length }) }}
@@ -12,7 +12,6 @@
       </span>
       <template v-if="selectedIds.length > 0">
         <button
-          type="button"
           @click="$emit('select-page')"
           class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
         >
@@ -22,7 +21,6 @@
       <template v-if="!allResultsSelected && totalResults > selectedIds.length">
         <span v-if="selectedIds.length > 0" class="text-gray-300 dark:text-primary-800">•</span>
         <button
-          type="button"
           :disabled="selectingAll"
           @click="$emit('select-all-results')"
           class="text-xs font-medium text-primary-700 hover:text-primary-800 disabled:cursor-not-allowed disabled:opacity-60 dark:text-primary-300 dark:hover:text-primary-200"
@@ -37,7 +35,6 @@
       <template v-if="selectedIds.length > 0">
         <span class="text-gray-300 dark:text-primary-800">•</span>
         <button
-          type="button"
           @click="$emit('clear')"
           class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
         >
@@ -45,7 +42,7 @@
         </button>
       </template>
     </div>
-    <div class="flex flex-wrap items-center justify-end gap-2">
+    <div class="flex flex-wrap justify-end gap-2">
       <template v-if="selectedIds.length > 0">
         <button type="button" @click="$emit('delete')" class="btn btn-danger btn-sm">{{ t('admin.accounts.bulkActions.delete') }}</button>
         <button type="button" @click="$emit('reset-status')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.resetStatus') }}</button>
@@ -56,8 +53,9 @@
         <button type="button" :disabled="rateLimitReconcileBusy" :title="t('admin.accounts.rateLimitReconcile.help')" @click="$emit('toggle-rate-limit-reconcile', true)" class="btn btn-success btn-sm">{{ t('admin.accounts.bulkActions.enableRateLimitReconcile') }}</button>
         <button type="button" :disabled="rateLimitReconcileBusy" :title="t('admin.accounts.rateLimitReconcile.help')" @click="$emit('toggle-rate-limit-reconcile', false)" class="btn btn-warning btn-sm">{{ t('admin.accounts.bulkActions.disableRateLimitReconcile') }}</button>
         <button type="button" @click="$emit('edit-selected')" class="btn btn-primary btn-sm">{{ t('admin.accounts.bulkActions.edit') }}</button>
+        <button type="button" @click="$emit('create-web-image-shadows')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.webImageShadow.batchCreate') }}</button>
       </template>
-      <button type="button" @click="$emit('edit-filtered')" class="btn btn-primary btn-sm">
+      <button @click="$emit('edit-filtered')" class="btn btn-primary btn-sm">
         {{ t('admin.accounts.bulkEdit.submit') }}
       </button>
     </div>
@@ -86,7 +84,8 @@ defineEmits([
   'toggle-rate-limit-reconcile',
   'reset-status',
   'refresh-token',
-  'probe-upstream-billing'
+  'probe-upstream-billing',
+  'create-web-image-shadows'
 ])
 
 const { t } = useI18n()

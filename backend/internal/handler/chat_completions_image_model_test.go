@@ -21,19 +21,12 @@ func TestChatCompletionsRejectsGPTImageModelsBeforeScheduling(t *testing.T) {
 
 	for _, model := range []string{"gpt-image-1", "gpt-image-1.5", "gpt-image-2"} {
 		for _, tc := range []struct {
-			name        string
-			call        func(*gin.Context)
-			wantMessage string
+			name string
+			call func(*gin.Context)
 		}{
 			{
-				name:        "gateway",
-				call:        (&GatewayHandler{}).ChatCompletions,
-				wantMessage: "Chat Completions",
-			},
-			{
-				name:        "openai_gateway_bridge_disabled",
-				call:        newOpenAIImageChatRejectionHandler(t).ChatCompletions,
-				wantMessage: "GATEWAY_OPENAI_CHAT_IMAGE_BRIDGE_ENABLED",
+				name: "gateway",
+				call: (&GatewayHandler{}).ChatCompletions,
 			},
 		} {
 			t.Run(tc.name+"/"+model, func(t *testing.T) {
@@ -47,7 +40,7 @@ func TestChatCompletionsRejectsGPTImageModelsBeforeScheduling(t *testing.T) {
 
 				require.Equal(t, http.StatusBadRequest, recorder.Code)
 				require.Equal(t, "invalid_request_error", gjson.Get(recorder.Body.String(), "error.type").String())
-				require.Contains(t, gjson.Get(recorder.Body.String(), "error.message").String(), tc.wantMessage)
+				require.Contains(t, gjson.Get(recorder.Body.String(), "error.message").String(), "Chat Completions")
 				_, selected := c.Get(opsAccountIDKey)
 				require.False(t, selected, "rejection must happen before account selection")
 			})
@@ -55,7 +48,7 @@ func TestChatCompletionsRejectsGPTImageModelsBeforeScheduling(t *testing.T) {
 	}
 }
 
-func TestOpenAIChatCompletionsImageModelRejectionDoesNotAcquireConcurrency(t *testing.T) {
+func TestOpenAIChatCompletionsMalformedImageRequestDoesNotAcquireConcurrency(t *testing.T) {
 	var acquireCalls atomic.Int64
 	cache := &concurrencyCacheMock{
 		acquireUserSlotFn: func(context.Context, int64, int, string) (bool, error) {
@@ -67,7 +60,7 @@ func TestOpenAIChatCompletionsImageModelRejectionDoesNotAcquireConcurrency(t *te
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(
-		`{"model":"gpt-image-2","messages":[{"role":"user","content":"draw"}]}`,
+		`{"model":"gpt-image-2","messages":[]}`,
 	))
 	setImageChatTestAuth(c)
 
@@ -75,11 +68,6 @@ func TestOpenAIChatCompletionsImageModelRejectionDoesNotAcquireConcurrency(t *te
 
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	require.Zero(t, acquireCalls.Load(), "rejection must happen before user/account concurrency and scheduling")
-}
-
-func newOpenAIImageChatRejectionHandler(t *testing.T) *OpenAIGatewayHandler {
-	t.Helper()
-	return newOpenAIImageChatRejectionHandlerWithCache(t, &concurrencyCacheMock{})
 }
 
 func newOpenAIImageChatRejectionHandlerWithCache(t *testing.T, cache *concurrencyCacheMock) *OpenAIGatewayHandler {

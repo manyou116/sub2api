@@ -49,6 +49,26 @@ const getBodyText = () => document.body.textContent ?? ''
 const getBodyButtons = () => Array.from(document.body.querySelectorAll('button'))
 
 describe('AccountActionMenu — spark shadow 按钮可见性', () => {
+  it.each(['oauth', 'setup-token'] as const)('allows a real OpenAI %s parent to create a Web shadow', async (type) => {
+    const account = makeAccount({ type, parent_account_id: null })
+    const wrapper = mount(AccountActionMenu, { props: { show: true, account, anchorRect }, attachTo: document.body })
+    const button = getBodyButtons().find(b => b.textContent?.includes('admin.accounts.webImageShadow.create'))!
+    expect(button).toBeDefined()
+    button.click()
+    await wrapper.vm.$nextTick()
+    expect(wrapper.emitted('create-web-image-shadow')?.[0]).toEqual([account])
+    wrapper.unmount()
+  })
+
+  it('Web shadows cannot create children or mutate parent authentication', () => {
+    const account = makeAccount({ parent_account_id: 42, quota_dimension: 'web_images' })
+    const wrapper = mount(AccountActionMenu, { props: { show: true, account, anchorRect }, attachTo: document.body })
+    for (const key of ['webImageShadow.create', 'createSparkShadow', 'reAuthorize', 'refreshToken', 'setPrivacy']) {
+      expect(getBodyText()).not.toContain('admin.accounts.' + key)
+    }
+    wrapper.unmount()
+  })
+
   it('普通账号显示「复制账号」按钮', () => {
     const account = makeAccount({ platform: 'anthropic', type: 'apikey', parent_account_id: null })
     const wrapper = mount(AccountActionMenu, {

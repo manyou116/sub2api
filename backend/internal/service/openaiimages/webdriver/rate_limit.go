@@ -19,11 +19,15 @@ func extractTaskRateLimitError(stage string, body []byte) *Error {
 		if code == "" {
 			code = strings.TrimSpace(obj.Get("code").String())
 		}
+		if code == "" {
+			code = strings.TrimSpace(obj.Get("type").String())
+		}
 		msg := strings.TrimSpace(obj.Get("error_message").String())
 		if msg == "" {
 			msg = strings.TrimSpace(obj.Get("message").String())
 		}
-		if !looksLikeRateLimitMessage(code) && !looksLikeRateLimitMessage(msg) {
+		knownQuota := code == "codex_quota_exhausted" || code == "model_quota_exhausted" || code == "image_quota_exhausted" || code == "image_gen_quota_exceeded"
+		if !knownQuota && !looksLikeRateLimitMessage(code) && !looksLikeRateLimitMessage(msg) {
 			continue
 		}
 		if msg == "" {
@@ -31,9 +35,7 @@ func extractTaskRateLimitError(stage string, body []byte) *Error {
 		}
 		err := NewError(ErrorKindRateLimited, stage, msg, http.StatusTooManyRequests, true)
 		err.Code = code
-		if reset, e := time.Parse(time.RFC3339, obj.Get("reset_at").String()); e == nil && reset.After(time.Now()) {
-			err.ResetAt = &reset
-		}
+		err.ResetAt = explicitRateLimitReset(obj, time.Now())
 		return err
 	}
 	// A conversation response stores error metadata on assistant/tool nodes.
@@ -75,6 +77,27 @@ func extractTaskRateLimitError(stage string, body []byte) *Error {
 	})
 	if msg != "" {
 		return NewError(ErrorKindRateLimited, stage, msg, http.StatusTooManyRequests, true)
+	}
+	return nil
+}
+
+func explicitRateLimitReset(obj gjson.Result, now time.Time) *time.Time {
+	for _, key := range []string{"reset_at", "resets_at"} {
+		value := obj.Get(key)
+		if !value.Exists() {
+			continue
+		}
+		if reset, err := time.Parse(time.RFC3339, value.String()); err == nil && reset.After(now) {
+			return &reset
+		}
+		if seconds := value.Int(); seconds > now.Unix() {
+			reset := time.Unix(seconds, 0)
+			return &reset
+		}
+	}
+	if seconds := obj.Get("resets_in_seconds").Int(); seconds > 0 && seconds <= 86400*30 {
+		reset := now.Add(time.Duration(seconds) * time.Second)
+		return &reset
 	}
 	return nil
 }

@@ -113,6 +113,8 @@ type AdminService interface {
 	// CreateShadow 为指定 OpenAI OAuth 母账号创建 spark 维度影子账号（一母一影）。
 	// 影子账号不持凭据（Credentials 恒为空），透传母账号凭据；继承母账号的 ProxyID。
 	CreateShadow(ctx context.Context, parentID int64, opts ShadowOptions) (*Account, error)
+	CreateWebImageShadow(ctx context.Context, parentID int64, opts WebImageShadowOptions) (*Account, error)
+	ConvertLegacyWebImageShadow(ctx context.Context, parentID int64, opts WebImageShadowConversionOptions) (*WebImageShadowConversion, error)
 
 	// Proxy management
 	ListProxies(ctx context.Context, page, pageSize int, protocol, status, search string, sortBy, sortOrder string) ([]Proxy, int64, error)

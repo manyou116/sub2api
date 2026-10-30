@@ -480,7 +480,6 @@ func (s *ConcurrencyService) GetAPIKeyConcurrencyBatch(ctx context.Context, apiK
 	return result, nil
 }
 
-// TrackAPIKeyImageSlot records one active image-generation request for an API key (stats-only).
 func (s *ConcurrencyService) TrackAPIKeyImageSlot(ctx context.Context, apiKeyID int64) func() {
 	if s == nil || s.cache == nil || apiKeyID <= 0 {
 		return func() {}
@@ -512,7 +511,6 @@ func (s *ConcurrencyService) TrackAPIKeyImageSlot(ctx context.Context, apiKeyID 
 	}
 }
 
-// GetAPIKeyImageConcurrencyBatch gets real-time active image-generation counts for API keys.
 func (s *ConcurrencyService) GetAPIKeyImageConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error) {
 	result := zeroAPIKeyConcurrencyMap(apiKeyIDs)
 	if len(apiKeyIDs) == 0 {

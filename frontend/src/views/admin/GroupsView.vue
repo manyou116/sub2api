@@ -4330,7 +4330,7 @@ import type {
   SubscriptionType,
 } from "@/types";
 import {
-  COMPOSITE_ROUTE_PLATFORM_OPTIONS,
+  CONCRETE_PLATFORM_OPTIONS,
   GROUP_PLATFORM_OPTIONS,
 } from "@/constants/platforms";
 import type { Column } from "@/components/common/types";
@@ -4673,7 +4673,7 @@ const platformFilterOptions = computed(() => [
 ]);
 
 const compositeRoutePlatformOptions = computed(() => [
-  ...COMPOSITE_ROUTE_PLATFORM_OPTIONS,
+  ...CONCRETE_PLATFORM_OPTIONS,
 ]);
 
 const compositeRouteEndpointOptions = computed(() => [

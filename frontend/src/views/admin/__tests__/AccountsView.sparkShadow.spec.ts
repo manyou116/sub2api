@@ -5,6 +5,9 @@ import AccountsView from '../AccountsView.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import BatchWebImageShadowDialog from '@/components/account/BatchWebImageShadowDialog.vue'
+import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
+import WebImageQuotaCell from '@/components/account/WebImageQuotaCell.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 
 // 外审 F2:AccountActionMenu emit 'create-spark-shadow',但 AccountsView 此前未监听,
@@ -17,6 +20,7 @@ const {
   getAllGroups,
   duplicateAccount,
   createSparkShadow,
+  createWebImageShadow,
   showSuccess,
   showError
 } = vi.hoisted(() => ({
@@ -27,6 +31,7 @@ const {
   getAllGroups: vi.fn(),
   duplicateAccount: vi.fn(),
   createSparkShadow: vi.fn(),
+  createWebImageShadow: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn()
 }))
@@ -40,6 +45,7 @@ vi.mock('@/api/admin', () => ({
       duplicate: duplicateAccount,
       getUpstreamBillingProbeSettings: vi.fn().mockResolvedValue({ enabled: true, interval_minutes: 30 }),
       createSparkShadow,
+      createWebImageShadow,
       delete: vi.fn(),
       batchClearError: vi.fn(),
       batchRefresh: vi.fn(),
@@ -77,6 +83,8 @@ const mountView = () =>
         DataTable: true,
         Pagination: true,
         ConfirmDialog: true,
+        BatchWebImageShadowDialog: true,
+        WebImageQuotaCell: true,
         AccountTableActions: { template: '<div><slot name="beforeCreate" /><slot name="after" /></div>' },
         AccountTableFilters: { template: '<div></div>' },
         AccountBulkActionsBar: true,
@@ -107,7 +115,7 @@ const mountView = () =>
 describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
   beforeEach(() => {
     localStorage.clear()
-    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, showSuccess, showError]) {
+    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, createWebImageShadow, showSuccess, showError]) {
       fn.mockReset()
     }
     listAccounts.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
@@ -190,6 +198,24 @@ describe('admin AccountsView — 外审 F2:spark 影子创建接线', () => {
     wrapper.unmount()
   })
 
+  it('opens the unified image-mode dialog for a single parent before any creation', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    wrapper.findComponent(AccountActionMenu).vm.$emit('create-web-image-shadow', { id: 42, name: 'parent' })
+    await flushPromises()
+    const dialog = wrapper.getComponent(BatchWebImageShadowDialog)
+    expect(dialog.props('show')).toBe(true)
+    expect(dialog.props('parentIds')).toEqual([42])
+    expect(createWebImageShadow).not.toHaveBeenCalled()
+    dialog.vm.$emit('completed')
+    await flushPromises()
+    expect(listAccounts.mock.calls.length).toBeGreaterThan(1)
+    dialog.vm.$emit('close')
+    await flushPromises()
+    expect(dialog.props('show')).toBe(false)
+    wrapper.unmount()
+  })
+
   it('用户取消确认时不调用 API', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -224,11 +250,14 @@ const mountViewWithRow = () =>
             <div v-for="(row, idx) in (data || [])" :key="idx">
               <slot name="cell-name" :row="row" :value="row.name" />
               <slot name="cell-platform_type" :row="row" />
+              <slot name="cell-usage" :row="row" />
             </div>
           </div>`
         },
         Pagination: true,
         ConfirmDialog: true,
+        BatchWebImageShadowDialog: true,
+        WebImageQuotaCell: true,
         AccountTableActions: { template: '<div><slot name="beforeCreate" /><slot name="after" /></div>' },
         AccountTableFilters: { template: '<div></div>' },
         AccountBulkActionsBar: true,
@@ -259,7 +288,7 @@ const mountViewWithRow = () =>
 describe('admin AccountsView — 账号行展示', () => {
   beforeEach(() => {
     localStorage.clear()
-    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, showSuccess, showError]) {
+    for (const fn of [listAccounts, listWithEtag, getBatchTodayStats, getAllProxies, getAllGroups, duplicateAccount, createSparkShadow, createWebImageShadow, showSuccess, showError]) {
       fn.mockReset()
     }
     listWithEtag.mockResolvedValue({ notModified: true, etag: null, data: null })
@@ -304,6 +333,21 @@ describe('admin AccountsView — 账号行展示', () => {
     expect(badge.props('privacyMode')).toBe('false')
     expect(badge.props('subscriptionExpiresAt')).toBe('2027-01-01T00:00:00Z')
 
+    wrapper.unmount()
+  })
+
+  it('renders WM with parent Codex usage while Web keeps its image-quota cell', async () => {
+    const work = { id: 300, name: 'WM', platform: 'openai', type: 'oauth', parent_account_id: 1, quota_dimension: 'work_images' }
+    const web = { ...work, id: 301, name: 'Web', quota_dimension: 'web_images' }
+    listAccounts.mockResolvedValue({ items: [work, web], total: 2, page: 1, page_size: 20, pages: 1 })
+    const wrapper = mountViewWithRow()
+    await flushPromises()
+    expect(wrapper.text()).toContain('admin.accounts.webImageShadow.workBadge')
+    expect(wrapper.text()).toContain('admin.accounts.webImageShadow.workParent')
+    const usage = wrapper.findAllComponents(AccountUsageCell)
+    expect(usage).toHaveLength(1)
+    expect(usage[0].props('account').id).toBe(300)
+    expect(wrapper.getComponent(WebImageQuotaCell).props('accountId')).toBe(301)
     wrapper.unmount()
   })
 

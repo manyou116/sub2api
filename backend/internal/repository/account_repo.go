@@ -967,7 +967,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				ELSE extra
 			END,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND deleted_at IS NULL AND parent_account_id IS NULL
 	`, string(payload), id)
 	if err != nil {
 		return err
@@ -2093,6 +2093,124 @@ func (r *accountRepository) ListSchedulableByGroupID(ctx context.Context, groupI
 	})
 }
 
+func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Context, groupIDs []int64) ([]service.GroupAccountCapacityRow, error) {
+	groupIDs = uniquePositiveInt64s(groupIDs)
+	if len(groupIDs) == 0 {
+		return []service.GroupAccountCapacityRow{}, nil
+	}
+	if r.sql == nil {
+		rows := make([]service.GroupAccountCapacityRow, 0)
+		for _, groupID := range groupIDs {
+			accounts, err := r.ListSchedulableByGroupID(ctx, groupID)
+			if err != nil {
+				return nil, err
+			}
+			for i := range accounts {
+				acc := &accounts[i]
+				if acc.IsShadow() {
+					parent, err := r.GetByID(ctx, *acc.ParentAccountID)
+					if err != nil || parent == nil || parent.IsShadow() {
+						continue
+					}
+					if acc.IsImageShadow() {
+						if service.ValidateWebImageShadowParent(parent) != nil || !parent.IsCredentialUsableForWebImages() {
+							continue
+						}
+						if acc.IsWorkImageShadow() && (parent.IsRateLimited() || parent.IsOverloaded()) {
+							continue
+						}
+					} else if !parent.IsOpenAIOAuth() || !parent.IsCredentialUsableForShadow() {
+						continue
+					}
+				}
+				rows = append(rows, service.GroupAccountCapacityRow{
+					GroupID:             groupID,
+					AccountID:           acc.ID,
+					Concurrency:         acc.Concurrency,
+					QuotaDimension:      acc.QuotaDimensionOrDefault(),
+					Extra:               copyJSONMap(acc.Extra),
+					SessionWindowStart:  acc.SessionWindowStart,
+					SessionWindowEnd:    acc.SessionWindowEnd,
+					SessionWindowStatus: acc.SessionWindowStatus,
+				})
+			}
+		}
+		return rows, nil
+	}
+
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT
+			ag.group_id,
+			a.id AS account_id,
+			a.concurrency,
+			a.quota_dimension,
+			COALESCE(a.extra, '{}'::jsonb)::text AS extra,
+			a.session_window_start,
+			a.session_window_end,
+			COALESCE(a.session_window_status, '') AS session_window_status
+		FROM account_groups ag
+		JOIN accounts a ON a.id = ag.account_id
+		WHERE ag.group_id = ANY($1)
+			AND a.deleted_at IS NULL
+			AND a.status = $2
+			AND a.schedulable = TRUE
+			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= $3)
+			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
+			AND (a.overload_until IS NULL OR a.overload_until <= $3)
+			AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= $3)
+			AND (a.parent_account_id IS NULL OR EXISTS (
+				SELECT 1 FROM accounts p WHERE p.id = a.parent_account_id
+				AND p.deleted_at IS NULL AND p.parent_account_id IS NULL AND p.status = $2
+				AND p.platform = 'openai'
+				AND (p.expires_at IS NULL OR p.expires_at > $3 OR p.auto_pause_on_expired = FALSE)
+				AND (p.temp_unschedulable_until IS NULL OR p.temp_unschedulable_until <= $3
+					OR (a.quota_dimension IN ('web_images', 'work_images') AND left(COALESCE(p.temp_unschedulable_reason, ''), length($4)) = $4))
+				AND ((a.quota_dimension = 'spark' AND p.type = 'oauth') OR
+					(a.quota_dimension IN ('web_images', 'work_images') AND p.type IN ('oauth', 'setup-token')
+					AND trim(COALESCE(p.credentials->>'access_token', '')) <> ''
+					AND lower(trim(COALESCE(p.credentials->>'auth_mode', ''))) <> 'agentidentity'
+					AND ((a.quota_dimension = 'web_images' AND (p.web_image_rate_limit_reset_at IS NULL OR p.web_image_rate_limit_reset_at <= $3))
+						OR (a.quota_dimension = 'work_images' AND (p.rate_limit_reset_at IS NULL OR p.rate_limit_reset_at <= $3)
+							AND (p.overload_until IS NULL OR p.overload_until <= $3)))))
+			))
+		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC
+	`, pq.Array(groupIDs), service.StatusActive, time.Now(), service.OpenAICapacityCooldownReasonPrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]service.GroupAccountCapacityRow, 0)
+	for rows.Next() {
+		var row service.GroupAccountCapacityRow
+		var extraRaw string
+		if err := rows.Scan(
+			&row.GroupID,
+			&row.AccountID,
+			&row.Concurrency,
+			&row.QuotaDimension,
+			&extraRaw,
+			&row.SessionWindowStart,
+			&row.SessionWindowEnd,
+			&row.SessionWindowStatus,
+		); err != nil {
+			return nil, err
+		}
+		if extraRaw != "" && extraRaw != "null" {
+			var extra map[string]any
+			if err := json.Unmarshal([]byte(extraRaw), &extra); err != nil {
+				return nil, err
+			}
+			row.Extra = extra
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
 	now := time.Now()
 	accounts, err := r.client.Account.Query().
@@ -2236,44 +2354,6 @@ func (r *accountRepository) ListModelAvailabilityCandidates(
 	}
 	accounts, err := r.client.Account.Query().
 		Where(preds...).
-		Order(dbent.Asc(dbaccount.FieldPriority)).
-		All(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return r.accountsToService(ctx, accounts)
-}
-
-// ListActiveAllowingTextRateLimitByGroupIDAndPlatforms returns active/schedulable accounts in a group,
-// including those currently inside text RateLimitResetAt/OverloadUntil windows.
-// Intended for ChatGPT Web image selection only.
-func (r *accountRepository) ListActiveAllowingTextRateLimitByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]service.Account, error) {
-	if len(platforms) == 0 {
-		return nil, nil
-	}
-	return r.queryAccountsByGroup(ctx, groupID, accountGroupQueryOptions{
-		status:                 service.StatusActive,
-		schedulable:            true,
-		platforms:              platforms,
-		includeTextRateLimited: true,
-	})
-}
-
-// ListActiveAllowingTextRateLimitByPlatforms is the ungrouped/platform-wide variant.
-func (r *accountRepository) ListActiveAllowingTextRateLimitByPlatforms(ctx context.Context, platforms []string) ([]service.Account, error) {
-	if len(platforms) == 0 {
-		return nil, nil
-	}
-	now := time.Now()
-	accounts, err := r.client.Account.Query().
-		Where(
-			dbaccount.PlatformIn(platforms...),
-			dbaccount.StatusEQ(service.StatusActive),
-			dbaccount.SchedulableEQ(true),
-			webImageTempUnschedulablePredicate(),
-			notExpiredPredicate(now),
-			// Intentionally omit RateLimitResetAt/OverloadUntil filters.
-		).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
 	if err != nil {
@@ -3331,9 +3411,6 @@ type accountGroupQueryOptions struct {
 	schedulable          bool
 	ignoreTransientState bool
 	platforms            []string // 允许的多个平台，空切片表示不进行平台过滤
-	// includeTextRateLimited keeps accounts still inside RateLimitResetAt/OverloadUntil.
-	// Used by ChatGPT Web image scheduling so text 429 does not hide image-capable OAuth accounts.
-	includeTextRateLimited bool
 }
 
 func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID int64, opts accountGroupQueryOptions) ([]service.Account, error) {
@@ -3353,20 +3430,12 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 		preds = append(preds, dbaccount.SchedulableEQ(true))
 		if !opts.ignoreTransientState {
 			now := time.Now()
-			tempPredicate := tempUnschedulablePredicate()
-			if opts.includeTextRateLimited {
-				tempPredicate = webImageTempUnschedulablePredicate()
-			}
 			preds = append(preds,
-				tempPredicate,
+				tempUnschedulablePredicate(),
 				notExpiredPredicate(now),
+				dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
+				dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
 			)
-			if !opts.includeTextRateLimited {
-				preds = append(preds,
-					dbaccount.Or(dbaccount.OverloadUntilIsNil(), dbaccount.OverloadUntilLTE(now)),
-					dbaccount.Or(dbaccount.RateLimitResetAtIsNil(), dbaccount.RateLimitResetAtLTE(now)),
-				)
-			}
 		}
 	}
 
@@ -3463,13 +3532,6 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 		}
 		outAccounts = append(outAccounts, *out)
 	}
-
-	// Attach durable web-image cooldown columns (raw SQL; fork-only).
-	ptrs := make([]*service.Account, 0, len(outAccounts))
-	for i := range outAccounts {
-		ptrs = append(ptrs, &outAccounts[i])
-	}
-	r.attachWebImageRateLimits(ctx, ptrs)
 
 	return outAccounts, nil
 }
@@ -4115,16 +4177,13 @@ func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID i
 	return nil
 }
 
-// ListShadowsByParent 返回指定父账号的影子账号；当前实现仅查 quota_dimension='spark'（唯一预设）。
-// 同时过滤 parent_account_id 和 quota_dimension='spark'，防止未来其它 linked 维度被误伤。
-// ⚠️ 新增影子维度时：须更新此函数（或新增维度专用列举），并检查所有调用点（级联删除/一母一影校验/type 守卫），否则会静默漏掉新维度。
-// 软删除行由 SoftDeleteMixin 拦截器自动排除，无需手写 deleted_at IS NULL。
+// ListShadowsByParent lists every live credential shadow for lifecycle operations.
 func (r *accountRepository) ListShadowsByParent(ctx context.Context, parentID int64) ([]*service.Account, error) {
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.ListShadowsByParent(ctx, parentID)
 	}
 	rows, err := r.client.Account.Query().
-		Where(dbaccount.ParentAccountIDEQ(parentID), dbaccount.QuotaDimensionEQ(dbaccount.QuotaDimensionSpark)).
+		Where(dbaccount.ParentAccountIDEQ(parentID)).
 		All(ctx)
 	if err != nil {
 		return nil, err

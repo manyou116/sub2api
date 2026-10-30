@@ -124,22 +124,6 @@ func (s *helperConcurrencyCacheStub) GetAPIKeyConcurrencyBatch(ctx context.Conte
 	return out, nil
 }
 
-func (s *helperConcurrencyCacheStub) TrackAPIKeyImageSlot(context.Context, int64, string) error {
-	return nil
-}
-
-func (s *helperConcurrencyCacheStub) ReleaseAPIKeyImageSlot(context.Context, int64, string) error {
-	return nil
-}
-
-func (s *helperConcurrencyCacheStub) GetAPIKeyImageConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error) {
-	out := make(map[int64]int, len(apiKeyIDs))
-	for _, apiKeyID := range apiKeyIDs {
-		out[apiKeyID] = 0
-	}
-	return out, nil
-}
-
 func (s *helperConcurrencyCacheStub) IncrementWaitCount(ctx context.Context, userID int64, maxWait int) (bool, error) {
 	s.mu.Lock()
 	s.waitIncrementCalls++
@@ -531,4 +515,14 @@ func TestSetClaudeCodeClientContext_ParsedRequestProbeWithoutSystemPrompt(t *tes
 	c2.Request.Header.Set("User-Agent", "claude-cli/2.1.260 (external, cli)")
 	SetClaudeCodeClientContext(c2, nil, &service.ParsedRequest{Model: "claude-sonnet-4-5", MaxTokens: 64})
 	require.False(t, service.IsClaudeCodeClient(c2.Request.Context()))
+}
+
+func (s *helperConcurrencyCacheStub) TrackAPIKeyImageSlot(context.Context, int64, string) error {
+	return nil
+}
+func (s *helperConcurrencyCacheStub) ReleaseAPIKeyImageSlot(context.Context, int64, string) error {
+	return nil
+}
+func (s *helperConcurrencyCacheStub) GetAPIKeyImageConcurrencyBatch(context.Context, []int64) (map[int64]int, error) {
+	return map[int64]int{}, nil
 }

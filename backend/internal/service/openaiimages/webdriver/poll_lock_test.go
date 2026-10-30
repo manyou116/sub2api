@@ -65,3 +65,52 @@ func TestWithAccountPollLockReleasesAfterCompletion(t *testing.T) {
 		t.Fatal("idle poll lock must be removed after its final user exits")
 	}
 }
+
+func TestPollGateSharesSpacingWithoutHoldingConversationLock(t *testing.T) {
+	key := "spacing-" + t.Name()
+	started := time.Now()
+	if err := withAccountPollGate(context.Background(), key, func(lock *accountPollLock) error {
+		lock.nextAllowed.Store(time.Now().Add(40 * time.Millisecond).UnixNano())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// First conversation is still generating, but its HTTP call already released
+	// the gate. Another conversation can poll after the account-wide minimum gap.
+	if err := withAccountPollGate(context.Background(), key, func(*accountPollLock) error {
+		if time.Since(started) < 35*time.Millisecond {
+			t.Fatal("shared poll spacing was bypassed")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	accountPollLocks.Lock()
+	_, retained := accountPollLocks.locks[key]
+	accountPollLocks.Unlock()
+	if retained {
+		t.Fatal("expired idle gate should be removed")
+	}
+}
+
+func TestPollGateWaitHonorsDeadline(t *testing.T) {
+	key := "deadline-" + t.Name()
+	if err := withAccountPollGate(context.Background(), key, func(lock *accountPollLock) error {
+		lock.nextAllowed.Store(time.Now().Add(50 * time.Millisecond).UnixNano())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	err := withAccountPollGate(ctx, key, func(*accountPollLock) error { t.Fatal("expired context must not make HTTP request"); return nil })
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestPollGateKeepsIdentityAcrossTokenRefresh(t *testing.T) {
+	if pollLockKey(Auth{AccountID: "parent", AccessToken: "old"}) != pollLockKey(Auth{AccountID: "parent", AccessToken: "new"}) {
+		t.Fatal("refresh must not bypass the parent's poll spacing")
+	}
+}

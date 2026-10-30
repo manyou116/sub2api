@@ -379,7 +379,7 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 				}
 				req.MaskUpload = &maskUpload
 			}
-			if name == "image" || strings.HasPrefix(name, "image[") || strings.HasPrefix(name, "image_") {
+			if name == "image" || strings.HasPrefix(name, "image[") {
 				width, height := parseOpenAIImageDimensions(part.Header)
 				req.Uploads = append(req.Uploads, OpenAIImagesUpload{
 					FieldName:   name,
@@ -611,6 +611,9 @@ func (s *OpenAIGatewayService) ForwardImages(
 ) (*OpenAIForwardResult, error) {
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
+	}
+	if account.IsImageShadow() {
+		return s.forwardWebImage(ctx, c, account, parsed, channelMappedModel)
 	}
 	switch account.Type {
 	case AccountTypeAPIKey:

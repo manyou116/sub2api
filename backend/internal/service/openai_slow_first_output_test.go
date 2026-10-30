@@ -325,7 +325,7 @@ func TestSlowFirstOutputPauseReasonAndWebException(t *testing.T) {
 	recordOpenAITextCooldown(account, 3, &openAISlowFirstOutputObservation{10001 * time.Millisecond, 10 * time.Second})
 	require.Equal(t, 1, repo.setCalls)
 	require.False(t, account.IsSchedulable())
-	require.True(t, account.IsSchedulableIgnoringTextRateLimit())
+	require.True(t, account.IsCredentialUsableForWebImages())
 	state, err := svc.rateLimitService.GetTempUnschedStatus(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.Equal(t, "openai_slow_first_output", state.MatchedKeyword)

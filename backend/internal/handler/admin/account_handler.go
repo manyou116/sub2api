@@ -70,7 +70,6 @@ type AccountHandler struct {
 	ollamaCloudUsage        *service.OllamaCloudUsageService
 	cfg                     *config.Config
 	opencodeGoUsage         *service.OpenCodeGoUsageService
-	webImages               *service.OpenAIWebImagesService
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -1758,7 +1757,6 @@ func (h *AccountHandler) ClearError(c *gin.Context) {
 	}
 
 	account, err := h.adminService.ClearAccountError(c.Request.Context(), accountID)
-	h.clearWebImagesCooldownBestEffort(context.Background(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -1954,9 +1952,6 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 	for _, id := range req.AccountIDs {
 		accountID := id // 闭包捕获
 		g.Go(func() error {
-			// Image cooldown is independent of the text error state, so clear it for
-			// the same reset action even when the text-side clear fails.
-			h.clearWebImagesCooldownBestEffort(context.Background(), accountID)
 			account, err := h.adminService.ClearAccountError(gctx, accountID)
 			if err != nil {
 				mu.Lock()
@@ -2598,7 +2593,6 @@ func (h *AccountHandler) ClearRateLimit(c *gin.Context) {
 	}
 
 	err = h.rateLimitService.ClearRateLimit(c.Request.Context(), accountID)
-	h.clearWebImagesCooldownBestEffort(context.Background(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

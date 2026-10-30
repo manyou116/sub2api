@@ -117,7 +117,7 @@ func TestBrowserRoutingGenerationAndEdit(t *testing.T) {
 							case "/backend-api/files/download/file_output":
 								body = `{"download_url":"https://mock.invalid/image"}`
 							case "/image":
-								body = "generated-image"
+								body = string(protocolPNG(t))
 							default:
 								t.Errorf("unexpected path %s", r.URL.Path)
 							}
@@ -128,7 +128,12 @@ func TestBrowserRoutingGenerationAndEdit(t *testing.T) {
 				})
 				d.KeepConversation = true
 				auth := Auth{AccessToken: "current-account-token", ProxyURL: "http://mock-proxy.invalid:8080", AccountID: "current-account", DeviceID: "current-device", SessionID: "current-session", UserAgent: "mock-user-agent", ClientProfile: tt.profile}
-				request := GenerateRequest{Prompt: "draw", Model: tt.model, ThinkingEffort: tt.effort, N: 1}
+				mode := "web"
+				if strings.HasSuffix(tt.model, "-wm") {
+					mode = "work"
+				}
+				attachment := false // This test focuses on routing, not the mode's output default.
+				request := GenerateRequest{Prompt: "draw", Model: tt.model, Mode: mode, RequireDownloadAttachment: &attachment, ThinkingEffort: tt.effort, N: 1}
 				var result *GenerateResult
 				var err error
 				if edit {
@@ -139,7 +144,7 @@ func TestBrowserRoutingGenerationAndEdit(t *testing.T) {
 				}
 				require.NoError(t, err)
 				require.Len(t, result.Data, 1)
-				require.Equal(t, base64.StdEncoding.EncodeToString([]byte("generated-image")), result.Data[0].B64JSON)
+				require.Equal(t, base64.StdEncoding.EncodeToString(protocolPNG(t)), result.Data[0].B64JSON)
 				require.Contains(t, steps, "/backend-api/f/conversation/prepare")
 				require.Contains(t, steps, "/backend-api/f/conversation")
 				if edit {

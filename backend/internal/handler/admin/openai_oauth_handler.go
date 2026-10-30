@@ -23,6 +23,7 @@ type OpenAIOAuthHandler struct {
 	quotaService       openAIQuotaService
 	referralService    openAIReferralService
 	rateLimitService   openAIAccountStateRecoverer
+	webImageService    *service.OpenAIWebImageService
 }
 
 type openAIQuotaService interface {
@@ -85,10 +86,12 @@ func NewOpenAIOAuthHandler(
 	adminService service.AdminService,
 	quotaService *service.OpenAIQuotaService,
 	rateLimitService *service.RateLimitService,
+	webImageService *service.OpenAIWebImageService,
 ) *OpenAIOAuthHandler {
 	h := &OpenAIOAuthHandler{
 		openaiOAuthService: openaiOAuthService,
 		adminService:       adminService,
+		webImageService:    webImageService,
 	}
 	// Assign through explicit nil checks: storing a nil *Service in an interface
 	// field yields a non-nil interface, which would silently defeat the
@@ -486,6 +489,11 @@ func (h *OpenAIOAuthHandler) QueryQuota(c *gin.Context) {
 		response.BadRequest(c, "openai quota service is not enabled")
 		return
 	}
+	accountID, err = h.quotaResourceAccountID(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	usage, err := h.quotaService.QueryUsage(c.Request.Context(), accountID)
 	if err != nil {
@@ -511,6 +519,11 @@ func (h *OpenAIOAuthHandler) RefreshQuota(c *gin.Context) {
 	}
 	if h.quotaService == nil {
 		response.BadRequest(c, "openai quota service is not enabled")
+		return
+	}
+	accountID, err = h.quotaResourceAccountID(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 

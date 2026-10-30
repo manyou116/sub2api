@@ -48,8 +48,8 @@ type OpenAIGatewayHandler struct {
 	concurrencyHelper          *ConcurrencyHelper
 	imageLimiter               *imageConcurrencyLimiter
 	maxAccountSwitches         int
-	cfg                        *config.Config
 	kiroTokenProvider          *service.KiroTokenProvider
+	cfg                        *config.Config
 }
 
 type openAIWSTurnChannelMappingSnapshot struct {
@@ -385,12 +385,11 @@ func NewOpenAIGatewayHandler(
 	}
 }
 
-// SetKiroTokenProvider injects the Kiro access-token provider (P5).
+// SetKiroTokenProvider injects the Kiro access-token provider.
 func (h *OpenAIGatewayHandler) SetKiroTokenProvider(p *service.KiroTokenProvider) {
-	if h == nil {
-		return
+	if h != nil {
+		h.kiroTokenProvider = p
 	}
-	h.kiroTokenProvider = p
 }
 
 // Responses handles OpenAI Responses API endpoint

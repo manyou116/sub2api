@@ -24,6 +24,10 @@ type InputImage struct {
 
 type GenerateRequest struct {
 	Prompt, Model, Size, Quality, ResponseFormat string
+	// Mode is chosen by the account type, never inferred from a model suffix.
+	Mode string
+	// Nil uses the mode default: required for Work, optional for ordinary Web.
+	RequireDownloadAttachment *bool
 	// ThinkingEffort applies to explicit models; auto delegates reasoning to upstream.
 	ThinkingEffort string
 	N              int
@@ -33,12 +37,15 @@ type GenerateRequest struct {
 
 type ImageData struct {
 	B64JSON, URL, RevisedPrompt string
+	Width, Height               int
+	Format                      string
 }
 
 type Usage struct{ InputTokens, OutputTokens, ImageOutputTokens int }
 type Meta struct {
 	ConversationID, Stage string
 	Duration              time.Duration
+	DownloadAttachment    bool
 }
 type GenerateResult struct {
 	Created int64
@@ -66,14 +73,27 @@ const (
 	ErrorKindInternal    ErrorKind = "internal"
 )
 
+// SubmissionState records whether retrying generation can duplicate upstream work.
+type SubmissionState string
+
+const (
+	SubmissionNotSent   SubmissionState = ""
+	SubmissionUncertain SubmissionState = "uncertain"
+	SubmissionAccepted  SubmissionState = "accepted"
+)
+
 type Error struct {
-	Kind       ErrorKind
-	Code       string
-	Message    string
-	StatusCode int
-	Retryable  bool
-	Stage      string
-	ResetAt    *time.Time
+	Kind           ErrorKind
+	Code           string
+	Message        string
+	StatusCode     int
+	Retryable      bool
+	Stage          string
+	ResetAt        *time.Time
+	RetryAfter     time.Duration
+	Submission     SubmissionState
+	ConversationID string
+	Cause          error
 	// ResponseBody preserves the upstream error payload for callers that need
 	// to apply account-state policy without treating all HTTP 401s alike.
 	ResponseBody []byte
@@ -88,6 +108,9 @@ func (e *Error) Error() string {
 	}
 	return e.Message
 }
+
+func (e *Error) Unwrap() error          { return e.Cause }
+func (e *Error) MayHaveGenerated() bool { return e != nil && e.Submission != SubmissionNotSent }
 
 func NewError(kind ErrorKind, stage, message string, status int, retryable bool) *Error {
 	return &Error{Kind: kind, Stage: stage, Message: message, StatusCode: status, Retryable: retryable}

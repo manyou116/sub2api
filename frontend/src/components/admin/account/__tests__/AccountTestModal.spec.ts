@@ -119,6 +119,18 @@ describe('AccountTestModal', () => {
     vi.restoreAllMocks()
   })
 
+  it('defaults a Web image shadow test to gpt-image-2', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'gpt-image-1', display_name: 'Image 1' }, { id: 'gpt-image-2', display_name: 'Image 2' }])
+    const wrapper = mountModal({ id: 42, name: 'Web', platform: 'openai', type: 'oauth', status: 'active', parent_account_id: 1, quota_dimension: 'web_images' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    const start = wrapper.findAll('button').find(button => button.text().includes('admin.accounts.startTest'))!
+    await start.trigger('click')
+    await flushPromises()
+    expect(JSON.parse((global.fetch as any).mock.calls[0][1].body).model_id).toBe('gpt-image-2')
+    wrapper.unmount()
+  })
+
   it('gemini 图片模型测试会携带提示词并渲染图片预览', async () => {
     const wrapper = mountModal()
     await wrapper.setProps({ show: true })

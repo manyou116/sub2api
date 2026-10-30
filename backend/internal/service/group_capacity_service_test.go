@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -179,72 +178,25 @@ func TestGetAllGroupCapacityBatchKeepsEmptyGroupRows(t *testing.T) {
 	}, results)
 }
 
-func TestGetAllGroupCapacityCountsWebImageForTextRateLimitedAccounts(t *testing.T) {
-	textRL := time.Now().Add(2 * time.Hour)
-	webRL := time.Now().Add(3 * time.Hour)
-	accountRepo := &groupCapacityAccountRepoStub{
-		rows: []GroupAccountCapacityRow{
-			{
-				GroupID:          1,
-				AccountID:        10,
-				Concurrency:      5,
-				Platform:         PlatformOpenAI,
-				Type:             AccountTypeOAuth,
-				RateLimitResetAt: &textRL, // text limited
-				Extra: map[string]any{
-					"openai_web_images": map[string]any{"enabled": true, "max_inflight": 3},
-				},
-			},
-			{
-				GroupID:                  1,
-				AccountID:                11,
-				Concurrency:              4,
-				Platform:                 PlatformOpenAI,
-				Type:                     AccountTypeOAuth,
-				WebImageRateLimitResetAt: &webRL, // web limited
-				Extra: map[string]any{
-					"openai_web_images": map[string]any{"enabled": true, "max_inflight": 2},
-				},
-			},
-			{
-				GroupID:     1,
-				AccountID:   12,
-				Concurrency: 2,
-				Platform:    PlatformOpenAI,
-				Type:        AccountTypeOAuth,
-				Extra: map[string]any{
-					"openai_web_images": map[string]any{"enabled": true, "max_inflight": 1},
-				},
-			},
-		},
-	}
-	groupRepo := &groupCapacityGroupRepoStub{groupIDs: []int64{1}}
-	svc := NewGroupCapacityService(accountRepo, groupRepo, nil, nil, nil)
-	svc.SetWebImages(NewOpenAIWebImagesService(&config.Config{
-		Gateway: config.GatewayConfig{OpenAIWebImages: config.OpenAIWebImagesConfig{InflightBackend: "memory"}},
-	}, nil, nil))
-
-	results, err := svc.GetAllGroupCapacity(context.Background())
+func TestGetAllGroupCapacitySeparatesWebImagesUsingSharedConcurrency(t *testing.T) {
+	accountRepo := &groupCapacityAccountRepoStub{rows: []GroupAccountCapacityRow{
+		{GroupID: 10, AccountID: 1, Concurrency: 4, Extra: map[string]any{"max_sessions": 3, "base_rpm": 10}},
+		{GroupID: 10, AccountID: 2, Concurrency: 2, QuotaDimension: QuotaDimensionSpark},
+		{GroupID: 10, AccountID: 3, Concurrency: 2, QuotaDimension: QuotaDimensionWebImages, Extra: map[string]any{"max_sessions": 9, "base_rpm": 99}},
+		{GroupID: 20, AccountID: 3, Concurrency: 2, QuotaDimension: QuotaDimensionWebImages},
+		{GroupID: 20, AccountID: 4, Concurrency: 3, QuotaDimension: QuotaDimensionWorkImages},
+	}}
+	cache := &groupCapacityConcurrencyCacheStub{counts: map[int64]int{1: 1, 2: 1, 3: 2, 4: 1}}
+	sessions := &groupCapacitySessionCacheStub{counts: map[int64]int{1: 1, 3: 9}}
+	rpm := &groupCapacityRPMCacheStub{counts: map[int64]int{1: 5, 3: 99}}
+	svc := NewGroupCapacityService(accountRepo, &groupCapacityGroupRepoStub{groupIDs: []int64{10, 20}}, NewConcurrencyService(cache), sessions, rpm)
+	got, err := svc.GetAllGroupCapacity(context.Background())
 	require.NoError(t, err)
-	require.Len(t, results, 1)
-	// Text max: account 11 (4) + 12 (2) = 6; account 10 text-limited excluded.
-	require.Equal(t, 6, results[0].ConcurrencyMax)
-	// Image max: account 10 (3) + 12 (1) = 4; account 11 web-limited excluded.
-	require.Equal(t, 4, results[0].ImageConcurrencyMax)
-}
-
-func TestCapacityCooldownGroupCapacityRetainsOnlyWebImageSlots(t *testing.T) {
-	until := time.Now().Add(time.Hour)
-	repo := &groupCapacityAccountRepoStub{rows: []GroupAccountCapacityRow{{
-		GroupID: 1, AccountID: 42, Concurrency: 10, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-		TempUnschedulableUntil: &until, TempUnschedulableReason: OpenAICapacityCooldownReasonPrefix + `"error_message":"text overload"}`,
-		Extra: map[string]any{"openai_web_images": map[string]any{"enabled": true, "max_inflight": 3}},
-	}}}
-	svc := NewGroupCapacityService(repo, &groupCapacityGroupRepoStub{groupIDs: []int64{1}}, nil, nil, nil)
-	svc.SetWebImages(NewOpenAIWebImagesService(&config.Config{}, nil, nil))
-	result, err := svc.GetAllGroupCapacity(context.Background())
-	require.NoError(t, err)
-	require.Len(t, result, 1)
-	require.Zero(t, result[0].ConcurrencyMax)
-	require.Equal(t, 3, result[0].ImageConcurrencyMax)
+	require.ElementsMatch(t, []int64{1, 2, 3, 4}, cache.requested)
+	require.NotContains(t, sessions.requested, int64(3))
+	require.NotContains(t, rpm.requested, int64(3))
+	require.Equal(t, []GroupCapacitySummary{
+		{GroupID: 10, ConcurrencyUsed: 2, ConcurrencyMax: 6, ImageConcurrencyUsed: 2, ImageConcurrencyMax: 2, SessionsUsed: 1, SessionsMax: 3, RPMUsed: 5, RPMMax: 10},
+		{GroupID: 20, ImageConcurrencyUsed: 3, ImageConcurrencyMax: 5},
+	}, got)
 }
