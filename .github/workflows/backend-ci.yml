@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   shell:
-    runs-on: macos-15
+    # Shell compatibility checks do not need the capacity-constrained ARM pool.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v6
       - name: Check published fork feature hooks
