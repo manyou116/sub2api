@@ -384,15 +384,22 @@ jobs:
       contents: write
     env:
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
     steps:
       - name: Checkout default branch
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
 
       - name: Sync VERSION file to released tag
         run: |
           VERSION="$RELEASE_VERSION"
+
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" HEAD; then
+            echo "Release source is not on the default branch; keeping its VERSION unchanged"
+            exit 0
+          fi
 
           CURRENT_VERSION=$(tr -d '\r\n' < backend/cmd/server/VERSION || true)
           if [ "$CURRENT_VERSION" = "$VERSION" ]; then

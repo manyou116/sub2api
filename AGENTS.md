@@ -200,37 +200,34 @@ curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/v1/models \
 When debugging web images, always restart/use air so the binary matches source.
 Do not assume an old PID on :8080 has the latest code.
 
-## Fork Feature: OpenAI Web Images
+## Fork Feature: Web / Work Image Shadows
 
-Goal: ChatGPT **Web image quota** reverse path for `gpt-image-2`, default off.
+The published `v99.0.2.16-plus.13` feature line is required fork behavior.
+Read [`docs/WEB_IMAGE_SHADOWS.md`](docs/WEB_IMAGE_SHADOWS.md) and
+[`docs/FORK_RELEASE_INVENTORY.md`](docs/FORK_RELEASE_INVENTORY.md) before replay.
+Creating a `web_images` or `work_images` shadow is the activation action; do not
+restore legacy parent enable switches or a separate Web inflight pool.
 
-### Keep isolated (new files preferred)
+- Preserve Web/Work lifecycle, batch UI, backup/restore and conversion API.
+- Use one ordinary account concurrency slot, attributed to the executing child.
+- Resolve current credentials and quota from the parent. Work shares parent Codex
+  quota; Web uses parent image quota. Failover must never silently switch modes.
+- Keep typed mode routing and model catalog, accepted/uncertain submission guards,
+  same-task read recovery, Retry-After, download validation and log redaction.
+- Keep published migrations `177_*`, `246_web_image_shadows.sql` and
+  `247_work_image_shadows.sql` byte-identical, even beside upstream numeric prefixes.
+- Run fork hooks, shadow unit/integration/UI regressions and JSON contracts.
 
-- `backend/internal/service/openaiimages/webdriver/` — reverse driver (SSE then poll)
-- `backend/internal/service/openai_web_images_service.go` — control plane (quota/inflight/redis)
-- `backend/internal/service/openai_images_legacy_web.go` — gateway entry for web path
-- `backend/internal/handler/admin/openai_web_images_handler.go` — admin API
-- `frontend/src/constants/openaiWebImages.ts` + capacity-cell integrations
+## Published feature retention (mandatory)
 
-### Minimal upstream touch points
-
-- `config.Gateway.OpenAIWebImages` (runtime defaults only; no global enable switch)
-- `wire` Provide + `routes/admin` register
-- Scheduler hooks: `isAccountSchedulableForOpenAIRequest` / text-429 bypass for images only
-- `ForwardImages` → web path when account `extra.openai_web_images.enabled` (sole enable switch)
-
-### Do not commit (local only)
-
-- `backend/.air.toml`, `DEV_LOCAL.md`, `/tmp/*` stage logs
-- one-off debug cmds under `backend/cmd/webimg*`
-
-### Runtime contract
-
-- SSE open: no conversation GET poll
-- After SSE end: adaptive poll + 429 backoff (not image-quota cooldown)
-- Only Free-plan image-quota text → web cooldown / remaining=0
-
-
+A larger tag number does not imply that it includes another published branch.
+Before any replay/release, inventory **all published fork feature lines**, including
+non-main tags. Record each line as retained, superseded or explicitly reverted in
+`docs/FORK_RELEASE_INVENTORY.md`; do not infer retention from main ancestry alone.
+Use source/behavior checks after history rewrites. Preserve this inventory, this
+entry point and `.agents/skills/`. Run `check-fork-hooks.sh` in CI as well as locally.
+A tag must point at the validated main commit; independent branch publication
+must not overwrite the default branch VERSION. Image publication does not deploy.
 
 ## Release speed (this fork)
 

@@ -36,105 +36,78 @@ need_rg() {
 
 echo "== Fork hook check (see docs/FORK_HOOKS.md) =="
 
-# --- P1 webimg ---
-echo "-- P1 webimg --"
+# --- P1 Web and WM image shadows ---
+echo "-- P1 Web and WM image shadows --"
 need_file backend/internal/service/openaiimages/webdriver/types.go
-need_file backend/internal/service/openai_web_images_service.go
 need_file backend/migrations/177_add_web_image_rate_limit.sql
-need_file backend/internal/repository/account_repo_webimg.go
-need_file backend/internal/service/account_webimg.go
-need_file backend/internal/service/openai_account_scheduler_webimg.go
-need_rg "SetWebImageRateLimited repo (fork file)" \
-  "SetWebImageRateLimited" \
-  backend/internal/repository/account_repo_webimg.go
-need_rg "attachWebImageRateLimits (fork file)" \
-  "attachWebImageRateLimits" \
-  backend/internal/repository/account_repo_webimg.go
-need_rg "capacity list includes text-RL webimg accounts" \
-  "ListSchedulableCapacityByGroupIDs" \
-  backend/internal/repository/account_repo_webimg.go
-need_rg "IsWebImageRateLimited helper (fork file)" \
-  "IsWebImageRateLimited" \
-  backend/internal/service/account_webimg.go
-need_rg "web path skip text slot (fork file)" \
-  "acquireAccountSlotForSchedule" \
-  backend/internal/service/openai_account_scheduler_webimg.go
-need_rg "hot account_repo still attaches webimg cooldown" \
-  "attachWebImageRateLimits" \
-  backend/internal/repository/account_repo.go
-need_rg "hot scheduler still calls webimg cooldown gate" \
-  "accountBlockedByWebImageCooldown" \
-  backend/internal/service/openai_account_scheduler.go
-need_rg "webimg multipart image_N aliases" \
-  'strings.HasPrefix(name, "image_")' \
-  backend/internal/service/openai_images.go
-need_rg "webimg multipart bracket aliases" \
-  'strings.HasPrefix(name, "image[")' \
-  backend/internal/service/openai_images.go
-need_rg "webimg bulk default supports large accounts" \
-  "BulkMaxAccounts = 5000" \
-  backend/internal/service/openai_web_images_service.go
-need_rg "webimg bulk uses configured concurrency" \
-  "BulkProbeConcurrency" \
-  backend/internal/service/openai_web_images_service.go
-need_rg "webimg inflight-full helper" \
-  "IsInflightFull" \
-  backend/internal/service/openai_web_images_service.go
-need_rg "webimg scheduler inflight-full gate" \
-  "isWebImageInflightFullForRequest" \
-  backend/internal/service/openai_account_scheduler_webimg.go
-need_rg "hot scheduler filters webimg inflight saturation" \
-  "isWebImageInflightFullForRequest" \
-  backend/internal/service/openai_account_scheduler.go
-need_rg "frontend chunks large webimg bulk selections" \
-  "const chunkSize = 200" \
-  frontend/src/api/admin/accounts.ts
+need_file backend/migrations/246_web_image_shadows.sql
+need_file backend/migrations/247_work_image_shadows.sql
+need_file backend/internal/service/web_image_shadow_lifecycle.go
+need_file backend/internal/service/openai_web_image_service.go
+need_file backend/internal/service/openai_web_image_forward.go
+need_file backend/internal/service/openai_image_shadow_catalog.go
+need_file backend/internal/service/openai_image_shadow_routing.go
+need_file backend/internal/service/openai_work_image_quota.go
+need_rg "shadow quota dimension" 'QuotaDimensionWebImages' backend/internal/service/domain_constants.go
+need_rg "WM shadow quota purpose" 'QuotaDimensionWorkImages' backend/internal/service/domain_constants.go
+need_rg "image-only scheduler gate" 'webImageSchedulingReason' backend/internal/service/openai_account_scheduler.go
+need_rg "image dispatch uses typed shadow identity" 'account.IsImageShadow()' backend/internal/service/openai_images.go
+need_rg "fixed mode routing before selection" 'imageShadowRoutingContext' backend/internal/service/openai_account_scheduler.go
+need_rg "mixed pool requires explicit mode" 'ErrImageShadowModeRequired' backend/internal/handler/openai_images.go
+need_rg "driver receives explicit execution mode" 'Mode: imageShadowMode(fresh)' backend/internal/service/openai_web_image_forward.go
+need_rg "WM errors update parent resource" 'observeImageShadowError' backend/internal/service/openai_web_image_forward.go
+need_rg "images use ordinary account slots" 'h.acquireResponsesAccountSlot' backend/internal/handler/openai_images.go
+need_rg "shadow create route" '/:id/web-image-shadow' backend/internal/server/routes/admin.go
+need_rg "shared model catalog route" '/image-shadow-models' backend/internal/server/routes/admin.go
+need_rg "parent resource state" 'WebImageCooldown' backend/internal/repository/account_web_image_state_repo.go
+need_rg "shared concurrency capacity classification" 'QuotaDimensionWebImages' backend/internal/service/group_capacity_service.go
+need_rg "WM shares image concurrency accounting" 'QuotaDimensionWorkImages' backend/internal/service/group_capacity_service.go
+need_rg "WM quota refresh uses parent identity" 'quotaResourceAccountID' backend/internal/handler/admin/openai_oauth_handler.go
+need_rg "WM backup configuration" 'work_image_shadow' backend/internal/handler/admin/account_data.go
+need_rg "frontend creates Web shadows" 'createWebImageShadow' frontend/src/api/admin/accounts.ts
 
-# --- P1 webimg (extra call-site hooks) ---
-echo "-- P1 webimg call sites --"
-need_rg "UsesOpenAIWebImagesPath helper" \
-  "UsesOpenAIWebImagesPath" \
-  backend/internal/service/openai_images_legacy_web.go
-need_rg "ClearWebImageRateLimit repo" \
-  "ClearWebImageRateLimit" \
-  backend/internal/repository/account_repo_webimg.go
-need_rg "ClearRateLimit clears web image cooldown" \
-  "ClearWebImageRateLimit" \
-  backend/internal/service/ratelimit_service.go
-need_rg "webimg package import or path" \
-  "openaiimages" \
-  backend/internal/service/openai_web_images_service.go
-need_rg "chat image bridge endpoint resolver" \
-  "ResolveChatImageBridgeEndpoint" \
-  backend/internal/service/openai_chat_image_bridge.go
-need_rg "chat image bridge rewrites request path" \
-  "c.Request.URL.Path = imagesEndpoint" \
-  backend/internal/handler/openai_chat_image_bridge.go
-need_rg "admin update preserves webimg extra" \
-  "preserve openai_web_images" \
-  backend/internal/service/admin_account.go
-need_rg "wire injects webimg into capacity service" \
-  "SetWebImages" \
-  backend/cmd/server/wire_gen.go
-need_rg "wire injects webimg admin service" \
-  "SetOpenAIWebImagesService" \
-  backend/cmd/server/wire_gen.go
-bridge_line="$(grep -n "tryChatCompletionsImageBridge" backend/internal/handler/openai_chat_completions.go | head -n1 | cut -d: -f1 || true)"
-guard_line="$(grep -n "This model is not supported on the Chat Completions endpoint" backend/internal/handler/openai_chat_completions.go | head -n1 | cut -d: -f1 || true)"
-if [[ -n "$bridge_line" && -n "$guard_line" && "$bridge_line" -lt "$guard_line" ]]; then
-  ok "chat image bridge runs before GPT image endpoint guard"
+# Published feature retention must survive source history rewrites.
+need_file docs/FORK_RELEASE_INVENTORY.md
+need_rg "entry requires published inventory" 'docs/FORK_RELEASE_INVENTORY.md' AGENTS.md
+need_rg "release skill inventories non-main features" 'docs/FORK_RELEASE_INVENTORY.md' .agents/skills/sub2api-upstream-release/SKILL.md
+need_rg "CI runs fork hooks" 'run: /bin/bash deploy/upstream-sync/check-fork-hooks.sh' .github/workflows/backend-ci.yml
+need_file backend/internal/service/openaiimages/webdriver/recovery.go
+need_file backend/internal/service/openaiimages/webdriver/download_validation.go
+need_file backend/internal/service/openaiimages/webdriver/poll_gate.go
+need_file backend/internal/service/openai_web_image_errors_test.go
+need_file backend/internal/repository/account_web_image_shadow_integration_test.go
+need_file frontend/src/components/account/BatchWebImageShadowDialog.vue
+need_file frontend/src/components/account/WebImageShadowSettings.vue
+need_rg "submission accepted guard" 'driverErr.MayHaveGenerated()' backend/internal/service/openai_web_image_forward.go
+need_rg "bounded download validation" 'validateDownloadedImage' backend/internal/service/openaiimages/webdriver/driver.go
+need_rg "stage log redaction" 'safeStageLogMessage(msg)' backend/internal/service/openaiimages/webdriver/driver.go
+need_rg "shadow UI tests are mandatory" 'src/views/admin/__tests__/AccountsView.sparkShadow.spec.ts' Makefile
+need_rg "release ancestry guard" 'git merge-base --is-ancestor "$RELEASE_SHA" HEAD' .github/workflows/release.yml
+need_rg "release source SHA" 'RELEASE_SHA: ${{ needs.prepare.outputs.sha }}' .github/workflows/release.yml
+need_rg "release fetches history" 'fetch-depth: 0' .github/workflows/release.yml
+for legacy in backend/internal/service/openai_images_legacy_web.go backend/internal/service/openai_web_images_service.go; do
+  if [[ -e "$legacy" ]]; then bad "superseded legacy Web control plane: $legacy"; fi
+done
+
+# Published SQL is immutable even when upstream uses the same numeric prefix.
+if [[ -f backend/migrations/177_add_web_image_rate_limit.sql ]] && \
+   [[ "$(shasum -a 256 backend/migrations/177_add_web_image_rate_limit.sql | cut -d ' ' -f 1)" == "560de3625c6b47fb24fece445dbe2105d6e191cfa04979267690e99dfff3e49c" ]]; then
+  ok "published migration 177_add_web_image_rate_limit.sql unchanged"
 else
-  bad "chat image bridge must run before GPT image endpoint guard"
+  bad "published migration 177_add_web_image_rate_limit.sql missing or changed"
 fi
-
-# --- P4 capacity (lightweight) ---
-echo "-- P4 capacity --"
-need_rg "image concurrency capacity fields" \
-  "image_concurrency_used" \
-  backend/internal/service/group_capacity_service.go
-need_rg "scheduler webimg path check" \
-  "UsesOpenAIWebImagesPath" \
-  backend/internal/service/openai_account_scheduler_webimg.go
+if [[ -f backend/migrations/246_web_image_shadows.sql ]] && \
+   [[ "$(shasum -a 256 backend/migrations/246_web_image_shadows.sql | cut -d ' ' -f 1)" == "b042ef431374acb4e4f5abfdead768474b9dbc90d17c0f0a9ffae894a27cc509" ]]; then
+  ok "published migration 246_web_image_shadows.sql unchanged"
+else
+  bad "published migration 246_web_image_shadows.sql missing or changed"
+fi
+if [[ -f backend/migrations/247_work_image_shadows.sql ]] && \
+   [[ "$(shasum -a 256 backend/migrations/247_work_image_shadows.sql | cut -d ' ' -f 1)" == "7e24709d1c08e88d97cf0f0fb462d4c101a1c86f22bec37acb51a967615446fa" ]]; then
+  ok "published migration 247_work_image_shadows.sql unchanged"
+else
+  bad "published migration 247_work_image_shadows.sql missing or changed"
+fi
 
 # --- P5 kiro ---
 echo "-- P5 kiro --"
@@ -278,7 +251,7 @@ need_file backend/internal/repository/openai_capacity_cooldown_cache.go
 need_rg "capacity scheduler wrapper retains original flow" \
   "selectAccountWithSchedulerBase" backend/internal/service/openai_account_scheduler.go
 need_rg "capacity admission on scheduler candidates" \
-  "openAICapacityBlocked(ctx, account, requestedModel)" backend/internal/service/openai_images_legacy_web.go
+  "openAICapacityBlocked(ctx, account, requestedModel)" backend/internal/service/openai_gateway_scheduling.go
 need_rg "capacity observations on schedule result" \
   "observeOpenAICapacityResult(account, success" backend/internal/service/openai_account_scheduler.go
 need_rg "capacity switch policy before common failover" \

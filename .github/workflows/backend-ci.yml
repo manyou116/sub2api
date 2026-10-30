@@ -13,6 +13,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v6
+      - name: Check published fork feature hooks
+        run: /bin/bash deploy/upstream-sync/check-fork-hooks.sh
       - name: Check deployment scripts
         run: |
           /bin/bash -n deploy/apple-container.sh

@@ -6,6 +6,23 @@ pnpm from the current workflow/package metadata, and golangci-lint from CI.
 The v0.2.7 replay used pnpm 9.15.9 and golangci-lint 2.13.2; these are historical
 examples, not permanent pins. Frozen lockfiles prevent accidental pnpm churn.
 
+## Published feature retention (mandatory)
+
+Read `docs/FORK_RELEASE_INVENTORY.md` and inventory released tags outside the
+previous main ancestry before selecting replay patches. Preserve the Web/Work
+shadow line from v99.0.2.16-plus.13, including its driver recovery and release
+ancestry guard. The legacy Web enabled/inflight implementation is superseded.
+
+Run the shadow service/admin tests (`TestWebImage`, `TestWorkImage`,
+`TestImageShadow`), webdriver package tests and the JSON contracts. Run repository
+integration tests `TestWebImageShadowDatabase`, `TestConfiguredImageShadowModes`
+and `TestImageShadowPublishedUpgradePaths` against disposable PostgreSQL/Redis.
+The upgrade test covers existing plus.13 data/checksums and current v0.2.19 data
+without shadows. Preserve every published migration byte, including same-prefix
+upstream and fork files. Run the mandatory shadow UI critical tests in Makefile.
+Verify the fork hook checker both passes normally and fails when a required
+shadow/recovery artifact is missing. CI must invoke that checker.
+
 ## Focused Regressions
 
 From `backend/`, run the relevant existing tests first:

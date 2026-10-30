@@ -9,7 +9,8 @@ Use this repository's backup + clean replay workflow. Work directly without
 subagents. Resolve the repository root with `git rev-parse --show-toplevel`;
 never assume a particular machine path, upstream version, or commit count.
 
-Read root `AGENTS.md` and `docs/FORK_HOOKS.md` before replay or conflict resolution.
+Read root `AGENTS.md`, `docs/FORK_HOOKS.md` and
+`docs/FORK_RELEASE_INVENTORY.md` before replay or conflict resolution.
 The user's current request and existing authorization determine scope: an
 upgrade-and-publish request covers its backup, main update and tag push; a
 version check or local-only upgrade does not. Do not ask again for actions
@@ -32,6 +33,11 @@ already authorized. Image publication does not authorize production deployment.
    upstream base, target tag/SHA, and prospective fork tag. Inspect commits
    between the old base and local main, including commits not yet pushed.
    If origin has new work absent locally, reconcile it before selecting patches.
+   Inventory every published fork feature line, including tags outside main's
+   ancestry. Version ordering is not feature containment: plus.13 image shadows
+   once shipped from an independent branch and were absent from plus.14–17.
+   Mark each inventory entry retained, superseded or explicitly reverted, with
+   source and behavior evidence; inspect exceptional release refs before replay.
    If the target is already the base, avoid a redundant release unless there
    are requested unpublished changes.
 4. Create distinct timestamped backups of both original tips:

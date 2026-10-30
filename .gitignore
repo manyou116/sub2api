@@ -132,6 +132,8 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/FORK_RELEASE_INVENTORY.md
+!docs/WEB_IMAGE_SHADOWS.md
 !docs/admin-api-keys.md
 !docs/FORK_HOOKS.md
 !docs/OPENAI_WEB_IMAGES.md

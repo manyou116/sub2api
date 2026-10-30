@@ -1,6 +1,12 @@
 .PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical
 
 FRONTEND_CRITICAL_VITEST := \
+	src/components/account/__tests__/BatchWebImageShadowDialog.spec.ts \
+	src/components/account/__tests__/WebImageShadowSettings.spec.ts \
+	src/components/account/__tests__/WebImageQuotaCell.spec.ts \
+	src/components/account/__tests__/webImageStatusBatch.spec.ts \
+	src/components/admin/account/__tests__/AccountActionMenu.spark_shadow.spec.ts \
+	src/views/admin/__tests__/AccountsView.sparkShadow.spec.ts \
 	src/features/group-capacity-monitor/__tests__ \
 	src/views/admin/__tests__/GroupsView.columnSettings.spec.ts \
 	src/i18n/__tests__/localeKeyCompleteness.spec.ts \
