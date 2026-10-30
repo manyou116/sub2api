@@ -601,6 +601,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		adminSettings.PUT("/rate-limit-429-cooldown", h.Admin.Setting.UpdateRateLimit429CooldownSettings)
 		adminSettings.GET("/openai-capacity-cooldown", h.Admin.Setting.GetOpenAICapacityCooldownSettings)
 		adminSettings.PUT("/openai-capacity-cooldown", h.Admin.Setting.UpdateOpenAICapacityCooldownSettings)
+		adminSettings.GET("/openai-request-compression", h.Admin.Setting.GetOpenAIRequestCompression)
+		adminSettings.PUT("/openai-request-compression", h.Admin.Setting.UpdateOpenAIRequestCompression)
 		// OpenAI OAuth image-tool unavailable cooldown configuration
 		adminSettings.GET("/openai-images-oauth-unavailable-cooldown", h.Admin.Setting.GetOpenAIImagesOAuthUnavailableCooldownSettings)
 		adminSettings.PUT("/openai-images-oauth-unavailable-cooldown", h.Admin.Setting.UpdateOpenAIImagesOAuthUnavailableCooldownSettings)

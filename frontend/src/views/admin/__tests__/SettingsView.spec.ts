@@ -122,6 +122,9 @@ vi.mock("@/api", () => ({
 vi.mock('@/components/admin/settings/OpenAICapacityCooldownSettings.vue', () => ({
   default: { template: '<div />' }
 }));
+vi.mock('@/components/admin/settings/OpenAIRequestCompressionSettings.vue', () => ({
+  default: { template: '<div data-testid="openai-request-compression-settings" />' }
+}));
 
 vi.mock("@/stores", () => ({
   useAppStore: () => ({
@@ -726,6 +729,19 @@ describe("admin SettingsView payment visible method controls", () => {
     });
     fetchPublicSettings.mockResolvedValue(undefined);
     adminSettingsFetch.mockResolvedValue(undefined);
+  });
+
+  it("shows the global request compression card in the gateway tab", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    const card = wrapper.get('[data-testid="openai-request-compression-settings"]');
+    expect((card.element.parentElement as HTMLElement).style.display).toBe('none');
+    await wrapper.get('#settings-tab-gateway').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('#settings-tab-gateway').attributes('aria-selected')).toBe('true');
+    expect((card.element.parentElement as HTMLElement).style.display).toBe('');
+    expect(card.isVisible()).toBe(true);
+    wrapper.unmount();
   });
 
   it("loads and saves the open button visibility for each custom menu", async () => {
