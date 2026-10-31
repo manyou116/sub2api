@@ -21,6 +21,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -64,15 +65,35 @@ func (r passthroughErrReadCloser) Close() error {
 	return nil
 }
 
+// decodeOpenAITestUpstreamBody models upstream request decoding for semantic tests.
+func decodeOpenAITestUpstreamBody(req *http.Request, wire []byte) ([]byte, error) {
+	if req.Header.Get("Content-Encoding") != "zstd" {
+		return wire, nil
+	}
+	decoder, err := zstd.NewReader(nil)
+	if err != nil {
+		return nil, err
+	}
+	defer decoder.Close()
+	return decoder.DecodeAll(wire, nil)
+}
+
 func (u *httpUpstreamRecorder) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
 	u.lastReq = req
 	u.lastProxyURL = proxyURL
 	if req != nil && req.Body != nil {
 		b, _ := io.ReadAll(req.Body)
-		u.lastBody = b
-		u.bodies = append(u.bodies, append([]byte(nil), b...))
 		_ = req.Body.Close()
 		req.Body = io.NopCloser(bytes.NewReader(b))
+		// Semantic assertions inspect the JSON seen by the upstream after decoding.
+		// Keep req.Body/GetBody and headers intact for wire-format assertions.
+		decoded, err := decodeOpenAITestUpstreamBody(req, b)
+		if err != nil {
+			return nil, err
+		}
+		b = decoded
+		u.lastBody = b
+		u.bodies = append(u.bodies, append([]byte(nil), b...))
 	}
 	u.requests = append(u.requests, req)
 	if u.err != nil {

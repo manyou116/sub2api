@@ -1821,7 +1821,20 @@ export type UsageRequestType = 'unknown' | 'sync' | 'stream' | 'ws_v2' | 'cyber'
 export type ImageSizeSource = 'output' | 'input' | 'default' | 'legacy'
 export type ImageSizeBreakdown = Record<string, number>
 
+export interface UpstreamRequestBodyStats {
+  raw_bytes: number
+  encoded_bytes: number
+  attempts: number
+  compressed_attempts: number
+  fallbacks: number
+  encoding: string
+  reason: string
+  final_raw_bytes: number
+  final_encoded_bytes: number
+}
+
 export interface UsageLog {
+  upstream_request_body?: UpstreamRequestBodyStats | null
   id: number
   user_id: number
   api_key_id: number

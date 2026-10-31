@@ -191,6 +191,9 @@ type UsageLog struct {
 	// 与上游没有该头的路径为 nil。
 	UpstreamRequestID *string
 
+	// UpstreamRequestBody is nil for historical rows and unmeasured transports.
+	UpstreamRequestBody *UpstreamRequestBodyStats
+
 	// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 	CacheTTLOverridden bool
 

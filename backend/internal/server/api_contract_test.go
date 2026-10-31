@@ -556,6 +556,7 @@ func TestAPIContracts(t *testing.T) {
 				t.Helper()
 				deps.usageRepo.SetUserLogs(1, []service.UsageLog{
 					{
+						UpstreamRequestBody:   &service.UpstreamRequestBodyStats{RawBytes: 1024, EncodedBytes: 256, Attempts: 1, CompressedAttempts: 1, Encoding: "zstd", Reason: "compressed", FinalRawBytes: 1024, FinalEncodedBytes: 256},
 						ID:                    1,
 						UserID:                1,
 						APIKeyID:              100,
@@ -587,6 +588,7 @@ func TestAPIContracts(t *testing.T) {
 				"data": {
 					"items": [
 						{
+							"upstream_request_body": {"raw_bytes": 1024, "encoded_bytes": 256, "attempts": 1, "compressed_attempts": 1, "fallbacks": 0, "encoding": "zstd", "reason": "compressed", "final_raw_bytes": 1024, "final_encoded_bytes": 256},
 							"id": 1,
 							"user_id": 1,
 							"api_key_id": 100,
@@ -2002,7 +2004,6 @@ func (s *stubAccountRepo) ListSchedulableByPlatforms(ctx context.Context, platfo
 func (s *stubAccountRepo) ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]service.Account, error) {
 	return nil, errors.New("not implemented")
 }
-
 
 func (s *stubAccountRepo) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
 	return nil, errors.New("not implemented")

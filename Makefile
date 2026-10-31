@@ -38,6 +38,7 @@ FRONTEND_CRITICAL_VITEST := \
 	src/views/admin/__tests__/SettingsView.spec.ts \
 	src/components/admin/settings/__tests__/OpenAICapacityCooldownSettings.spec.ts \
 	src/components/admin/settings/__tests__/OpenAIRequestCompressionSettings.spec.ts \
+	src/components/admin/usage/__tests__/UpstreamRequestBodyCell.spec.ts \
 	src/features/channel-monitor-v2/__tests__/designSystem.structure.spec.ts \
 	src/features/channel-monitor-v2/__tests__/monitorFormat.spec.ts \
 	src/features/channel-monitor-v2/__tests__/monitorZoom.spec.ts \

@@ -495,7 +495,7 @@ export default {
         title: 'Codex OAuth Request Compression',
         description: 'Compress large uploads to the official Codex OAuth upstream with zstd to reduce upload and proxy traffic.',
         enabled: 'Enable request compression globally',
-        hint: 'Enabled by default for 64 KiB–64 MiB JSON requests. Turning this off disables compression for all accounts; when on, individual account opt-outs still apply. SSE responses stay unchanged. Other instances sync within 30 seconds.',
+        hint: 'Enabled by default for JSON requests up to 64 MiB; used only when smaller. Turning this off disables compression for all accounts; when on, individual account opt-outs still apply. SSE responses stay unchanged. Other instances sync within 30 seconds.',
         loadFailed: 'Failed to load compression settings. Please retry.',
         saved: 'Global request compression settings saved',
         saveFailed: 'Failed to save global request compression settings'

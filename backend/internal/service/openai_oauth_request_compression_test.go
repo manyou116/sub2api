@@ -96,7 +96,6 @@ func TestOpenAIOAuthRequestCompressionEligibility(t *testing.T) {
 		{"non JSON", func(r *http.Request, _ *Account) { r.Header.Set("Content-Type", "multipart/form-data") }},
 		{"already encoded", func(r *http.Request, _ *Account) { r.Header.Set("Content-Encoding", "gzip") }},
 		{"non replayable", func(r *http.Request, _ *Account) { r.GetBody = nil }},
-		{"small", func(r *http.Request, _ *Account) { r.ContentLength = 65535 }},
 		{"oversize", func(r *http.Request, _ *Account) { r.ContentLength = 64<<20 + 1 }},
 		{"non stream", func(r *http.Request, _ *Account) {
 			body := bytes.Replace(plain, []byte(`"stream":true`), []byte(`"stream":false`), 1)
@@ -122,7 +121,7 @@ func TestOpenAIOAuthRequestCompressionEligibility(t *testing.T) {
 }
 
 func TestOpenAIOAuthRequestCompressionThreshold(t *testing.T) {
-	for _, size := range []int{65535, 65536, 65537} {
+	for _, size := range []int{128, 1024, 16384, 32768, 65535, 65536, 65537} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			prefix, suffix := `{"stream":true,"input":"`, `"}`
 			body := []byte(prefix + strings.Repeat("a", size-len(prefix)-len(suffix)) + suffix)
@@ -130,12 +129,8 @@ func TestOpenAIOAuthRequestCompressionThreshold(t *testing.T) {
 			req.Header.Set("Content-Type", "application/problem+json; charset=utf-8")
 			a := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"openai_request_compression": true}}
 			compressed := compressOpenAIOAuthRequest(req, a)
-			if size < 65536 {
-				require.Nil(t, compressed)
-			} else {
-				require.NotNil(t, compressed)
-				require.NoError(t, compressed.Body.Close())
-			}
+			require.NotNil(t, compressed)
+			require.NoError(t, compressed.Body.Close())
 		})
 	}
 }
