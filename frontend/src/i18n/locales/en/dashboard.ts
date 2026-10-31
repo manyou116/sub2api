@@ -335,6 +335,28 @@ export default {
 
   // Usage
   usage: {
+    requestBody: {
+      title: 'Upstream request body',
+      saved: '{percent}% saved',
+      attempts: '{count} attempts: {compressed} zstd, {fallbacks} plaintext fallbacks',
+      final: 'Last observed attempt: {encoding}, {raw} → {encoded}',
+      scope: 'Savings compare each observed attempt with its plaintext body, including retries. Excludes responses and HTTP/TLS overhead; not confirmed network bytes or IDC billing traffic.',
+      unavailable: 'No data: historical record or unmeasured upstream path',
+      reasons: {
+        compressed: 'Final attempt used zstd',
+        global_disabled: 'Global compression disabled',
+        account_disabled: 'Account compression disabled',
+        settings_unavailable: 'Settings unavailable; sent plaintext',
+        ineligible: 'Not eligible for compression',
+        size_limit: 'Exceeds compression size limit',
+        non_json: 'Not a JSON body',
+        non_stream: 'Not an upstream streaming request',
+        read_error: 'Body unavailable; sent plaintext',
+        compression_error: 'Compression failed; sent plaintext',
+        not_smaller: 'Compression did not reduce size; sent plaintext',
+        encoding_rejected: 'Upstream rejected encoding; retried plaintext',
+      },
+    },
     title: 'Usage Records',
     description: 'View and analyze your API usage history',
     costDetails: 'Cost Breakdown',

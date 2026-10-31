@@ -340,6 +340,28 @@ export default {
 
   // Usage
   usage: {
+    requestBody: {
+      title: '上游请求体',
+      saved: '节省 {percent}%',
+      attempts: '共 {count} 次尝试，其中 {compressed} 次 zstd、{fallbacks} 次明文回退',
+      final: '最后已观测尝试：{encoding}，{raw} → {encoded}',
+      scope: '按每次尝试均发送原文计算节省率，累计已观测尝试，包含重试；不含响应、HTTP/TLS 开销，也不代表确认发送或 IDC 计费流量。',
+      unavailable: '无数据：历史记录或未覆盖的上游路径',
+      reasons: {
+        compressed: '最终尝试使用 zstd',
+        global_disabled: '全局压缩已关闭',
+        account_disabled: '账号压缩已关闭',
+        settings_unavailable: '设置读取失败，使用原文',
+        ineligible: '不符合压缩条件',
+        size_limit: '超过压缩大小上限',
+        non_json: '不是 JSON 请求体',
+        non_stream: '不是上游流式请求',
+        read_error: '请求体不可读取，使用原文',
+        compression_error: '压缩失败，使用原文',
+        not_smaller: '压缩后未变小，使用原文',
+        encoding_rejected: '上游拒绝压缩，已回退原文',
+      },
+    },
     title: '使用记录',
     description: '查看和分析您的 API 使用历史',
     costDetails: '费用明细',

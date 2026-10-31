@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	openAIOAuthCompressionMinBytes = 64 << 10
 	openAIOAuthCompressionMaxBytes = 64 << 20
 	openAIRequestCompressionKey    = "openai_request_compression_enabled"
 )
@@ -74,17 +73,31 @@ func (s *SettingService) SetOpenAIRequestCompression(ctx context.Context, enable
 // doOpenAIOAuthCompressed compresses only the tested official Codex OAuth route.
 // Plugin transports own their wire format and are dispatched before this hook.
 func (s *OpenAIGatewayService) doOpenAIOAuthCompressed(request *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	measure := isOpenAIOAuthCompressionRoute(request, account) && request.ContentLength >= 0 && request.Header.Get("Content-Encoding") == ""
 	if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
-		if enabled, _ := s.settingService.GetOpenAIRequestCompression(request.Context()); !enabled {
+		if enabled, settingErr := s.settingService.GetOpenAIRequestCompression(request.Context()); !enabled {
+			if measure {
+				reason := "global_disabled"
+				if settingErr != nil {
+					reason = "settings_unavailable"
+				}
+				recordUpstreamRequestBody(request.Context(), request.ContentLength, request.ContentLength, "identity", reason, false)
+			}
 			return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
 		}
 	}
-	compressed := compressOpenAIOAuthRequest(request, account)
+	compressed, reason := prepareOpenAIOAuthCompressedRequest(request, account)
 	if compressed == nil {
+		if measure {
+			recordUpstreamRequestBody(request.Context(), request.ContentLength, request.ContentLength, "identity", reason, false)
+		}
 		return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
 	}
 	if request.Body != nil {
 		_ = request.Body.Close()
+	}
+	if measure {
+		recordUpstreamRequestBody(request.Context(), request.ContentLength, compressed.ContentLength, "zstd", "compressed", false)
 	}
 	response, err := s.httpUpstream.Do(compressed, proxyURL, account.ID, account.Concurrency)
 	// Never replay transport failures or ordinary API errors: the request may
@@ -99,48 +112,66 @@ func (s *OpenAIGatewayService) doOpenAIOAuthCompressed(request *http.Request, pr
 	_ = response.Body.Close()
 	plain := request.Clone(request.Context())
 	plain.Body = body
+	if measure {
+		recordUpstreamRequestBody(request.Context(), request.ContentLength, request.ContentLength, "identity", "encoding_rejected", true)
+	}
 	return s.httpUpstream.Do(plain, proxyURL, account.ID, account.Concurrency)
 }
 
+func isOpenAIOAuthCompressionRoute(request *http.Request, account *Account) bool {
+	return account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth &&
+		request != nil && request.URL != nil && request.Method == http.MethodPost &&
+		request.URL.Scheme == "https" && request.URL.Host == "chatgpt.com" &&
+		(request.Host == "" || request.Host == "chatgpt.com") && request.URL.Path == "/backend-api/codex/responses"
+}
+
 func compressOpenAIOAuthRequest(request *http.Request, account *Account) *http.Request {
-	if account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
-		return nil
+	compressed, _ := prepareOpenAIOAuthCompressedRequest(request, account)
+	return compressed
+}
+
+func prepareOpenAIOAuthCompressedRequest(request *http.Request, account *Account) (*http.Request, string) {
+	if !isOpenAIOAuthCompressionRoute(request, account) {
+		return nil, "ineligible"
 	}
 	if value, exists := account.Extra["openai_request_compression"]; exists {
 		if enabled, ok := value.(bool); !ok || !enabled {
-			return nil
+			return nil, "account_disabled"
 		}
 	}
-	if request == nil || request.URL == nil || request.Method != http.MethodPost ||
-		request.URL.Scheme != "https" || request.URL.Host != "chatgpt.com" ||
-		(request.Host != "" && request.Host != "chatgpt.com") ||
-		request.URL.Path != "/backend-api/codex/responses" ||
-		request.Header.Get("Content-Encoding") != "" || request.GetBody == nil ||
-		request.ContentLength < openAIOAuthCompressionMinBytes || request.ContentLength > openAIOAuthCompressionMaxBytes {
-		return nil
+	if request.Header.Get("Content-Encoding") != "" || request.GetBody == nil || request.ContentLength < 0 {
+		return nil, "ineligible"
+	}
+	if request.ContentLength > openAIOAuthCompressionMaxBytes {
+		return nil, "size_limit"
 	}
 	contentType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if err != nil || (contentType != "application/json" && !strings.HasSuffix(contentType, "+json")) {
-		return nil
+		return nil, "non_json"
 	}
 	replay, err := request.GetBody()
 	if err != nil {
-		return nil
+		return nil, "read_error"
 	}
 	plain, err := io.ReadAll(io.LimitReader(replay, openAIOAuthCompressionMaxBytes+1))
 	_ = replay.Close()
-	if err != nil || len(plain) < openAIOAuthCompressionMinBytes || len(plain) > openAIOAuthCompressionMaxBytes ||
-		gjson.GetBytes(plain, "stream").Type != gjson.True {
-		return nil
+	if err != nil {
+		return nil, "read_error"
+	}
+	if len(plain) > openAIOAuthCompressionMaxBytes {
+		return nil, "size_limit"
+	}
+	if gjson.GetBytes(plain, "stream").Type != gjson.True {
+		return nil, "non_stream"
 	}
 	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1))
 	if err != nil {
-		return nil
+		return nil, "compression_error"
 	}
 	encoded := encoder.EncodeAll(plain, nil)
 	_ = encoder.Close()
 	if len(encoded) >= len(plain) {
-		return nil
+		return nil, "not_smaller"
 	}
 	compressed := request.Clone(request.Context())
 	compressed.Body = io.NopCloser(bytes.NewReader(encoded))
@@ -149,7 +180,7 @@ func compressOpenAIOAuthRequest(request *http.Request, account *Account) *http.R
 	compressed.TransferEncoding = nil
 	compressed.Header.Del("Content-Length")
 	compressed.Header.Set("Content-Encoding", "zstd")
-	return compressed
+	return compressed, "compressed"
 }
 
 type openAIOAuthReplayResponseBody struct {
