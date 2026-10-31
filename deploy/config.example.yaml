@@ -681,6 +681,8 @@ log:
 # Token refresh behavior
 # token 刷新行为控制
 token_refresh:
+  # Recover official Codex OAuth 401s even before expires_at; existing quarantines remain when disabled.
+  openai_401_recovery_enabled: true
   # Candidate accounts loaded per cursor page (maximum 1000)
   # 每个游标分页加载的候选账号数量（最大 1000）
   candidate_page_size: 200

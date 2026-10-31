@@ -644,6 +644,7 @@ func normalizeWeChatConnectConfig(cfg *WeChatConnectConfig) {
 
 // TokenRefreshConfig OAuth token自动刷新配置
 type TokenRefreshConfig struct {
+	OpenAI401RecoveryEnabled bool `mapstructure:"openai_401_recovery_enabled"`
 	// 是否启用自动刷新
 	Enabled bool `mapstructure:"enabled"`
 	// 检查间隔（分钟）
@@ -2609,6 +2610,7 @@ func setDefaults() {
 	viper.SetDefault("concurrency.ping_interval", 10)
 
 	// TokenRefresh
+	viper.SetDefault("token_refresh.openai_401_recovery_enabled", true)
 	viper.SetDefault("token_refresh.enabled", true)
 	viper.SetDefault("token_refresh.check_interval_minutes", 5)        // 每5分钟检查一次
 	viper.SetDefault("token_refresh.refresh_before_expiry_hours", 0.5) // 提前30分钟刷新（适配Google 1小时token）

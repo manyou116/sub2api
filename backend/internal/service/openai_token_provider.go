@@ -140,6 +140,10 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		return "", errors.New("not an openai oauth account")
 	}
 
+	if openAIRecoveryBlocks(account) {
+		return "", errOpenAIOAuthRecovering
+	}
+
 	cacheKey := OpenAITokenCacheKey(account)
 
 	// 1) Try cache first.

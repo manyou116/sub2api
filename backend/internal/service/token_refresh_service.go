@@ -208,6 +208,7 @@ func (s *TokenRefreshService) Start() {
 	}
 
 	s.wg.Add(1)
+	s.startOpenAIRecoveryLoop()
 	go s.refreshLoop()
 
 	slog.Info("token_refresh.service_started",

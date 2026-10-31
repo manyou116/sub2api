@@ -125,10 +125,12 @@ func snapshotOAuthRefreshAccount(account *Account) *Account {
 // OAuthRefreshAPI 统一的 OAuth Token 刷新入口
 // 封装分布式锁、进程内互斥锁、DB 重读、已刷新检查、竞争恢复等通用逻辑
 type OAuthRefreshAPI struct {
-	accountRepo AccountRepository
-	tokenCache  GeminiTokenCache // 可选，nil = 无分布式锁
-	lockTTL     time.Duration
-	localLocks  sync.Map // key: cacheKey string -> value: *contextMutex
+	accountRepo            AccountRepository
+	tokenCache             GeminiTokenCache // 可选，nil = 无分布式锁
+	lockTTL                time.Duration
+	openAIRecoveryWake     chan struct{}
+	openAIRecoveryRejected sync.Map
+	localLocks             sync.Map // key: cacheKey string -> value: *contextMutex
 }
 
 // NewOAuthRefreshAPI 创建统一刷新 API
@@ -139,9 +141,10 @@ func NewOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCac
 		ttl = lockTTL[0]
 	}
 	return &OAuthRefreshAPI{
-		accountRepo: accountRepo,
-		tokenCache:  tokenCache,
-		lockTTL:     ttl,
+		accountRepo:        accountRepo,
+		tokenCache:         tokenCache,
+		lockTTL:            ttl,
+		openAIRecoveryWake: make(chan struct{}, 1),
 	}
 }
 
@@ -181,6 +184,9 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		return nil, errors.New("oauth refresh executor is nil")
 	}
 	requestPath := isOAuthRefreshRequestPath(ctx)
+	if strict, _ := ctx.Value(openAIRecoveryStrictKey{}).(bool); strict && api.tokenCache == nil {
+		return nil, errors.New("OpenAI OAuth recovery requires distributed refresh locking")
+	}
 	cacheKey := executor.CacheKey(account)
 
 	// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）
@@ -194,6 +200,9 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	if api.tokenCache != nil {
 		acquired, lockErr := api.tokenCache.AcquireRefreshLock(ctx, cacheKey, api.lockTTL)
 		if lockErr != nil {
+			if strict, _ := ctx.Value(openAIRecoveryStrictKey{}).(bool); strict {
+				return nil, lockErr
+			}
 			// Redis 错误，降级为无锁刷新（进程内互斥锁仍生效）
 			slog.Warn("oauth_refresh_lock_failed_degraded",
 				"account_id", account.ID,
@@ -256,6 +265,9 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	// 4. 执行平台特定刷新逻辑
 	attemptedAccount := snapshotOAuthRefreshAccount(freshAccount)
 	newCredentials, refreshErr := executor.Refresh(ctx, freshAccount)
+	if strict, _ := ctx.Value(openAIRecoveryStrictKey{}).(bool); strict && refreshErr == nil && openAIRecoveryState(attemptedAccount) != nil {
+		return api.finishOpenAIRecoveryRefresh(ctx, attemptedAccount, newCredentials)
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		// A provider implementation may ignore cancellation and return late
 		// credentials. Never persist them after the attempt/cycle boundary.
