@@ -252,6 +252,8 @@ func (s *TokenRefreshService) refreshLoop() {
 		select {
 		case <-ticker.C:
 			s.processRefreshContext(ctx)
+		case id := <-s.refreshRequestChannel():
+			s.refreshRequestedAccount(ctx, id)
 		case <-ctx.Done():
 			return
 		case <-s.stopCh:
@@ -559,6 +561,11 @@ func (s *TokenRefreshService) processRefreshContext(parent context.Context) {
 		}
 
 		pageStats := s.processCandidatePage(ctx, accounts, providerStates, refreshWindow)
+		select {
+		case id := <-s.refreshRequestChannel():
+			s.refreshRequestedAccount(ctx, id)
+		default:
+		}
 		stats.total += pageStats.total
 		stats.oauth += pageStats.oauth
 		stats.needsRefresh += pageStats.needsRefresh
@@ -1177,7 +1184,7 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		}
 	}
 	// 刷新成功后清除临时不可调度状态（处理 OAuth 401 恢复场景）
-	if account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
+	if !s.clearOpenAI401Pause(ctx, account) && account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
 		if clearErr := s.accountRepo.ClearTempUnschedulable(ctx, account.ID); clearErr != nil {
 			slog.Warn("token_refresh.clear_temp_unschedulable_failed",
 				"account_id", account.ID,

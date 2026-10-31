@@ -125,10 +125,11 @@ func snapshotOAuthRefreshAccount(account *Account) *Account {
 // OAuthRefreshAPI 统一的 OAuth Token 刷新入口
 // 封装分布式锁、进程内互斥锁、DB 重读、已刷新检查、竞争恢复等通用逻辑
 type OAuthRefreshAPI struct {
-	accountRepo AccountRepository
-	tokenCache  GeminiTokenCache // 可选，nil = 无分布式锁
-	lockTTL     time.Duration
-	localLocks  sync.Map // key: cacheKey string -> value: *contextMutex
+	accountRepo     AccountRepository
+	tokenCache      GeminiTokenCache // 可选，nil = 无分布式锁
+	lockTTL         time.Duration
+	refreshRequests chan int64
+	localLocks      sync.Map // key: cacheKey string -> value: *contextMutex
 }
 
 // NewOAuthRefreshAPI 创建统一刷新 API
@@ -139,9 +140,10 @@ func NewOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCac
 		ttl = lockTTL[0]
 	}
 	return &OAuthRefreshAPI{
-		accountRepo: accountRepo,
-		tokenCache:  tokenCache,
-		lockTTL:     ttl,
+		accountRepo:     accountRepo,
+		tokenCache:      tokenCache,
+		lockTTL:         ttl,
+		refreshRequests: make(chan int64, 100),
 	}
 }
 
@@ -181,6 +183,9 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 		return nil, errors.New("oauth refresh executor is nil")
 	}
 	requestPath := isOAuthRefreshRequestPath(ctx)
+	if openAIOAuthTokenRejected(account) && api.tokenCache == nil {
+		return nil, errors.New("OpenAI rejected-token refresh requires distributed locking")
+	}
 	cacheKey := executor.CacheKey(account)
 
 	// 0. 获取进程内互斥锁（防止同一进程内的并发刷新竞争）
@@ -194,6 +199,9 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	if api.tokenCache != nil {
 		acquired, lockErr := api.tokenCache.AcquireRefreshLock(ctx, cacheKey, api.lockTTL)
 		if lockErr != nil {
+			if openAIOAuthTokenRejected(account) {
+				return nil, lockErr
+			}
 			// Redis 错误，降级为无锁刷新（进程内互斥锁仍生效）
 			slog.Warn("oauth_refresh_lock_failed_degraded",
 				"account_id", account.ID,
