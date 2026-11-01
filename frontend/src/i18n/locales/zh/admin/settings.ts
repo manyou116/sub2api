@@ -488,7 +488,12 @@ export default {
         title: 'Codex OAuth 请求体压缩',
         description: '使用 zstd 压缩发往官方 Codex OAuth 上游的大请求，减少上传及代理流量。',
         enabled: '全局启用请求体压缩',
-        hint: '默认开启，对不超过 64 MiB 的 JSON 请求尝试压缩，仅在变小时使用。全局关闭后所有账号均停用；开启时仍尊重账号单独关闭。SSE 返回保持原样，多实例最长 30 秒同步。',
+        imageGuardEnabled: '启用大图片请求保护',
+        imageGuardMaxMiB: '图片请求保护阈值',
+        imageGuardHint: '默认 8 MiB，范围 1–64 MiB。含内嵌图片的 JSON 超过此大小时跳过压缩，以降低上游返回 400 的风险。上游修复后可关闭保护。',
+        bare400FallbackEnabled: '压缩请求遇到通用 400 时回退原文',
+        bare400FallbackHint: '仅当压缩请求返回通用 Bad Request 且尚未收到响应流时，同账号使用原文重试一次。上游修复后可关闭。',
+        hint: '默认开启，对不超过 64 MiB 的 JSON 请求尝试压缩，仅在变小时使用。全局关闭后所有账号均停用；开启时仍尊重账号单独关闭。大图片保护可单独关闭或调整阈值。SSE 返回保持原样，多实例最长 30 秒同步。',
         loadFailed: '读取压缩设置失败，请重试。',
         saved: '全局请求体压缩设置已保存',
         saveFailed: '保存全局请求体压缩设置失败'

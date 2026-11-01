@@ -151,12 +151,14 @@ type SettingService struct {
 	// goroutine refreshes it via openAIQuotaAutoPauseSettingsSF (stale-while-revalidate).
 	// This per-service field also gives tests natural isolation — each SettingService
 	// instance owns its own cache, no shared package-level state.
-	openAIQuotaAutoPauseSettingsCache atomic.Value // *cachedOpenAIQuotaAutoPauseSettings
-	openAIQuotaAutoPauseSettingsSF    singleflight.Group
-	openAIAPIKeyHealthBreakerCache    atomic.Value // *cachedOpenAIAPIKeyHealthBreakerSettings
-	openAICapacityCooldownCache       atomic.Value // *cachedOpenAICapacityCooldownSettings
-	openAIRequestCompressionCache     atomic.Value // *cachedOpenAIRequestCompression
-	openAIRequestCompressionMu        sync.Mutex
+	openAIQuotaAutoPauseSettingsCache    atomic.Value // *cachedOpenAIQuotaAutoPauseSettings
+	openAIQuotaAutoPauseSettingsSF       singleflight.Group
+	openAIAPIKeyHealthBreakerCache       atomic.Value // *cachedOpenAIAPIKeyHealthBreakerSettings
+	openAICapacityCooldownCache          atomic.Value // *cachedOpenAICapacityCooldownSettings
+	openAIRequestCompressionCache        atomic.Value // *cachedOpenAIRequestCompression
+	openAIRequestCompressionMu           sync.Mutex
+	openAIRequestCompressionOptionsCache atomic.Value // *cachedOpenAIRequestCompressionOptions
+	openAIRequestCompressionOptionsMu    sync.Mutex
 
 	channelMonitorRuntimeListenersMu sync.Mutex
 	channelMonitorRuntimeListeners   []func()

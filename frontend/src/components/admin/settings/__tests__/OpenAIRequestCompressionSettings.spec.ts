@@ -20,30 +20,57 @@ describe('global Codex OAuth request compression', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.load.mockResolvedValue({ enabled: true })
-    mocks.save.mockImplementation(async (enabled: boolean) => ({ enabled }))
+    mocks.save.mockImplementation(async (settings: { enabled: boolean; image_guard_enabled?: boolean; image_guard_max_bytes?: number; bare_400_fallback_enabled?: boolean }) => ({
+      enabled: settings.enabled,
+      image_guard_enabled: settings.image_guard_enabled ?? true,
+      image_guard_max_bytes: settings.image_guard_max_bytes ?? (8 * 1024 * 1024),
+      bare_400_fallback_enabled: settings.bare_400_fallback_enabled ?? true,
+    }))
   })
 
   it('saves an explicit global false and reloads the persisted state', async () => {
     const wrapper = render()
     await flushPromises()
     expect(wrapper.text()).toContain('全局启用请求体压缩')
-    expect(wrapper.get('[role="switch"]').attributes('aria-checked')).toBe('true')
-    await wrapper.get('[role="switch"]').trigger('click')
+    expect(wrapper.get('#request-compression-enabled').attributes('aria-checked')).toBe('true')
+    await wrapper.get('#request-compression-enabled').trigger('click')
     await wrapper.get('[data-testid="request-compression-save"]').trigger('click')
     await flushPromises()
     expect(mocks.save).toHaveBeenCalledTimes(1)
-    expect(mocks.save).toHaveBeenCalledWith(false)
+    expect(mocks.save).toHaveBeenCalledWith({ enabled: false, image_guard_enabled: true, image_guard_max_bytes: 8 * 1024 * 1024, bare_400_fallback_enabled: true })
     expect(mocks.success).toHaveBeenCalledWith('全局请求体压缩设置已保存')
     mocks.load.mockResolvedValue({ enabled: false })
     wrapper.unmount()
     const reloaded = render('en')
     await flushPromises()
     expect(reloaded.text()).toContain('Enable request compression globally')
-    expect(reloaded.get('[role="switch"]').attributes('aria-checked')).toBe('false')
-    await reloaded.get('[role="switch"]').trigger('click')
+    expect(reloaded.get('#request-compression-enabled').attributes('aria-checked')).toBe('false')
+    await reloaded.get('#request-compression-enabled').trigger('click')
     await reloaded.get('[data-testid="request-compression-save"]').trigger('click')
     await flushPromises()
-    expect(mocks.save).toHaveBeenLastCalledWith(true)
+    expect(mocks.save).toHaveBeenLastCalledWith({ enabled: true, image_guard_enabled: true, image_guard_max_bytes: 8 * 1024 * 1024, bare_400_fallback_enabled: true })
+  })
+
+  it('saves and reloads both protections and the threshold independently', async () => {
+    mocks.load.mockResolvedValue({ enabled: true, image_guard_enabled: true, image_guard_max_bytes: 8 * 1024 * 1024, bare_400_fallback_enabled: true })
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('#request-compression-image-guard').trigger('click')
+    await wrapper.get('#request-compression-bare-400-fallback').trigger('click')
+    await wrapper.get('#request-compression-image-limit').setValue('16')
+    await wrapper.get('[data-testid="request-compression-save"]').trigger('click')
+    await flushPromises()
+    const persisted = { enabled: true, image_guard_enabled: false, image_guard_max_bytes: 16 * 1024 * 1024, bare_400_fallback_enabled: false }
+    expect(mocks.save).toHaveBeenLastCalledWith(persisted)
+    wrapper.unmount()
+    mocks.load.mockResolvedValue(persisted)
+    const reloaded = render('en')
+    await flushPromises()
+    expect(reloaded.get('#request-compression-enabled').attributes('aria-checked')).toBe('true')
+    expect(reloaded.get('#request-compression-image-guard').attributes('aria-checked')).toBe('false')
+    expect(reloaded.get('#request-compression-bare-400-fallback').attributes('aria-checked')).toBe('false')
+    expect((reloaded.get('#request-compression-image-limit').element as HTMLInputElement).value).toBe('16')
+    reloaded.unmount()
   })
 
   it('blocks saving while loading or after a read failure and supports retry', async () => {
@@ -66,7 +93,7 @@ describe('global Codex OAuth request compression', () => {
     mocks.save.mockReturnValue(new Promise((_, reject) => { rejectSave = reject }))
     const wrapper = render()
     await flushPromises()
-    await wrapper.get('[role="switch"]').trigger('click')
+    await wrapper.get('#request-compression-enabled').trigger('click')
     await wrapper.get('[data-testid="request-compression-save"]').trigger('click')
     await wrapper.get('[data-testid="request-compression-save"]').trigger('click')
     expect(mocks.save).toHaveBeenCalledTimes(1)
@@ -74,7 +101,7 @@ describe('global Codex OAuth request compression', () => {
     rejectSave(new Error('offline'))
     await flushPromises()
     expect(mocks.error).toHaveBeenCalledWith('保存全局请求体压缩设置失败')
-    expect(wrapper.get('[role="switch"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#request-compression-enabled').attributes('aria-checked')).toBe('false')
     expect(wrapper.get('fieldset').attributes()).not.toHaveProperty('disabled')
   })
 })

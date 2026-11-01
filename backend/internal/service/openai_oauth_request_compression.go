@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"mime"
@@ -16,14 +17,103 @@ import (
 )
 
 const (
-	openAIOAuthCompressionMaxBytes = 64 << 20
-	openAIRequestCompressionKey    = "openai_request_compression_enabled"
+	openAIOAuthCompressionMaxBytes     = 64 << 20
+	openAIOAuthInlineImageMaxBytes     = 8 << 20
+	openAIRequestCompressionKey        = "openai_request_compression_enabled"
+	openAIRequestCompressionOptionsKey = "openai_request_compression_options"
 )
 
 type cachedOpenAIRequestCompression struct {
 	enabled bool
 	err     error
 	until   time.Time
+}
+
+type OpenAIRequestCompressionOptions struct {
+	ImageGuardEnabled      bool `json:"image_guard_enabled"`
+	ImageGuardMaxBytes     int  `json:"image_guard_max_bytes"`
+	Bare400FallbackEnabled bool `json:"bare_400_fallback_enabled"`
+}
+
+func defaultOpenAIRequestCompressionOptions() OpenAIRequestCompressionOptions {
+	return OpenAIRequestCompressionOptions{true, openAIOAuthInlineImageMaxBytes, true}
+}
+
+func (o OpenAIRequestCompressionOptions) Validate() error {
+	if o.ImageGuardMaxBytes < 1<<20 || o.ImageGuardMaxBytes > openAIOAuthCompressionMaxBytes {
+		return errors.New("image protection threshold must be between 1 MiB and 64 MiB")
+	}
+	return nil
+}
+
+type cachedOpenAIRequestCompressionOptions struct {
+	options OpenAIRequestCompressionOptions
+	err     error
+	until   time.Time
+}
+
+func (s *SettingService) GetOpenAIRequestCompressionOptions(ctx context.Context) (OpenAIRequestCompressionOptions, error) {
+	if s == nil || s.settingRepo == nil {
+		return defaultOpenAIRequestCompressionOptions(), nil
+	}
+	read := func() *cachedOpenAIRequestCompressionOptions {
+		v, _ := s.openAIRequestCompressionOptionsCache.Load().(*cachedOpenAIRequestCompressionOptions)
+		return v
+	}
+	if v := read(); v != nil && time.Now().Before(v.until) {
+		return v.options, v.err
+	}
+	s.openAIRequestCompressionOptionsMu.Lock()
+	defer s.openAIRequestCompressionOptionsMu.Unlock()
+	if v := read(); v != nil && time.Now().Before(v.until) {
+		return v.options, v.err
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	raw, err := s.settingRepo.GetValue(dbCtx, openAIRequestCompressionOptionsKey)
+	if errors.Is(err, ErrSettingNotFound) {
+		err = nil
+	}
+	options := defaultOpenAIRequestCompressionOptions()
+	if err == nil && raw != "" {
+		err = json.Unmarshal([]byte(raw), &options)
+	}
+	if err == nil {
+		err = options.Validate()
+	}
+	ttl := 30 * time.Second
+	if err != nil {
+		options, ttl = defaultOpenAIRequestCompressionOptions(), time.Second
+		options.Bare400FallbackEnabled = false
+	}
+	s.openAIRequestCompressionOptionsCache.Store(&cachedOpenAIRequestCompressionOptions{options, err, time.Now().Add(ttl)})
+	return options, err
+}
+
+func (s *SettingService) SetOpenAIRequestCompressionOptions(ctx context.Context, enabled *bool, options OpenAIRequestCompressionOptions) error {
+	if err := options.Validate(); err != nil {
+		return err
+	}
+	s.openAIRequestCompressionMu.Lock()
+	defer s.openAIRequestCompressionMu.Unlock()
+	s.openAIRequestCompressionOptionsMu.Lock()
+	defer s.openAIRequestCompressionOptionsMu.Unlock()
+	encoded, err := json.Marshal(options)
+	if err != nil {
+		return err
+	}
+	updates := map[string]string{openAIRequestCompressionOptionsKey: string(encoded)}
+	if enabled != nil {
+		updates[openAIRequestCompressionKey] = strconv.FormatBool(*enabled)
+	}
+	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+		return err
+	}
+	s.openAIRequestCompressionOptionsCache.Store(&cachedOpenAIRequestCompressionOptions{options: options, until: time.Now().Add(30 * time.Second)})
+	if enabled != nil {
+		s.openAIRequestCompressionCache.Store(&cachedOpenAIRequestCompression{enabled: *enabled, until: time.Now().Add(30 * time.Second)})
+	}
+	return nil
 }
 
 func (s *SettingService) GetOpenAIRequestCompression(ctx context.Context) (bool, error) {
@@ -86,7 +176,11 @@ func (s *OpenAIGatewayService) doOpenAIOAuthCompressed(request *http.Request, pr
 			return s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
 		}
 	}
-	compressed, reason := prepareOpenAIOAuthCompressedRequest(request, account)
+	options := defaultOpenAIRequestCompressionOptions()
+	if measure {
+		options, _ = s.settingService.GetOpenAIRequestCompressionOptions(request.Context())
+	}
+	compressed, reason := prepareOpenAIOAuthCompressedRequestWithImageGuard(request, account, options.ImageGuardEnabled, options.ImageGuardMaxBytes)
 	if compressed == nil {
 		if measure {
 			recordUpstreamRequestBody(request.Context(), request.ContentLength, request.ContentLength, "identity", reason, false)
@@ -101,8 +195,13 @@ func (s *OpenAIGatewayService) doOpenAIOAuthCompressed(request *http.Request, pr
 	}
 	response, err := s.httpUpstream.Do(compressed, proxyURL, account.ID, account.Concurrency)
 	// Never replay transport failures or ordinary API errors: the request may
-	// already have been accepted. Only explicit encoding rejection is safe.
-	if err != nil || !openAIOAuthEncodingRejected(response) || request.Context().Err() != nil {
+	// already have been accepted. A bounded generic 400 replay is safe only
+	// before any downstream stream event has been returned.
+	if err != nil || request.Context().Err() != nil {
+		return response, err
+	}
+	rejected, rejectionReason := openAIOAuthEncodingRejected(response, options.Bare400FallbackEnabled)
+	if !rejected || request.Context().Err() != nil {
 		return response, err
 	}
 	body, bodyErr := request.GetBody()
@@ -113,7 +212,7 @@ func (s *OpenAIGatewayService) doOpenAIOAuthCompressed(request *http.Request, pr
 	plain := request.Clone(request.Context())
 	plain.Body = body
 	if measure {
-		recordUpstreamRequestBody(request.Context(), request.ContentLength, request.ContentLength, "identity", "encoding_rejected", true)
+		recordUpstreamRequestBody(request.Context(), request.ContentLength, request.ContentLength, "identity", rejectionReason, true)
 	}
 	return s.httpUpstream.Do(plain, proxyURL, account.ID, account.Concurrency)
 }
@@ -131,6 +230,10 @@ func compressOpenAIOAuthRequest(request *http.Request, account *Account) *http.R
 }
 
 func prepareOpenAIOAuthCompressedRequest(request *http.Request, account *Account) (*http.Request, string) {
+	return prepareOpenAIOAuthCompressedRequestWithImageGuard(request, account, true, openAIOAuthInlineImageMaxBytes)
+}
+
+func prepareOpenAIOAuthCompressedRequestWithImageGuard(request *http.Request, account *Account, imageGuardEnabled bool, imageMaxBytes int) (*http.Request, string) {
 	if !isOpenAIOAuthCompressionRoute(request, account) {
 		return nil, "ineligible"
 	}
@@ -161,6 +264,9 @@ func prepareOpenAIOAuthCompressedRequest(request *http.Request, account *Account
 	if len(plain) > openAIOAuthCompressionMaxBytes {
 		return nil, "size_limit"
 	}
+	if imageGuardEnabled && len(plain) > imageMaxBytes && containsOpenAIInlineImage(plain) {
+		return nil, "inline_image_size_limit"
+	}
 	if gjson.GetBytes(plain, "stream").Type != gjson.True {
 		return nil, "non_stream"
 	}
@@ -188,22 +294,36 @@ type openAIOAuthReplayResponseBody struct {
 	io.Closer
 }
 
-func openAIOAuthEncodingRejected(response *http.Response) bool {
+func containsOpenAIInlineImage(body []byte) bool {
+	return bytes.Contains(body, []byte(`"input_image"`)) && bytes.Contains(body, []byte(`data:image/`))
+}
+
+func openAIOAuthEncodingRejected(response *http.Response, allowBare400 bool) (bool, string) {
 	if response == nil || response.Body == nil {
-		return false
+		return false, ""
 	}
 	if response.StatusCode == http.StatusUnsupportedMediaType {
-		return true
+		return true, "encoding_rejected"
 	}
 	if response.StatusCode != http.StatusBadRequest {
-		return false
+		return false, ""
+	}
+	if strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		return false, ""
 	}
 	// Preserve the complete error for existing handlers, even if it exceeds
 	// this bounded inspection window or reading it fails partway through.
-	prefix, err := io.ReadAll(io.LimitReader(response.Body, 8<<10))
+	prefix, err := io.ReadAll(io.LimitReader(response.Body, (8<<10)+1))
 	response.Body = &openAIOAuthReplayResponseBody{Reader: io.MultiReader(bytes.NewReader(prefix), response.Body), Closer: response.Body}
 	message := strings.ToLower(string(prefix))
-	return err == nil && strings.Contains(message, "zstd") &&
+	if err == nil && strings.Contains(message, "zstd") &&
 		strings.Contains(message, "content-encoding") &&
-		(strings.Contains(message, "unsupported") || strings.Contains(message, "decompress"))
+		(strings.Contains(message, "unsupported") || strings.Contains(message, "decompress")) {
+		return true, "encoding_rejected"
+	}
+	var compact bytes.Buffer
+	if allowBare400 && err == nil && len(prefix) <= 8<<10 && json.Compact(&compact, prefix) == nil && bytes.Equal(compact.Bytes(), []byte(`{"detail":"Bad Request"}`)) {
+		return true, "bare_400"
+	}
+	return false, ""
 }

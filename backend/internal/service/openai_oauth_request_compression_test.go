@@ -135,6 +135,16 @@ func TestOpenAIOAuthRequestCompressionThreshold(t *testing.T) {
 	}
 }
 
+func TestOpenAIOAuthRequestCompressionSkipsLargeInlineImages(t *testing.T) {
+	body := []byte(`{"model":"gpt-6.1-sol","stream":true,"input":[{"type":"input_image","image_url":"data:image/png;base64,` + strings.Repeat("A", openAIOAuthInlineImageMaxBytes) + `"}]}`)
+	req := oauthCompressionRequest(t, body)
+	req.ContentLength = int64(len(body))
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"openai_request_compression": true}}
+	compressed, reason := prepareOpenAIOAuthCompressedRequest(req, account)
+	require.Nil(t, compressed)
+	require.Equal(t, "inline_image_size_limit", reason)
+}
+
 func TestOpenAIOAuthRequestCompressionFallback(t *testing.T) {
 	plain := oauthCompressionBody()
 	for _, scenario := range []struct {
@@ -146,6 +156,11 @@ func TestOpenAIOAuthRequestCompressionFallback(t *testing.T) {
 		{"415", 415, "unsupported encoding", true},
 		{"explicit 400", 400, `{"error":{"message":"Unsupported Content-Encoding: zstd"}}`, true},
 		{"decode 400", 400, `{"error":{"message":"Unable to decompress zstd Content-Encoding"}}`, true},
+		{"bare 400", 400, `{"detail":"Bad Request"}`, true},
+		{"bare 400 with JSON spacing", 400, "{\n \"detail\": \"Bad Request\"\n}\n", true},
+		{"400 with additional fields", 400, `{"detail":"Bad Request","error":"invalid input"}`, false},
+		{"trailing invalid JSON", 400, `{"detail":"Bad Request"}unexpected`, false},
+		{"401", 401, `{"detail":"Bad Request"}`, false},
 		{"ordinary 400", 400, `{"error":{"message":"Invalid input field"}}`, false},
 		{"model name mentions zstd", 400, `{"error":{"message":"Unsupported model zstd"}}`, false},
 		{"rate limit", 429, `{"error":{"message":"Unsupported Content-Encoding: zstd"}}`, false},

@@ -495,7 +495,12 @@ export default {
         title: 'Codex OAuth Request Compression',
         description: 'Compress large uploads to the official Codex OAuth upstream with zstd to reduce upload and proxy traffic.',
         enabled: 'Enable request compression globally',
-        hint: 'Enabled by default for JSON requests up to 64 MiB; used only when smaller. Turning this off disables compression for all accounts; when on, individual account opt-outs still apply. SSE responses stay unchanged. Other instances sync within 30 seconds.',
+        imageGuardEnabled: 'Protect large image requests',
+        imageGuardMaxMiB: 'Image protection threshold',
+        imageGuardHint: 'Default: 8 MiB; range: 1–64 MiB. Skip compression for JSON containing inline images above this size to reduce upstream 400 errors. Disable after the upstream fix.',
+        bare400FallbackEnabled: 'Retry plaintext after a generic compressed-request 400',
+        bare400FallbackHint: 'Retry once on the same account only when a compressed request returns generic Bad Request before streaming starts. Disable after the upstream fix.',
+        hint: 'Enabled by default for JSON requests up to 64 MiB; used only when smaller. Turning this off disables compression for all accounts; when on, individual account opt-outs still apply. Large-image protection has its own switch and threshold. SSE responses stay unchanged. Other instances sync within 30 seconds.',
         loadFailed: 'Failed to load compression settings. Please retry.',
         saved: 'Global request compression settings saved',
         saveFailed: 'Failed to save global request compression settings'

@@ -355,6 +355,8 @@ export default {
         compression_error: 'Compression failed; sent plaintext',
         not_smaller: 'Compression did not reduce size; sent plaintext',
         encoding_rejected: 'Upstream rejected encoding; retried plaintext',
+        inline_image_size_limit: 'Large-image protection skipped compression',
+        bare_400: 'Compressed request returned generic 400; retried plaintext',
       },
     },
     title: 'Usage Records',

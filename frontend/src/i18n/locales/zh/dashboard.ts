@@ -360,6 +360,8 @@ export default {
         compression_error: '压缩失败，使用原文',
         not_smaller: '压缩后未变小，使用原文',
         encoding_rejected: '上游拒绝压缩，已回退原文',
+        inline_image_size_limit: '大图片保护已跳过压缩',
+        bare_400: '压缩请求返回通用 400，已回退原文',
       },
     },
     title: '使用记录',

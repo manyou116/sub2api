@@ -26,10 +26,29 @@
 以及既有大小、路由和协议条件。此开关不改写任何账号配置。
 
 管理接口为 `GET /api/v1/admin/settings/openai-request-compression` 与同路径 PUT。
-请求/返回数据为 `{"enabled": true}` 或 `{"enabled": false}`，PUT 必须显式传布尔值。
-设置保存在现有 settings 表的 `openai_request_compression_enabled`，不需要迁移。
-当前实例保存成功后立即生效，其他实例最长 30 秒刷新。不影响已经发出的请求。
-读取失败时保持原文发送，管理界面显示失败并允许重试；保存失败不更改当前缓存。
+返回全局 `enabled` 及以下兼容设置，PUT 支持显式传入其中一项或多项：
+
+```json
+{
+  "enabled": true,
+  "image_guard_enabled": true,
+  "image_guard_max_bytes": 8388608,
+  "bare_400_fallback_enabled": true
+}
+```
+
+从 `plus.8` 起，大图片保护默认开启：含内嵌图片的 JSON **超过 8 MiB** 时跳过压缩，
+界面阈值范围 1–64 MiB。通用 400 原文回退也默认开启。两者均可独立关闭；
+上游修复后不必重新发版。原有只传 `enabled` 的客户端保持兼容。
+
+设置保存在现有 settings 表的 `openai_request_compression_enabled` 与
+`openai_request_compression_options`，无迁移或账号配置写入。有效性检查全部通过后，
+一次批量写入并更新本地缓存；保存失败不更改当前缓存，其他实例最长30秒刷新。
+不影响已发出的请求。全局开关读取失败时发送原文；兼容设置读取失败时保留8MiB
+图片保护并禁用新增的通用400回退。管理界面显示读取/保存失败并允许重试。
+
+使用记录中的 `inline_image_size_limit` 表示图片保护跳过压缩；`bare_400` 表示
+压缩尝试收到精确通用400后已经发起原文回退，均不等于上游拒绝原因已获证实。
 
 全局 UI 开关从 `v99.0.2.19-plus.5` 提供；已发布的 `plus.4` tag 和镜像保持不变。
 
@@ -46,9 +65,13 @@
 
 ## 编码不兼容时
 
-仅在上游返回 HTTP 415，或 HTTP 400 的前 8 KiB 明确同时包含 `zstd`、
+上游返回 HTTP 415，或 HTTP 400 的前 8 KiB 明确同时包含 `zstd`、
 `Content-Encoding` 和 unsupported/decompress 错误时，以原文重试一次。
-原文响应仍报错就交回现有处理链，不循环回退；普通 400、429、5xx、网络错误
+`plus.8` 在独立开关开启时，还会对完整 JSON 精确匹配 `{"detail":"Bad Request"}`
+的压缩 HTTP 400 使用原文重试一次（允许 JSON 空白差异，拒绝额外字段与尾随内容）。
+只在当前上下文未取消、请求体可重放、上游尚未返回流内容的同账号请求中生效，
+共享原请求超时；2xx/SSE 不重放。
+原文响应仍报错就交回现有处理链，不循环回退；其他普通 400、401、429、5xx、网络错误
 不因本功能重发，避免对可能已被接受的生成重复提交。其他错误响应体完整保留。
 
 回退不持久化修改账号；持续不兼容时按账号关闭即可。回滚本功能只需关闭对应账号
