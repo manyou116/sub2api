@@ -643,6 +643,7 @@ type UsageLog struct {
 	DurationMs         *int `json:"duration_ms"`
 	FirstTokenMs       *int `json:"first_token_ms"`
 
+	SourceUser          *service.SourceUser               `json:"source_user,omitempty"`
 	UpstreamRequestBody *service.UpstreamRequestBodyStats `json:"upstream_request_body,omitempty"`
 
 	// 图片生成字段

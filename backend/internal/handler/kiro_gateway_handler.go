@@ -301,8 +301,9 @@ func (h *OpenAIGatewayHandler) kiroGateway(c *gin.Context, protocol kiroForwardP
 			recordAPIKey := apiKey
 			recordAccount := account
 			recordSubscription := subscription
+			recordContext := service.WithSourceUser(context.Background(), service.SourceUserFromContext(c.Request.Context()))
 			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ctx, cancel := context.WithTimeout(recordContext, 30*time.Second)
 				defer cancel()
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
 					Result:             recordResult,

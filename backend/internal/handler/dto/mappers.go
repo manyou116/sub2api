@@ -693,6 +693,7 @@ func usageLogFromServiceUser(l *service.UsageLog) UsageLog {
 		requestedModel = l.Model
 	}
 	return UsageLog{
+		SourceUser:                l.SourceUser,
 		UpstreamRequestBody:       l.UpstreamRequestBody,
 		ID:                        l.ID,
 		UserID:                    l.UserID,

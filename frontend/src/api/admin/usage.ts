@@ -10,6 +10,7 @@ import type { EndpointStat } from '@/types'
 // ==================== Types ====================
 
 export interface AdminUsageStatsResponse {
+  upstream_body?: { measured_requests: number; raw_bytes: number; encoded_bytes: number }
   total_requests: number
   total_input_tokens: number
   total_output_tokens: number
@@ -81,6 +82,8 @@ export interface CreateUsageCleanupTaskRequest {
 }
 
 export interface AdminUsageQueryParams extends UsageQueryParams {
+  source_id?: string
+  source_user_id?: string
   user_id?: number
   exact_total?: boolean
   billing_mode?: string

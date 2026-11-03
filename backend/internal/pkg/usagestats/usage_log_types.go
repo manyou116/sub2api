@@ -269,12 +269,14 @@ type PlatformDashboardStats struct {
 
 // UsageLogFilters represents filters for usage log queries
 type UsageLogFilters struct {
-	UserID    int64
-	APIKeyID  int64
-	AccountID int64
-	GroupID   int64
-	RequestID string
-	Model     string
+	SourceID     string
+	SourceUserID string
+	UserID       int64
+	APIKeyID     int64
+	AccountID    int64
+	GroupID      int64
+	RequestID    string
+	Model        string
 	// ModelFilterSource controls how Model is matched. Empty preserves raw usage_logs.model semantics.
 	ModelFilterSource     string
 	RequestType           *int16
@@ -291,20 +293,21 @@ type UsageLogFilters struct {
 
 // UsageStats represents usage statistics
 type UsageStats struct {
-	TotalRequests            int64          `json:"total_requests"`
-	TotalInputTokens         int64          `json:"total_input_tokens"`
-	TotalOutputTokens        int64          `json:"total_output_tokens"`
-	TotalCacheTokens         int64          `json:"total_cache_tokens"`
-	TotalCacheCreationTokens int64          `json:"total_cache_creation_tokens"`
-	TotalCacheReadTokens     int64          `json:"total_cache_read_tokens"`
-	TotalTokens              int64          `json:"total_tokens"`
-	TotalCost                float64        `json:"total_cost"`
-	TotalActualCost          float64        `json:"total_actual_cost"`
-	TotalAccountCost         *float64       `json:"total_account_cost,omitempty"`
-	AverageDurationMs        float64        `json:"average_duration_ms"`
-	Endpoints                []EndpointStat `json:"endpoints,omitempty"`
-	UpstreamEndpoints        []EndpointStat `json:"upstream_endpoints,omitempty"`
-	EndpointPaths            []EndpointStat `json:"endpoint_paths,omitempty"`
+	UpstreamBody             *SourceUserBodyStats `json:"upstream_body,omitempty"`
+	TotalRequests            int64                `json:"total_requests"`
+	TotalInputTokens         int64                `json:"total_input_tokens"`
+	TotalOutputTokens        int64                `json:"total_output_tokens"`
+	TotalCacheTokens         int64                `json:"total_cache_tokens"`
+	TotalCacheCreationTokens int64                `json:"total_cache_creation_tokens"`
+	TotalCacheReadTokens     int64                `json:"total_cache_read_tokens"`
+	TotalTokens              int64                `json:"total_tokens"`
+	TotalCost                float64              `json:"total_cost"`
+	TotalActualCost          float64              `json:"total_actual_cost"`
+	TotalAccountCost         *float64             `json:"total_account_cost,omitempty"`
+	AverageDurationMs        float64              `json:"average_duration_ms"`
+	Endpoints                []EndpointStat       `json:"endpoints,omitempty"`
+	UpstreamEndpoints        []EndpointStat       `json:"upstream_endpoints,omitempty"`
+	EndpointPaths            []EndpointStat       `json:"endpoint_paths,omitempty"`
 }
 
 // PlatformUsage 表示某用户/某 API key 在单个"有效平台"维度的用量明细。
@@ -385,4 +388,11 @@ type AccountUsageStatsResponse struct {
 	Models            []ModelStat           `json:"models"`
 	Endpoints         []EndpointStat        `json:"endpoints"`
 	UpstreamEndpoints []EndpointStat        `json:"upstream_endpoints"`
+}
+
+// SourceUserBodyStats counts prepared request bodies, not acknowledged network traffic.
+type SourceUserBodyStats struct {
+	MeasuredRequests int64 `json:"measured_requests"`
+	RawBytes         int64 `json:"raw_bytes"`
+	EncodedBytes     int64 `json:"encoded_bytes"`
 }

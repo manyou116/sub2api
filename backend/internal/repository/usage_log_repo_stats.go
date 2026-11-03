@@ -695,6 +695,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		args = append(args, *filters.EndTime)
 	}
 
+	conditions, args = appendSourceUserWhere(conditions, args, filters.SourceID, filters.SourceUserID, "")
 	query := fmt.Sprintf(`
 		WITH scoped AS (
 			SELECT
@@ -822,6 +823,17 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 	stats.TotalAccountCost = &totalAccountCost
 	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
 
+	if filters.SourceID != "" {
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+		body := &usagestats.SourceUserBodyStats{}
+		q := "SELECT COUNT(upstream_request_body), COALESCE(SUM((upstream_request_body->>'raw_bytes')::bigint),0), COALESCE(SUM((upstream_request_body->>'encoded_bytes')::bigint),0) FROM usage_logs " + buildWhere(conditions)
+		if err := scanSingleRow(ctx, r.sql, q, args, &body.MeasuredRequests, &body.RawBytes, &body.EncodedBytes); err != nil {
+			return nil, err
+		}
+		stats.UpstreamBody = body
+	}
 	return stats, nil
 }
 

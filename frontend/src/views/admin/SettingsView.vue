@@ -4403,6 +4403,7 @@
         <!-- Tab: Gateway — Claude Code, Scheduling -->
         <div v-show="activeTab === 'gateway'" class="space-y-6">
           <OpenAIRequestCompressionSettings />
+          <SourceUserIntegrations />
           <!-- Claude Code Settings -->
           <div class="card">
             <div
@@ -8997,6 +8998,7 @@ import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
 import OpenAICapacityCooldownSettings from "@/components/admin/settings/OpenAICapacityCooldownSettings.vue";
+import SourceUserIntegrations from "@/components/admin/settings/SourceUserIntegrations.vue";
 import OpenAIRequestCompressionSettings from "@/components/admin/settings/OpenAIRequestCompressionSettings.vue";
 import {
   normalizeRechargeBonusMode,

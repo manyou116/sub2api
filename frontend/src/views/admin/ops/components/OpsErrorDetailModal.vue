@@ -39,6 +39,7 @@
             <template v-else>
               {{ detail.user_email || (detail.user_id != null ? String(detail.user_id) : '—') }}
             </template>
+            <SourceUserLabel :user="detail.source_user" />
           </div>
         </div>
 
@@ -225,6 +226,7 @@
 </template>
 
 <script setup lang="ts">
+import SourceUserLabel from '@/components/common/SourceUserLabel.vue'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'

@@ -125,6 +125,9 @@ vi.mock('@/components/admin/settings/OpenAICapacityCooldownSettings.vue', () => 
 vi.mock('@/components/admin/settings/OpenAIRequestCompressionSettings.vue', () => ({
   default: { template: '<div data-testid="openai-request-compression-settings" />' }
 }));
+vi.mock('@/components/admin/settings/SourceUserIntegrations.vue', () => ({
+  default: { template: '<div data-testid="source-user-integrations" />' }
+}));
 
 vi.mock("@/stores", () => ({
   useAppStore: () => ({
@@ -731,10 +734,10 @@ describe("admin SettingsView payment visible method controls", () => {
     adminSettingsFetch.mockResolvedValue(undefined);
   });
 
-  it("shows the global request compression card in the gateway tab", async () => {
+  it.each(['openai-request-compression-settings', 'source-user-integrations'])("shows %s in the gateway tab", async (testId) => {
     const wrapper = mountView();
     await flushPromises();
-    const card = wrapper.get('[data-testid="openai-request-compression-settings"]');
+    const card = wrapper.get(`[data-testid="${testId}"]`);
     expect((card.element.parentElement as HTMLElement).style.display).toBe('none');
     await wrapper.get('#settings-tab-gateway').trigger('click');
     await flushPromises();

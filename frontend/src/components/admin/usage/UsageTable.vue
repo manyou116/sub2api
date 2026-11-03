@@ -41,6 +41,7 @@
               {{ t('admin.usage.userDeletedBadge') }}
             </span>
             <span class="ml-1 text-gray-500 dark:text-gray-400">#{{ row.user_id }}</span>
+            <SourceUserLabel :user="row.source_user" @select="emit('sourceUserClick', $event)" />
           </div>
         </template>
 
@@ -587,6 +588,7 @@ function accountBilled(row: { total_cost?: number | null; account_stats_cost?: n
 
 
 import UpstreamRequestBodyCell from './UpstreamRequestBodyCell.vue'
+import SourceUserLabel from '@/components/common/SourceUserLabel.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
@@ -619,6 +621,7 @@ const props = withDefaults(defineProps<Props>(), {
 })
 const emit = defineEmits<{
   userClick: [userID: number, email?: string]
+  sourceUserClick: [user: import("@/types").SourceUser]
   sort: [key: string, order: 'asc' | 'desc']
   ipGeoBatchFailed: []
 }>()

@@ -41,6 +41,14 @@
           </div>
         </div>
 
+        <div v-if="mode !== 'ranking'" class="w-full sm:w-auto sm:min-w-[180px]">
+          <label class="input-label" for="usage-source-id">{{ t('usage.sourceIntegration.sourceId') }}</label>
+          <input id="usage-source-id" v-model="filters.source_id" class="input" maxlength="64" @change="filters.source_user_id = undefined; emitChange()" />
+        </div>
+        <div v-if="mode !== 'ranking'" class="w-full sm:w-auto sm:min-w-[180px]">
+          <label class="input-label" for="usage-source-user">{{ t('usage.sourceIntegration.userId') }}</label>
+          <input id="usage-source-user" v-model="filters.source_user_id" class="input" maxlength="64" :disabled="!filters.source_id" @change="emitChange" />
+        </div>
         <!-- API Key Search -->
         <div ref="apiKeySearchRef" class="usage-filter-dropdown relative w-full sm:w-auto sm:min-w-[240px]">
           <label class="input-label">{{ t('usage.apiKeyFilter') }}</label>

@@ -37,6 +37,8 @@ type dashboardSnapshotV2Response struct {
 }
 
 type dashboardSnapshotV2Filters struct {
+	SourceID              string
+	SourceUserID          string
 	UserID                int64
 	APIKeyID              int64
 	AccountID             int64
@@ -50,6 +52,8 @@ type dashboardSnapshotV2Filters struct {
 }
 
 type dashboardSnapshotV2CacheKey struct {
+	SourceID              string `json:"source_id,omitempty"`
+	SourceUserID          string `json:"source_user_id,omitempty"`
 	StartTime             string `json:"start_time"`
 	EndTime               string `json:"end_time"`
 	Granularity           string `json:"granularity"`
@@ -96,7 +100,13 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 		return
 	}
 
+	sourceID, sourceUserID, valid := parseSourceUserFilter(c)
+	if !valid {
+		return
+	}
+	filters.SourceID, filters.SourceUserID = sourceID, sourceUserID
 	keyRaw, _ := json.Marshal(dashboardSnapshotV2CacheKey{
+		SourceID: sourceID, SourceUserID: sourceUserID,
 		StartTime:             startTime.UTC().Format(time.RFC3339),
 		EndTime:               endTime.UTC().Format(time.RFC3339),
 		Granularity:           granularity,
@@ -192,6 +202,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.NativeCompactionV2,
 			filters.BillingType,
 			filters.UpstreamModelMismatch,
+			usagestats.UsageLogFilters{SourceID: filters.SourceID, SourceUserID: filters.SourceUserID},
 		)
 		if err != nil {
 			return nil, errors.New("failed to get usage trend")
@@ -214,6 +225,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.NativeCompactionV2,
 			filters.BillingType,
 			filters.UpstreamModelMismatch,
+			usagestats.UsageLogFilters{SourceID: filters.SourceID, SourceUserID: filters.SourceUserID},
 		)
 		if err != nil {
 			return nil, errors.New("failed to get model statistics")
@@ -235,6 +247,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			filters.NativeCompactionV2,
 			filters.BillingType,
 			filters.UpstreamModelMismatch,
+			usagestats.UsageLogFilters{SourceID: filters.SourceID, SourceUserID: filters.SourceUserID},
 		)
 		if err != nil {
 			return nil, errors.New("failed to get group statistics")

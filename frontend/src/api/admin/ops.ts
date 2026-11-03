@@ -901,6 +901,7 @@ export interface OpsSystemLogSinkHealth {
 }
 
 export interface OpsErrorLog {
+  source_user?: import("@/types").SourceUser | null
   id: number
   created_at: string
 
@@ -1093,6 +1094,8 @@ export async function getOpenAITokenStats(
 export type OpsErrorListView = 'errors' | 'excluded' | 'all'
 
 export type OpsErrorListQueryParams = {
+  source_id?: string
+  source_user_id?: string
   page?: number
   page_size?: number
   time_range?: string

@@ -44,6 +44,7 @@ git diff OLD_REF TARGET_REF -- backend/migrations
 | 分组额度/消耗监控，plus.15/16、f2ddd6e7c | retained | 按需查询、额度样本/资源去重、大数据查询优化 | TestCapacityMonitor；GroupCapacityMonitor repository integration；feature UI tests |
 | ops 长窗口预聚合，v99.0.2.19-plus.2 / 85fc470b3 | retained | 无过滤长窗口预聚合、raw 边界及过滤查询、singleflight | ops_repo_trends_preagg_test.go；ops snapshot tests |
 | Codex OAuth 上游请求压缩，v99.0.2.19-plus.4；全局 UI 从 plus.5 提供；plus.6 增加使用记录统计并去掉最小门槛 | retained | `OPENAI_OAUTH_REQUEST_COMPRESSION.md`：官方 HTTP 流式 JSON ≤64 MiB 默认尝试 zstd，无最小门槛；使用记录保留请求体大小/重试/回退统计；全局总开关优先，账号 extra 可关闭；plus.8 增加可关闭的大图片保护（默认8MiB）及精确裸400原文回退；明确编码拒绝仍只回退一次；插件/SSE 保持原有路径 | TestOpenAIRequestCompression* / TestOpenAIOAuthRequestCompression* / TestUpstreamRequestBodyStats*；TestUsageLogUpstreamBodyBatchRoundTrip；APIContracts；使用记录 UI 与完整网关回归 |
+| new-api 来源用户归因，v99.0.2.19-plus.9 | retained（本次新增） | 可信来源与 API Key ID 绑定；认证后捕获来源身份并剥离请求头；异步使用/错误日志保存快照；来源站点和用户 ID 隔离；管理端展示、筛选、模型/趋势/请求体统计及缓存隔离；历史未知，不同步用户表或改变计费归属 | TestSourceUser*；APIContracts；SourceUserIntegrations / UsageTable UI；迁移250/251真实PostgreSQL回归 |
 | API Key 生图统计、优雅退出、部署/安全工具链 | retained | 生图观测计数、graceful drain、Swarm 配置、Go/前端安全版本和 release skill | APIContracts；concurrency/cleanup tests；shell/release checks；security CI |
 | Codex OAuth 过期401恢复，v99.0.2.19-plus.7 | retained（本次新增） | `OPENAI_OAUTH_401_RECOVERY.md`：按实际AT条件标记本地过期、清缓存，唤醒并复用原OAuth刷新服务；保留指纹隔离与次数限制，无独立恢复状态机 | TestOpenAIOAuthExpiry*；TestOpenAIOAuthExpiryDatabase；完整网关/刷新/影子回归 |
 | versioned OAuth credential delivery，d1c834f9d | explicitly reverted，f6658be72 | 明确撤销，禁止仅因历史存在而恢复 | 保留 revert 决策 |

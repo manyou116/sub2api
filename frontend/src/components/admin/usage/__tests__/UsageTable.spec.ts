@@ -103,6 +103,7 @@ const DataTableStub = {
   template: `
     <div>
       <div v-for="row in data" :key="row.request_id" :data-request-id="row.request_id">
+        <slot name="cell-user" :row="row" />
         <slot name="cell-model" :row="row" :value="row.model" />
         <slot name="cell-reasoning_effort" :row="row" :value="row.reasoning_effort" />
         <slot name="cell-billing_mode" :row="row" />
@@ -145,6 +146,19 @@ const baseImageRow = {
 }
 
 describe('admin UsageTable tooltip', () => {
+  it('shows the source user separately and emits a source filter without changing local user identity', async () => {
+    const source = { source_id: 'factory', user_id: '123', username: 'Alice', source_name: 'Factory' }
+    const wrapper = mount(UsageTable, {
+      props: { data: [{ ...baseImageRow, source_user: source }], loading: false, columns: [{ key: 'user', label: 'User' }] },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    const button = wrapper.findAll('button').find(b => b.text().includes('Factory · Alice #123'))
+    expect(button).toBeDefined()
+    await button!.trigger('click')
+    expect(wrapper.emitted('sourceUserClick')?.[0]).toEqual([source])
+    expect(wrapper.emitted('userClick')).toBeUndefined()
+  })
+
   it('shows output TPS in the latency cell using total duration', () => {
     const row = { ...baseImageRow, image_count: 0, billing_mode: 'token', output_tokens: 1000, duration_ms: 20_000, first_token_ms: 10_000 }
     const wrapper = mount(UsageTable, {

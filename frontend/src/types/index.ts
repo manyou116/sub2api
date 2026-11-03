@@ -1833,7 +1833,17 @@ export interface UpstreamRequestBodyStats {
   final_encoded_bytes: number
 }
 
+export interface SourceUser {
+  source_id: string
+  source_name?: string
+  user_id: string
+  username?: string
+  token_id?: string
+  request_id?: string
+}
+
 export interface UsageLog {
+  source_user?: SourceUser | null
   upstream_request_body?: UpstreamRequestBodyStats | null
   id: number
   user_id: number

@@ -160,6 +160,9 @@ type SettingService struct {
 	openAIRequestCompressionOptionsCache atomic.Value // *cachedOpenAIRequestCompressionOptions
 	openAIRequestCompressionOptionsMu    sync.Mutex
 
+	sourceUserIntegrationsCache atomic.Value
+	sourceUserIntegrationsMu    sync.Mutex
+
 	channelMonitorRuntimeListenersMu sync.Mutex
 	channelMonitorRuntimeListeners   []func()
 }
