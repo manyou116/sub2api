@@ -299,6 +299,13 @@ func (s *OpenAIQuotaService) CachePostResetSnapshot(ctx context.Context, account
 
 func (s *OpenAIQuotaService) cacheResetCreditsSnapshot(ctx context.Context, accountID int64, credits *OpenAIRateLimitResetCredits, updates map[string]any) error {
 	if credits == nil || (credits.AvailableCount > 0 && len(credits.Credits) == 0) {
+		// Card display details must not prevent fresh post-reset usage from
+		// replacing the exhausted snapshot used by scheduling thresholds.
+		if len(updates) > 0 {
+			if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
+				return infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_CACHE_WRITE_FAILED", "failed to cache post-reset usage").WithCause(err)
+			}
+		}
 		return infraerrors.New(
 			http.StatusBadGateway,
 			"OPENAI_QUOTA_RESET_CREDITS_REFRESH_FAILED",
