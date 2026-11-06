@@ -236,7 +236,7 @@ func (s *OpenAIQuotaAutoResetService) scanEnabledAccounts(ctx context.Context) {
 		}
 		for i := range accounts {
 			account := &accounts[i]
-			if account.Schedulable && ResolveOpenAIAutoResetCreditConfig(account).Enabled {
+			if account.Schedulable && (ResolveOpenAIAutoResetCreditConfig(account).Enabled || hasDisabledOpenAIQuotaPause(account)) {
 				s.Notify(account.ID)
 			}
 		}
@@ -288,6 +288,13 @@ func (s *OpenAIQuotaAutoResetService) evaluateAccount(ctx context.Context, accou
 			s.Notify(*account.ParentAccountID)
 		}
 		return nil
+	}
+	if reconciler, ok := s.recoverer.(interface {
+		ReconcileDisabledSchedulingThresholdPause(context.Context, int64) error
+	}); ok && hasDisabledOpenAIQuotaPause(account) {
+		if err := reconciler.ReconcileDisabledSchedulingThresholdPause(ctx, accountID); err != nil {
+			return err
+		}
 	}
 	config := ResolveOpenAIAutoResetCreditConfig(account)
 	if !config.Enabled || !account.IsActive() || !account.Schedulable {

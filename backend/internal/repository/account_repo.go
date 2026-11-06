@@ -2564,6 +2564,14 @@ func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until t
 }
 
 func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
+	// A scheduler may still hold a snapshot from before an administrator
+	// disabled this window. Fence that delayed threshold write in the DB too.
+	var thresholdReason struct{ Source, Window string }
+	disabledKey := ""
+	if json.Unmarshal([]byte(reason), &thresholdReason) == nil && thresholdReason.Source == service.AccountSchedulingThresholdReasonSource &&
+		(thresholdReason.Window == "5h" || thresholdReason.Window == "7d") {
+		disabledKey = "auto_pause_" + thresholdReason.Window + "_disabled"
+	}
 	result, err := r.sql.ExecContext(ctx, `
 		UPDATE accounts
 		SET temp_unschedulable_until = GREATEST(temp_unschedulable_until, $1),
@@ -2575,11 +2583,12 @@ func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, 
 			updated_at = NOW()
 		WHERE id = $3
 			AND deleted_at IS NULL
+			AND ($5 = '' OR platform <> 'openai' OR lower(COALESCE(extra ->> $5, 'false')) NOT IN ('true', '1'))
 			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1
 				OR (temp_unschedulable_until > NOW()
 					AND left(COALESCE(temp_unschedulable_reason, ''), length($4)) = $4
 					AND left($2, length($4)) <> $4))
-	`, until, reason, id, service.OpenAICapacityCooldownReasonPrefix)
+	`, until, reason, id, service.OpenAICapacityCooldownReasonPrefix, disabledKey)
 	if err != nil {
 		return err
 	}
@@ -2639,6 +2648,42 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 		return false, err
 	}
 	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
+}
+
+// CompareAndSwapSchedulingThresholdPause fences a background reconciliation
+// against new pauses, usage snapshots, credentials and administrator edits.
+func (r *accountRepository) CompareAndSwapSchedulingThresholdPause(ctx context.Context, observed *service.Account, until *time.Time, reason string) (bool, error) {
+	extra, err := json.Marshal(normalizeJSONMap(observed.Extra))
+	if err != nil {
+		return false, err
+	}
+	credentials, err := json.Marshal(normalizeJSONMap(observed.Credentials))
+	if err != nil {
+		return false, err
+	}
+	result, err := r.sql.ExecContext(ctx, `
+		WITH changed AS (
+			UPDATE accounts
+			SET temp_unschedulable_until = $1, temp_unschedulable_reason = NULLIF($2, ''), updated_at = NOW()
+			WHERE id = $3 AND deleted_at IS NULL AND platform = 'openai'
+				AND temp_unschedulable_until = $4 AND temp_unschedulable_reason = $5
+				AND COALESCE(extra, '{}'::jsonb) = $6::jsonb
+				AND COALESCE(credentials, '{}'::jsonb) = $7::jsonb
+			RETURNING id
+		)
+		INSERT INTO scheduler_outbox(event_type, account_id, created_at)
+		SELECT $8, id, NOW() FROM changed
+	`, until, reason, observed.ID, observed.TempUnschedulableUntil, observed.TempUnschedulableReason,
+		string(extra), string(credentials), service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count == 0 {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshot(ctx, observed.ID)
 	return true, nil
 }
 
