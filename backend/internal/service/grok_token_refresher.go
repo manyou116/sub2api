@@ -92,8 +92,7 @@ func (r *GrokTokenRefresher) Refresh(ctx context.Context, account *Account) (map
 	}
 	newCredentials := r.grokOAuthService.BuildAccountCredentials(tokenInfo)
 	newCredentials = MergeCredentials(account.Credentials, newCredentials)
-	if baseURL := strings.TrimSpace(account.GetCredential("base_url")); baseURL != "" {
-		newCredentials["base_url"] = baseURL
-	}
+	// Empty means follow the global upstream, including after token rotation.
+	newCredentials["base_url"] = strings.TrimSpace(account.GetCredential("base_url"))
 	return newCredentials, nil
 }
