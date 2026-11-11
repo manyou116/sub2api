@@ -38,7 +38,11 @@ func TestPrepareUsageLogInsert_SessionIDArgWiring(t *testing.T) {
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes),
 		"prepared args must match the arg-type table length")
 
+<<<<<<< HEAD
 	// Tail columns: session_id, native_compaction_v2, created_at, upstream_request_body.
+=======
+	// created_at is last; native_compaction_v2 is penultimate; session_id precedes it.
+>>>>>>> v0.2.21
 	sessionArg := prepared.args[len(prepared.args)-5]
 	ns, ok := sessionArg.(sql.NullString)
 	require.True(t, ok, "session_id arg should be a sql.NullString, got %T", sessionArg)

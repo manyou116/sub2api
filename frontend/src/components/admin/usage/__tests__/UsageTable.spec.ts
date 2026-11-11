@@ -146,6 +146,7 @@ const baseImageRow = {
 }
 
 describe('admin UsageTable tooltip', () => {
+<<<<<<< HEAD
   it('shows the source user separately and emits a source filter without changing local user identity', async () => {
     const source = { source_id: 'factory', user_id: '123', username: 'Alice', source_name: 'Factory' }
     const wrapper = mount(UsageTable, {
@@ -157,6 +158,26 @@ describe('admin UsageTable tooltip', () => {
     await button!.trigger('click')
     expect(wrapper.emitted('sourceUserClick')?.[0]).toEqual([source])
     expect(wrapper.emitted('userClick')).toBeUndefined()
+=======
+  it('shows the two OpenAI cache-write buckets without Anthropic lifetime labels', async () => {
+    const row = { ...baseImageRow, image_count: 0, billing_mode: 'token', cache_creation_tokens: 2399, cache_creation_30m_tokens: 9, cache_creation_12h_tokens: 2390 }
+    const wrapper = mount(UsageTable, {
+      props: { data: [row], loading: false, columns: [] },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    try {
+      await wrapper.find('.group.relative').trigger('mouseenter')
+      await nextTick()
+      const text = wrapper.get('.fixed').text()
+      expect(text).toContain('30m')
+      expect(text).toContain('12h')
+      expect(text).toContain('2,390')
+      expect(text).not.toContain('5m')
+      expect(text).not.toMatch(/\b1h\b/)
+    } finally {
+      wrapper.unmount()
+    }
+>>>>>>> v0.2.21
   })
 
   it('shows output TPS in the latency cell using total duration', () => {
