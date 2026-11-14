@@ -15,7 +15,7 @@ const defaults = {
   failure_threshold: 1, cooldown_seconds: 60, max_cooldown_seconds: 600,
   slow_first_output_enabled: false, slow_first_output_seconds: 10,
   slow_first_output_high_effort_seconds: 30, slow_first_output_window_seconds: 60,
-  slow_first_output_threshold: 2
+  slow_first_output_threshold: 2, slow_first_output_percent: 0
 }
 
 describe('OpenAI capacity cooldown settings', () => {
@@ -48,6 +48,29 @@ describe('OpenAI capacity cooldown settings', () => {
     expect(mocks.success).toHaveBeenCalledOnce()
   })
 
+  it.each([[0, 30], [3, 0], [2, 50], [0, 0], [0, 100]])('saves independent count=%i and percent=%i criteria', async (count, percent) => {
+    mocks.load.mockResolvedValue({ ...defaults, slow_first_output_enabled: true })
+    const wrapper = mount(OpenAICapacityCooldownSettings)
+    await flushPromises()
+    await wrapper.get('#capacity-slow_first_output_threshold').setValue(count)
+    await wrapper.get('#capacity-slow_first_output_percent').setValue(percent)
+    await wrapper.get('[data-testid="capacity-save"]').trigger('click')
+    await flushPromises()
+    expect(mocks.save).toHaveBeenCalledWith({
+      ...defaults, slow_first_output_enabled: true,
+      slow_first_output_threshold: count, slow_first_output_percent: percent
+    })
+  })
+
+  it.each([-1, 101, 0.5])('rejects invalid percentage %s before saving', async (percent) => {
+    mocks.load.mockResolvedValue({ ...defaults, slow_first_output_enabled: true })
+    const wrapper = mount(OpenAICapacityCooldownSettings)
+    await flushPromises()
+    await wrapper.get('#capacity-slow_first_output_percent').setValue(percent)
+    await wrapper.get('[data-testid="capacity-save"]').trigger('click')
+    expect(mocks.save).not.toHaveBeenCalled()
+  })
+
   it('can enable latency protection with overload disabled and save a one-hit threshold', async () => {
     const wrapper = mount(OpenAICapacityCooldownSettings)
     await flushPromises()
@@ -75,7 +98,7 @@ describe('OpenAI capacity cooldown settings', () => {
       ['slow_first_output_seconds', 0, 10],
       ['slow_first_output_high_effort_seconds', 9, 30],
       ['slow_first_output_window_seconds', 301, 60],
-      ['slow_first_output_threshold', 0, 1]
+      ['slow_first_output_threshold', -1, 1]
     ] as const) {
       await wrapper.get(`#capacity-${key}`).setValue(invalid)
       await wrapper.get('[data-testid="capacity-save"]').trigger('click')

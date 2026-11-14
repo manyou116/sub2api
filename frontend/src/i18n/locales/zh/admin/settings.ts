@@ -1090,8 +1090,9 @@ export default {
         slow_first_output_seconds: '首字等待阈值（秒，1–300）',
         slow_first_output_high_effort_seconds: '高思考强度阈值（秒，high / xhigh / max）',
         slow_first_output_window_seconds: '首字慢统计窗口（秒，1–300）',
-        slow_first_output_threshold: '首字慢次数阈值（1–100）',
-        slowRecoveryHint: '设为 1 时，一次首字慢即回避。与过载共用下方回避时长和渐进冷却；恢复验证须成功且首字达标。心跳和空事件不算首字，不计本地排队；首字慢后的同一次首字超时不再重复计入流超时处罚，已有硬超时与换号上限仍生效。',
+        slow_first_output_threshold: '首字慢次数阈值（0–100，0 停用）',
+        slow_first_output_percent: '首字慢比例阈值（0–100%，0 停用）',
+        slowRecoveryHint: '窗口内首字慢次数或比例任一达到非零阈值即回避；0 停用对应条件，两项均为 0 则不触发。比例为首字慢请求数 / 已判定首字快慢的请求总数；重试去重，未判定请求不计入，少量样本也可能触发。次数设为 1 时，一次首字慢即回避。与过载共用下方回避时长和渐进冷却；恢复验证须成功且首字达标。心跳和空事件不算首字，不计本地排队；首字慢后的同一次首字超时不再重复计入流超时处罚，已有硬超时与换号上限仍生效。',
         loadFailed: '加载过载回避设置失败',
         saved: '过载回避设置已保存',
         saveFailed: '保存过载回避设置失败'

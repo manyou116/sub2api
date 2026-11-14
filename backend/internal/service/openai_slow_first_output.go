@@ -24,7 +24,7 @@ type openAISlowFirstOutputObservation struct {
 // Keep latency measurement independent of billing TTFT and replay safety.
 // Metadata is attached after the final outbound body has been normalized.
 func withOpenAISlowFirstOutputMetadata(req *http.Request, account *Account, body []byte) *http.Request {
-	if account == nil || account.capacityAttempt == nil || !account.capacityAttempt.settings.SlowFirstOutputEnabled ||
+	if account == nil || account.capacityAttempt == nil || !account.capacityAttempt.settings.slowFirstOutputActive() ||
 		!gjson.GetBytes(body, "stream").Bool() || IsImageGenerationIntent(req.URL.Path, account.capacityAttempt.model, body) {
 		return req
 	}
@@ -125,11 +125,16 @@ func (o *openAISlowFirstOutput) finish(useful bool) {
 		a.slowMu.Lock()
 		a.fastFirstOutput = true
 		a.slowMu.Unlock()
+		if a.settings.SlowFirstOutputPercent > 0 {
+			// Only measured first-output results enter the ratio denominator.
+			// Keep Redis I/O off the stream reader, as for slow observations.
+			go recordOpenAITextCooldown(o.account, 4, nil)
+		}
 	}
 }
 
 func openAISlowFirstOutputHealthy(account *Account) bool {
-	if account == nil || account.capacityAttempt == nil || !account.capacityAttempt.settings.SlowFirstOutputEnabled {
+	if account == nil || account.capacityAttempt == nil || !account.capacityAttempt.settings.slowFirstOutputActive() {
 		return true
 	}
 	a := account.capacityAttempt

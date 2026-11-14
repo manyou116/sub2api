@@ -100,6 +100,7 @@ func TestCapacityCooldownSettingDefaultsValidationAndImmediateUpdate(t *testing.
 	require.Equal(t, 10, v.SlowFirstOutputSeconds)
 	require.Equal(t, 30, v.SlowFirstOutputHighEffortSeconds)
 	require.Equal(t, 2, v.SlowFirstOutputThreshold)
+	require.Zero(t, v.SlowFirstOutputPercent)
 	require.Equal(t, 1, v.FailureThreshold)
 	for _, change := range []func(*OpenAICapacityCooldownSettings){
 		func(v *OpenAICapacityCooldownSettings) { v.WindowSeconds = 0 }, func(v *OpenAICapacityCooldownSettings) { v.WindowSeconds = 301 },
@@ -112,8 +113,10 @@ func TestCapacityCooldownSettingDefaultsValidationAndImmediateUpdate(t *testing.
 		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputHighEffortSeconds = 601 },
 		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputWindowSeconds = 0 },
 		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputWindowSeconds = 301 },
-		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputThreshold = 0 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputThreshold = -1 },
 		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputThreshold = 101 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputPercent = -1 },
+		func(v *OpenAICapacityCooldownSettings) { v.SlowFirstOutputPercent = 101 },
 	} {
 		bad := v
 		change(&bad)

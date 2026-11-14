@@ -12,6 +12,7 @@ export interface OpenAICapacityCooldownSettings {
   slow_first_output_high_effort_seconds: number
   slow_first_output_window_seconds: number
   slow_first_output_threshold: number
+  slow_first_output_percent: number
 }
 
 const path = '/admin/settings/openai-capacity-cooldown'

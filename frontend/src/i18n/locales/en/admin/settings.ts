@@ -1096,8 +1096,9 @@ export default {
         slow_first_output_seconds: 'First-output threshold (seconds, 1–300)',
         slow_first_output_high_effort_seconds: 'High-effort threshold (seconds, high / xhigh / max)',
         slow_first_output_window_seconds: 'Slow first-output window (seconds, 1–300)',
-        slow_first_output_threshold: 'Slow first-output count threshold (1–100)',
-        slowRecoveryHint: 'Set to 1 to pause on the first slow request. Shares cooldown durations and escalation with overloads. Recovery requires success and timely content. Heartbeats, empty events and local queueing are excluded. The same pre-output timeout does not also incur a stream-timeout penalty; existing hard deadlines and switch limits still apply.',
+        slow_first_output_threshold: 'Slow first-output count threshold (0–100, 0 disables)',
+        slow_first_output_percent: 'Slow first-output percentage (0–100%, 0 disables)',
+        slowRecoveryHint: 'Pause when either nonzero count or percentage threshold is reached in the window. Zero disables that criterion; both zero disable the rule. Percentage is slow requests / requests with a measured first-output result, deduplicated across retries; pending results are excluded and even small samples can trigger it. Set count to 1 to pause on the first slow request. Shares cooldown durations and escalation with overloads. Recovery requires success and timely content. Heartbeats, empty events and local queueing are excluded. The same pre-output timeout does not also incur a stream-timeout penalty; existing hard deadlines and switch limits still apply.',
         loadFailed: 'Failed to load overload cooldown settings',
         saved: 'Overload cooldown settings saved',
         saveFailed: 'Failed to save overload cooldown settings'

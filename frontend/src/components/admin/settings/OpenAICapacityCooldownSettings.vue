@@ -93,7 +93,7 @@ const form = reactive({
   failure_threshold: 1, cooldown_seconds: 60, max_cooldown_seconds: 600,
   slow_first_output_enabled: false, slow_first_output_seconds: 10,
   slow_first_output_high_effort_seconds: 30, slow_first_output_window_seconds: 60,
-  slow_first_output_threshold: 2
+  slow_first_output_threshold: 2, slow_first_output_percent: 0
 })
 const overloadFields = [
   { key: 'window_seconds', min: 1, max: 300 },
@@ -103,7 +103,8 @@ const slowFields = [
   { key: 'slow_first_output_seconds', min: 1, max: 300 },
   { key: 'slow_first_output_high_effort_seconds', min: 1, max: 600 },
   { key: 'slow_first_output_window_seconds', min: 1, max: 300 },
-  { key: 'slow_first_output_threshold', min: 1, max: 100 }
+  { key: 'slow_first_output_threshold', min: 0, max: 100 },
+  { key: 'slow_first_output_percent', min: 0, max: 100 }
 ] as const
 const cooldownFields = [
   { key: 'cooldown_seconds' },

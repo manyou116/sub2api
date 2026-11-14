@@ -70,10 +70,18 @@ func TestCapacityCooldownAdminSettingsContract(t *testing.T) {
 	require.JSONEq(t, string(body), repo.raw)
 	for _, bad := range []string{`{`, `{"window_seconds":0}`, `{"failure_threshold":0}`, `{"failure_threshold":101}`, `{"cooldown_seconds":601,"max_cooldown_seconds":600}`, `{"max_cooldown_seconds":7201}`,
 		`{"slow_first_output_seconds":0}`, `{"slow_first_output_high_effort_seconds":601}`, `{"slow_first_output_seconds":20,"slow_first_output_high_effort_seconds":10}`,
-		`{"slow_first_output_window_seconds":301}`, `{"slow_first_output_threshold":0}`, `{"slow_first_output_threshold":101}`} {
+		`{"slow_first_output_window_seconds":301}`, `{"slow_first_output_threshold":-1}`, `{"slow_first_output_threshold":101}`, `{"slow_first_output_percent":-1}`, `{"slow_first_output_percent":101}`, `{"slow_first_output_percent":0.5}`} {
 		rec := call(http.MethodPut, bad)
 		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 		require.JSONEq(t, string(body), repo.raw, "invalid input must not overwrite persisted settings")
+	}
+	for _, percent := range []int{0, 1, 30, 100} {
+		want.SlowFirstOutputThreshold, want.SlowFirstOutputPercent = 0, percent
+		body, err = json.Marshal(want)
+		require.NoError(t, err)
+		require.Equal(t, want, decode(call(http.MethodPut, string(body))))
+		require.Equal(t, want, decode(call(http.MethodGet, "")))
+		require.JSONEq(t, string(body), repo.raw, "zero criteria and percentage must round-trip")
 	}
 	repo.err = errors.New("storage unavailable")
 	require.Equal(t, http.StatusInternalServerError, call(http.MethodPut, string(body)).Code)

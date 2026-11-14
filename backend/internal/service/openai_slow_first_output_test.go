@@ -336,3 +336,33 @@ func TestSlowFirstOutputPauseReasonAndWebException(t *testing.T) {
 	require.Contains(t, state.ErrorMessage, "首字慢")
 	require.Contains(t, state.ErrorMessage, "Web 生图除外")
 }
+
+func TestSlowFirstOutputPercentageRecordsTimelyContentBeforeCompletion(t *testing.T) {
+	_, store, account := slowOutputAccount(t)
+	account.capacityAttempt.settings.SlowFirstOutputPercent = 30
+	o := slowOutputObserver(t, context.Background(), account, time.Hour)
+	o.finish(true)
+	slowOutputWait(t, store, 1)
+	store.mu.Lock()
+	require.Equal(t, []int{4}, store.outcomes)
+	store.mu.Unlock()
+	// Completing the same body cannot create another measured request.
+	o.finish(true)
+	observeOpenAICapacityResult(account, true)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	require.Equal(t, []int{4, 2}, store.outcomes)
+}
+
+func TestSlowFirstOutputZeroCriteriaDisableObservation(t *testing.T) {
+	_, _, account := slowOutputAccount(t)
+	v := &account.capacityAttempt.settings
+	v.SlowFirstOutputThreshold, v.SlowFirstOutputPercent = 0, 0
+	require.NoError(t, v.Validate())
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	require.Same(t, req, withOpenAISlowFirstOutputMetadata(req, account, []byte(`{"stream":true}`)))
+	require.True(t, openAISlowFirstOutputHealthy(account), "disabled slow rule cannot block overload recovery")
+	v.SlowFirstOutputPercent = 30
+	require.NoError(t, v.Validate())
+	require.NotSame(t, req, withOpenAISlowFirstOutputMetadata(req, account, []byte(`{"stream":true}`)))
+}

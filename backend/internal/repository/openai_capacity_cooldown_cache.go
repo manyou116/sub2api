@@ -14,14 +14,14 @@ import (
 func capacityKeys(accountID int64, _ string) []string {
 	prefix := "openai_capacity:{account_text_v1}:"
 	key := prefix + strconv.FormatInt(accountID, 10)
-	return []string{key, key + ":events", key + ":failures", key + ":successes", prefix + "blocked", key + ":slow"}
+	return []string{key, key + ":events", key + ":failures", key + ":successes", prefix + "blocked", key + ":slow", key + ":slow_events"}
 }
 
 var capacityCooldownScript = redis.NewScript(`
 local clock = redis.call('TIME')
 local now = tonumber(clock[1])*1000 + math.floor(tonumber(clock[2])/1000)
 local op, account, id = ARGV[1], ARGV[2], ARGV[3]
-local state, events, failures, successes, blocked, slow = unpack(KEYS)
+local state, events, failures, successes, blocked, slow, slow_events = unpack(KEYS)
 if op == 'blocked' then
   return redis.call('ZRANGEBYSCORE', blocked, now+1, '+inf')
 end
@@ -40,7 +40,7 @@ if op == 'reset' then
   redis.call('HDEL',state,'owner','lease')
   redis.call('EXPIRE',state,14400)
   redis.call('ZREM',blocked,account)
-  redis.call('DEL',events,failures,successes,slow)
+  redis.call('DEL',events,failures,successes,slow,slow_events)
   return result(1,0,0)
 end
 if op == 'release' then
@@ -67,6 +67,22 @@ end
 -- Late in-flight completions cannot clear or extend a newer circuit generation.
 if generation ~= tonumber(ARGV[4]) then return result(1,0,0) end
 local outcome = tonumber(ARGV[5])
+-- First-output results use their own window, independent of overload events.
+local slow_f, slow_n = 0, 0
+if outcome == 3 or outcome == 4 then
+  local slow_window = tonumber(ARGV[10])*1000
+  for _,key in ipairs({slow,slow_events}) do
+    redis.call('ZREMRANGEBYSCORE',key,'-inf',now-slow_window)
+  end
+  local score = redis.call('ZSCORE',slow_events,id)
+  if not score then score=now; redis.call('ZADD',slow_events,score,id) end
+  -- Success/retries never erase or refresh an already slow request.
+  if outcome == 3 then redis.call('ZADD',slow,'NX',score,id) end
+  for _,key in ipairs({slow,slow_events}) do redis.call('PEXPIRE',key,slow_window+60000) end
+  slow_f, slow_n = redis.call('ZCARD',slow), redis.call('ZCARD',slow_events)
+  -- Timely first content alone must not release a recovery probe or count as success.
+  if outcome == 4 then return result(1,0,0,slow_f,slow_n) end
+end
 if phase == 1 then
   if until_ms > now or redis.call('HGET',state,'owner') ~= id or
     tonumber(redis.call('HGET',state,'lease') or '0') <= now then return result(1,0,0) end
@@ -78,7 +94,7 @@ if phase == 1 then
       generation = generation+1
       level = math.max(0,level-1)
       redis.call('HSET',state,'phase',0,'generation',generation,'level',level,'recovered',0)
-      redis.call('DEL',events,failures,successes,slow)
+      redis.call('DEL',events,failures,successes,slow,slow_events)
     end
     return result(1,0,0)
   end
@@ -102,12 +118,9 @@ local capacity_trip = f >= tonumber(ARGV[7])
 local slow_trip = false
 -- A successful completion never erases a slow first-output event.
 if outcome == 3 then
-  local slow_window = tonumber(ARGV[10])*1000
-  redis.call('ZREMRANGEBYSCORE',slow,'-inf',now-slow_window)
-  redis.call('ZADD',slow,'NX',now,id)
-  redis.call('PEXPIRE',slow,slow_window+60000)
-  f = redis.call('ZCARD',slow)
-  slow_trip = f >= tonumber(ARGV[11])
+  f, n = slow_f, slow_n
+  local count, percent = tonumber(ARGV[11]), tonumber(ARGV[12]) or 0
+  slow_trip = (count > 0 and f >= count) or (percent > 0 and n > 0 and f*100 >= n*percent)
 end
 if phase == 1 or capacity_trip or slow_trip then
   level = math.min(level+1,4)
@@ -120,7 +133,7 @@ if phase == 1 or capacity_trip or slow_trip then
   redis.call('EXPIRE',state,14400)
   redis.call('ZADD',blocked,until_ms,account)
   redis.call('EXPIRE',blocked,14400)
-  redis.call('DEL',events,failures,successes,slow)
+  redis.call('DEL',events,failures,successes,slow,slow_events)
   return result(0,0,1,f,n)
 end
 return result(1,0,0,f,n)
@@ -145,7 +158,7 @@ func (c *tempUnschedCache) AdmitOpenAICapacity(ctx context.Context, accountID in
 
 func (c *tempUnschedCache) ObserveOpenAICapacity(ctx context.Context, accountID int64, model, id string, generation int64, outcome int, v service.OpenAICapacityCooldownSettings) (service.OpenAICapacityDecision, error) {
 	return c.capacityDecision(ctx, accountID, model, "record", id, generation, outcome, v.WindowSeconds, v.FailureThreshold, v.CooldownSeconds, v.MaxCooldownSeconds,
-		v.SlowFirstOutputWindowSeconds, v.SlowFirstOutputThreshold)
+		v.SlowFirstOutputWindowSeconds, v.SlowFirstOutputThreshold, v.SlowFirstOutputPercent)
 }
 
 func (c *tempUnschedCache) ReleaseOpenAICapacity(ctx context.Context, accountID int64, model, id string, generation int64) error {

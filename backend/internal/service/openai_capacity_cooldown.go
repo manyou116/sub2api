@@ -114,7 +114,7 @@ func (s *OpenAIGatewayService) withOpenAICapacityCooldown(ctx context.Context, c
 	defer cancel()
 	settings, err := s.settingService.GetOpenAICapacityCooldownSettings(readCtx)
 	store, ok := s.rateLimitService.tempUnschedCache.(OpenAICapacityCooldownStore)
-	if err != nil || (!settings.Enabled && !settings.SlowFirstOutputEnabled) || !ok {
+	if err != nil || (!settings.Enabled && !settings.slowFirstOutputActive()) || !ok {
 		return ctx
 	}
 	return context.WithValue(ctx, openAICapacityContextKey{}, &openAICapacityRequest{store: store, settings: settings, compact: compact})
@@ -210,7 +210,7 @@ func (s *OpenAIGatewayService) admitOpenAICapacity(ctx context.Context, selectio
 	return true
 }
 
-// outcome: 0=inconclusive, 1=capacity shed, 2=healthy success; latency uses 3.
+// outcome: 0=inconclusive, 1=capacity shed, 2=healthy success; 3=slow, 4=timely first output.
 // Redis deduplicates by logical request ID, including retries and repeated SSE frames.
 func observeOpenAICapacity(account *Account, outcome int) {
 	if account != nil && account.capacityAttempt != nil && outcome == 1 && !account.capacityAttempt.settings.Enabled {
@@ -242,6 +242,7 @@ func recordOpenAITextCooldown(account *Account, outcome int, slow *openAISlowFir
 		if slow != nil {
 			slog.Warn("openai.slow_first_output_cooldown_tripped", "account_id", account.ID, "model", a.model,
 				"elapsed_ms", slow.elapsed.Milliseconds(), "threshold_ms", slow.threshold.Milliseconds(), "count", d.Failures,
+				"requests", d.Total, "percent_threshold", a.settings.SlowFirstOutputPercent,
 				"window_seconds", a.settings.SlowFirstOutputWindowSeconds, "level", d.Level, "until_unix_ms", d.UntilMS)
 		} else {
 			slog.Warn("openai.capacity_cooldown_tripped", "account_id", account.ID, "model", a.model,
@@ -281,8 +282,8 @@ func (s *RateLimitService) persistOpenAICapacityPause(account *Account, attempt 
 		state.StatusCode = 0 // A slow successful request is not an HTTP error.
 		state.MatchedKeyword = "openai_slow_first_output"
 		state.TriggerThreshold = attempt.settings.SlowFirstOutputThreshold
-		state.ErrorMessage = fmt.Sprintf("OpenAI 首字慢：%s；等待有效内容至少 %d 毫秒，阈值 %d 毫秒；%d 秒内 %d 次达到阈值 %d；第 %d 级回避。整个账号暂停文本调用，Web 生图除外。",
-			attempt.model, slow.elapsed.Milliseconds(), slow.threshold.Milliseconds(), attempt.settings.SlowFirstOutputWindowSeconds, decision.Failures, state.TriggerThreshold, decision.Level)
+		state.ErrorMessage = fmt.Sprintf("OpenAI 首字慢：%s；等待有效内容至少 %d 毫秒，阈值 %d 毫秒；%d 秒内首字慢 %d/%d 次；次数阈值 %d，比例阈值 %d%%（0 为停用）；第 %d 级回避。整个账号暂停文本调用，Web 生图除外。",
+			attempt.model, slow.elapsed.Milliseconds(), slow.threshold.Milliseconds(), attempt.settings.SlowFirstOutputWindowSeconds, decision.Failures, decision.Total, state.TriggerThreshold, attempt.settings.SlowFirstOutputPercent, decision.Level)
 	}
 	payload, err := json.Marshal(struct {
 		Source string `json:"source"`

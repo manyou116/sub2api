@@ -23,6 +23,7 @@ type OpenAICapacityCooldownSettings struct {
 	SlowFirstOutputHighEffortSeconds int  `json:"slow_first_output_high_effort_seconds"`
 	SlowFirstOutputWindowSeconds     int  `json:"slow_first_output_window_seconds"`
 	SlowFirstOutputThreshold         int  `json:"slow_first_output_threshold"`
+	SlowFirstOutputPercent           int  `json:"slow_first_output_percent"`
 }
 
 func DefaultOpenAICapacityCooldownSettings() OpenAICapacityCooldownSettings {
@@ -39,10 +40,15 @@ func (v OpenAICapacityCooldownSettings) Validate() error {
 	if v.SlowFirstOutputSeconds < 1 || v.SlowFirstOutputSeconds > 300 ||
 		v.SlowFirstOutputHighEffortSeconds < v.SlowFirstOutputSeconds || v.SlowFirstOutputHighEffortSeconds > 600 ||
 		v.SlowFirstOutputWindowSeconds < 1 || v.SlowFirstOutputWindowSeconds > 300 ||
-		v.SlowFirstOutputThreshold < 1 || v.SlowFirstOutputThreshold > 100 {
-		return errors.New("invalid slow first-output cooldown: threshold 1-300s, high effort threshold-max600s, window 1-300s, count 1-100")
+		v.SlowFirstOutputThreshold < 0 || v.SlowFirstOutputThreshold > 100 ||
+		v.SlowFirstOutputPercent < 0 || v.SlowFirstOutputPercent > 100 {
+		return errors.New("invalid slow first-output cooldown: threshold 1-300s, high effort threshold-max600s, window 1-300s, count 0-100, percent 0-100 (0 disables each criterion)")
 	}
 	return nil
+}
+
+func (v OpenAICapacityCooldownSettings) slowFirstOutputActive() bool {
+	return v.SlowFirstOutputEnabled && (v.SlowFirstOutputThreshold > 0 || v.SlowFirstOutputPercent > 0)
 }
 
 type cachedOpenAICapacityCooldownSettings struct {

@@ -40,7 +40,7 @@ git diff OLD_REF TARGET_REF -- backend/migrations
 | OpenAI/Grok 兼容与管理测试提示词，bec60204d / 2d8d3bddd | retained | 自定义 Responses prompt、Agent Identity 重试、model plan failover、已维护网关适配 | TestAccountHandlerTestOpenAIResponsesPrompt；AgentIdentityRetryPreservesPrompt；compat/failover tests |
 | Grok 全局上游跟随，v99.0.2.19-plus.12 | retained（本次新增） | 自动和管理员手动刷新 OAuth 令牌时保留空 base_url，使账号继续跟随全局默认；已固定上游仍保持原值，新建账号默认不变 | TestGrokTokenRefresherPreservesGlobalUpstreamAfterRefresh；TestRefreshSingleAccountGrokPreservesGlobalUpstream |
 | 独立周期 reset-credit 与额度对账，plus.7/8、cc090213f；v99.0.2.19-plus.10 修复用卡后停调恢复；plus.11 统一禁用窗口停调语义 | retained | 5h/7d 阈值、批量编辑、opt-in 后台对账；账号禁用窗口优先于平台/账号阈值，分钟补偿清理残留停调并保留其他窗口，数据库阻止禁用前快照延迟写入；用卡后独立保存新用量并复核旧快照重入的阈值停调；保留仍超阈值窗口与其他停调原因；不复活已撤销的 OAuth delivery | AutoResetCredit / OpenAIQuotaAutoReset / OpenAIReconcile / QuotaResetPostProcess / CachePostResetSnapshot tests；BulkEdit tests |
-| overload / 慢首字冷却，plus.9–11/14、f6ac85bea | retained | 共享 Redis generation/探测租约、文本暂停、影子母账号认证/传输保护优先、慢首字事件/恢复 | TestCapacityCooldown；TestSlowFirstOutput；settings tests |
+| overload / 慢首字冷却，plus.9–11/14、f6ac85bea | retained | 共享 Redis generation/探测租约、文本暂停、影子母账号认证/传输保护优先、慢首字事件/恢复；v99.0.2.19-plus.13 增加独立首字慢比例阈值，次数/比例填0各自停用、任一达标回避，分母仅含已判定快慢的请求 | TestCapacityCooldown；TestSlowFirstOutput；settings tests |
 | 账号重置与隐藏状态恢复，plus.17 / 404cd8b90 | retained | 清 DB/Redis 冷却、对延迟结果 fencing、重置后刷新 | TestAdminService_ClearAccountError；TestOpenAIResetQuota；server account-reset integration |
 | 分组额度/消耗监控，plus.15/16、f2ddd6e7c | retained | 按需查询、额度样本/资源去重、大数据查询优化 | TestCapacityMonitor；GroupCapacityMonitor repository integration；feature UI tests |
 | ops 长窗口预聚合，v99.0.2.19-plus.2 / 85fc470b3 | retained | 无过滤长窗口预聚合、raw 边界及过滤查询、singleflight | ops_repo_trends_preagg_test.go；ops snapshot tests |
