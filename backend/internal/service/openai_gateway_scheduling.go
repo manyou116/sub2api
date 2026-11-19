@@ -393,6 +393,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account == nil {
 		return "account_nil"
 	}
+	if bpsRouteMismatch(ctx, account, requestedModel, requireCompact) {
+		return "bps_route_mismatch"
+	}
 	if imageShadowRouteMismatch(ctx, account, requestedModel) {
 		return "image_shadow_mode_mismatch"
 	}

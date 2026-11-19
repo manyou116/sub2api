@@ -14,6 +14,9 @@ func resolveCredentialAccount(ctx context.Context, repo AccountRepository, accou
 	if account == nil || !account.IsShadow() {
 		return account, nil
 	}
+	if account.IsBPSShadow() {
+		return nil, fmt.Errorf("BPS shadows require independent BPS authorization")
+	}
 	parent, err := repo.GetByID(ctx, *account.ParentAccountID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve credential shadow parent %d: %w", *account.ParentAccountID, err)

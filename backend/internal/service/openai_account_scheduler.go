@@ -1776,6 +1776,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	if bpsRouteMismatch(ctx, account, req.RequestedModel, req.RequireCompact) {
+		return false, "bps_route_mismatch"
+	}
 	if imageShadowRouteMismatch(ctx, account, req.RequestedModel) {
 		return false, "image_shadow_mode_mismatch"
 	}

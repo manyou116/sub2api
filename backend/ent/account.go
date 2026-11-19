@@ -77,9 +77,9 @@ type Account struct {
 	SessionWindowEnd *time.Time `json:"session_window_end,omitempty"`
 	// SessionWindowStatus holds the value of the "session_window_status" field.
 	SessionWindowStatus *string `json:"session_window_status,omitempty"`
-	// Parent account id for a linked spark shadow (NULL = normal).
+	// Parent account id for a linked credential shadow (NULL = normal).
 	ParentAccountID *int64 `json:"parent_account_id,omitempty"`
-	// 'global' (default) or 'spark' (shadow reads codex_bengalfox).
+	// Account routing purpose; bps and work_images share the parent's Codex quota.
 	QuotaDimension account.QuotaDimension `json:"quota_dimension,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the AccountQuery when eager-loading is set.

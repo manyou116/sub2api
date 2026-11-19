@@ -1,5 +1,7 @@
 package service
 
+import "context"
+
 // parentHealthyForShadow 报告 spark 影子账号的母账号凭据是否可用(影子据此可被调度)。
 //
 // 非影子账号直接返回 true（不受此检查约束）。
@@ -20,6 +22,10 @@ func parentHealthyForShadow(account *Account, lookup func(int64) *Account) bool 
 	parent := lookup(*account.ParentAccountID)
 	if parent == nil {
 		return false
+	}
+	if account.IsBPSShadow() {
+		bound, _, err := bpsReadBound(account.ID)
+		return err == nil && bpsMatchesParent(bound, parent) && bpsParentQuotaAllows(context.Background(), parent, bpsTargetModel(account))
 	}
 	if account.IsImageShadow() {
 		return ValidateWebImageShadowParent(parent) == nil && parent.IsCredentialUsableForWebImages()

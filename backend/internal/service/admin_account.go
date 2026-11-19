@@ -1355,10 +1355,14 @@ func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
 		if err := s.accountRepo.Delete(ctx, shadow.ID); err != nil {
 			return fmt.Errorf("cascade delete credential shadow %d: %w", shadow.ID, err)
 		}
+		if shadow.IsBPSShadow() {
+			removeBPSAuthorization(shadow.ID)
+		}
 	}
 	if err := s.accountRepo.Delete(ctx, id); err != nil {
 		return err
 	}
+	removeBPSAuthorization(id)
 	return nil
 }
 

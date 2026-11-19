@@ -31,6 +31,7 @@ git diff OLD_REF TARGET_REF -- backend/migrations
 | 已发布功能线 / 来源 | 本次状态 | 必须保留的行为 / 所有权 | 直接验收 |
 |---|---|---|---|
 | Web/WM 生图重建，v99.0.2.16-plus.13 / dd9c30869 | retained：恢复到 v0.2.19 主线 | `WEB_IMAGE_SHADOWS.md` 全契约：影子创建/批量管理/编辑/备份转换；固定模式和别名；Web 与母账号 Codex 资源隔离；普通单槽位 | WebImage/WorkImage/ImageShadow 单测；TestWebImageShadowDatabase；TestConfiguredImageShadowModes；shadow UI critical tests |
+| BPS 文本影子 | retained（本次新增） | `BPS_SHADOWS.md`：独立 OAuth JSON / 设备码，父用户和工作区验签匹配，显式 Responses SSE 别名，父共享额度；不借用 Codex 凭据 | TestBPSGrantVerifiesSignedProviderAndIdentity；TestBPSShadowRouteIsExplicitAndNeverBorrowsCodex；TestBPSShadowDatabase |
 | 生图协议可靠性，6d99e7cb9、7b5918b97（同属 plus.13） | retained | accepted/uncertain 后禁止重新生成；同任务安全读恢复；Retry-After；SSE 取消；下载大小/格式/域名认证约束；日志脱敏；父额度探测 fencing | webdriver recovery/execution/download/poll tests；TestWebImageAcceptedFailureNeverRequestsFailover；TestWebImageErrorHealthScopes |
 | 独立分支发布 VERSION 保护，244d63570（同属 plus.13） | retained | release 源提交必须属于默认分支才同步 VERSION，fetch-depth=0、RELEASE_SHA、merge-base 检查缺一不可 | release workflow ancestor guard；release helper tests；fork hooks |
 | 旧父账号 Web enabled/inflight 模式，plus.1–12/14–17 | superseded by shadows | 只保留已发布 SQL 和显式转换 API；不重建旧开关、专属 inflight 或提交后 transport 重生成 | legacy helper 缺失检查；TestWebImageAdminUsesExactlyOneSlotAndReleases；conversion tests |

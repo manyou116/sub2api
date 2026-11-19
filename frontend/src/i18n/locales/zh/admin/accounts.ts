@@ -702,6 +702,25 @@ export default {
       revertProxy: '切回原代理',
       revertProxySuccess: '已成功切回原代理',
       revertProxyFailed: '切回原代理失败',
+      bps: {
+        create: '创建 BPS 影子账号',
+        authorize: '授权 BPS',
+        group: 'OpenAI 分组',
+        selectGroup: '选择分组',
+        model: 'BPS 上游模型',
+        paste: '粘贴授权 JSON',
+        device: '设备码授权',
+        json: '授权 JSON',
+        open: '打开授权页面',
+        requestFailed: 'BPS 操作失败，请重试。',
+        invalidJSON: '授权 JSON 格式无效。',
+        states: {
+          authorization_required: '待授权', pending: '授权验证中', authorized: '已授权',
+          unavailable: 'BPS 服务不可用', expired: '设备码已过期', device_failed: '设备码授权失败',
+          invalid_grant: 'BPS 凭据无效或已过期', identity_mismatch: '账号或工作区与父账号不匹配',
+          probe_failed: '模型试生成失败，原授权未修改'
+        }
+      },
       webImageShadow: {
         create: '创建生图影子账号',
         mode: '生图模式',

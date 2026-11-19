@@ -583,6 +583,25 @@ export default {
       revertProxy: 'Revert proxy',
       revertProxySuccess: 'Successfully reverted to original proxy',
       revertProxyFailed: 'Failed to revert proxy',
+      bps: {
+        create: 'Create BPS shadow',
+        authorize: 'Authorize BPS',
+        group: 'OpenAI group',
+        selectGroup: 'Select a group',
+        model: 'Upstream BPS model',
+        paste: 'Paste authorization JSON',
+        device: 'Device code',
+        json: 'Authorization JSON',
+        open: 'Open authorization page',
+        requestFailed: 'BPS request failed. Try again.',
+        invalidJSON: 'Invalid authorization JSON.',
+        states: {
+          authorization_required: 'Authorization required', pending: 'Verifying authorization', authorized: 'Authorized',
+          unavailable: 'BPS service unavailable', expired: 'Device code expired', device_failed: 'Device authorization failed',
+          invalid_grant: 'Invalid or expired BPS grant', identity_mismatch: 'Account or workspace does not match the parent',
+          probe_failed: 'Model probe failed; previous authorization unchanged'
+        }
+      },
       webImageShadow: {
         create: 'Create image shadow',
         mode: 'Image mode',
