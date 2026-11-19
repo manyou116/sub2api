@@ -119,6 +119,40 @@ describe('AccountTestModal', () => {
     vi.restoreAllMocks()
   })
 
+  it('tests the BPS shadow directly without offering compact mode', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'bps-text', display_name: 'BPS Text' }])
+    const wrapper = mountModal({ id: 42, name: 'BPS', platform: 'openai', type: 'oauth', status: 'active', parent_account_id: 1, quota_dimension: 'bps' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.testMode')
+    const start = wrapper.findAll('button').find(button => button.text().includes('admin.accounts.startTest'))!
+    await start.trigger('click')
+    await flushPromises()
+    const [url, request] = vi.mocked(global.fetch).mock.calls[0]
+    expect(url).toContain('/admin/accounts/42/test')
+    expect(JSON.parse(String(request?.body))).toEqual({ model_id: 'bps-text', prompt: '' })
+    wrapper.unmount()
+  })
+
+  it('shows BPS connectivity without marking an unconfirmed generation successful', async () => {
+    getAvailableModels.mockResolvedValue([{ id: 'bps-text', display_name: 'BPS Text' }])
+    vi.mocked(global.fetch).mockResolvedValueOnce(createStreamResponse([
+      'data: {"type":"test_start","model":"bps-text"}\n',
+      'data: {"type":"status","status":"bps_connected"}\n',
+      'data: {"type":"content","text":"OK"}\n',
+      'data: {"type":"test_complete","status":"bps_connected_only","text":"No completion event"}\n'
+    ]))
+    const wrapper = mountModal({ id: 42, name: 'BPS', platform: 'openai', type: 'oauth', status: 'active', parent_account_id: 1, quota_dimension: 'bps' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text().includes('admin.accounts.startTest'))!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('No completion event')
+    expect(wrapper.text()).toContain('admin.accounts.connectedToApi')
+    expect(wrapper.text()).not.toContain('admin.accounts.testCompleted')
+    wrapper.unmount()
+  })
+
   it('defaults a Web image shadow test to gpt-image-2', async () => {
     getAvailableModels.mockResolvedValue([{ id: 'gpt-image-1', display_name: 'Image 1' }, { id: 'gpt-image-2', display_name: 'Image 2' }])
     const wrapper = mountModal({ id: 42, name: 'Web', platform: 'openai', type: 'oauth', status: 'active', parent_account_id: 1, quota_dimension: 'web_images' })

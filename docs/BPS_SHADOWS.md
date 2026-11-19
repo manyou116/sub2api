@@ -2,11 +2,17 @@
 
 BPS is an optional, Responses SSE-only upstream. A BPS shadow is linked to a
 real OpenAI OAuth account, but never obtains its Codex credentials. Each parent
-can have one BPS shadow alongside its existing Spark and image shadows. Assign it
-to an OpenAI group (prefer a dedicated group) and configure the exact BPS model.
-Clients use `bps-<model>`; ordinary accounts cannot claim that alias. Send full
-history with `stream:true`; compact, previous-response state, hosted tools, and
-automatic fallback to Codex are unsupported.
+can have one BPS shadow alongside its existing Spark and image shadows. Creation
+inherits the parent account's groups; there is no group selector. If the parent
+has no groups, the shadow uses an existing active `openai-default` group if
+available. Otherwise it can still be created and authorized, but will not be
+selected by grouped API-key traffic until a group is assigned.
+Model selection and mapping use the ordinary Sub2API configuration, with no model
+required at creation. Existing explicit `bps-<model>` mappings stay valid and can
+be edited in the account model mapping. Send full history. Compact,
+previous-response state, hosted tools, and resubmission to Codex after a BPS
+attempt are unsupported. The bridge emits SSE; Sub2API can return the final
+response object to non-streaming clients.
 
 ## Deployment
 
@@ -26,13 +32,15 @@ proxy for BPS; preserve that configuration during authorization and execution.
 
 ## Authorization
 
-From the parent account menu, choose **Create BPS shadow**, set a group and
-model, then either paste a fresh JSON file exported by `bps-local --login` or
-start device-code authorization. Device codes must only be entered on the
+From the parent account menu, choose **Create BPS shadow** and either paste
+a fresh JSON file exported by `bps-local --login` or select
+device-code authorization in the same dialog. Device codes must only be entered on the
 provider page. The server verifies the BPS access token against OpenAI signing
-keys and checks both ChatGPT user and workspace against the parent. The account
-must then succeed on a short real generation, which may use shared quota.
-Failed or canceled authorization does not replace an existing grant.
+keys and checks both ChatGPT user and workspace against the parent. It checks
+that the bridge can start without sending a generation request. Upstream model
+permission is checked by BPS when the model is used. Failed or canceled
+authorization leaves a newly created shadow pending and does not replace an
+existing grant.
 
 The bridge's credentials live only on its private state volume (files mode
 0600). They are not included in account data export or admin API responses.

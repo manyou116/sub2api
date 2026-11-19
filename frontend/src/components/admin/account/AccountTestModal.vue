@@ -70,7 +70,7 @@
         />
       </div>
 
-      <div v-if="isOpenAIAccount" class="space-y-1.5">
+      <div v-if="supportsOpenAITestModes" class="space-y-1.5">
         <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
           {{ t('admin.accounts.openai.testMode') }}
         </label>
@@ -181,7 +181,7 @@
             <Icon name="play" size="sm" :stroke-width="2" />
             <span>{{ t('admin.accounts.readyToTest') }}</span>
           </div>
-          <div v-else-if="status === 'connecting'" class="flex items-center gap-2 text-yellow-400">
+          <div v-else-if="status === 'connecting' && !bpsConnected" class="flex items-center gap-2 text-yellow-400">
             <Icon name="refresh" size="sm" class="animate-spin" :stroke-width="2" />
             <span>{{ t('admin.accounts.connectingToApi') }}</span>
           </div>
@@ -203,6 +203,13 @@
           >
             <Icon name="check" size="sm" :stroke-width="2" />
             <span>{{ t('admin.accounts.testCompleted') }}</span>
+          </div>
+          <div
+            v-else-if="status === 'partial'"
+            class="mt-3 flex items-center gap-2 border-t border-gray-700 pt-3 text-yellow-400"
+          >
+            <Icon name="check" size="sm" :stroke-width="2" />
+            <span>{{ t('admin.accounts.connectedToApi') }} · {{ bpsPartialDetail }}</span>
           </div>
           <div
             v-else-if="status === 'error'"
@@ -400,7 +407,9 @@ const emit = defineEmits<{
 }>()
 
 const terminalRef = ref<HTMLElement | null>(null)
-const status = ref<'idle' | 'connecting' | 'success' | 'error'>('idle')
+const status = ref<'idle' | 'connecting' | 'success' | 'partial' | 'error'>('idle')
+const bpsConnected = ref(false)
+const bpsPartialDetail = ref('')
 const outputLines = ref<OutputLine[]>([])
 const streamingContent = ref('')
 const errorMessage = ref('')
@@ -422,7 +431,10 @@ const uploadAudioDataURL = ref('')
 const uploadAudioName = ref('')
 const imageFileInput = ref<HTMLInputElement | null>(null)
 const audioFileInput = ref<HTMLInputElement | null>(null)
-const isOpenAIAccount = computed(() => props.account?.platform === 'openai')
+const supportsOpenAITestModes = computed(() =>
+  props.account?.platform === 'openai' && props.account.quota_dimension !== 'bps'
+)
+const isBPSShadow = computed(() => props.account?.quota_dimension === 'bps')
 const isGrokAccount = computed(() => props.account?.platform === 'grok')
 const openAITestModeOptions = computed(() => [
   { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
@@ -448,7 +460,7 @@ const supportsGeminiImageTest = computed(() => {
 const supportsOpenAIImageTest = computed(() => {
   const modelID = selectedModelId.value.toLowerCase()
   if (!modelID.startsWith('gpt-image-')) return false
-  return props.account?.platform === 'openai'
+  return supportsOpenAITestModes.value
 })
 
 const isGrokImageModel = (id: string) => {
@@ -794,6 +806,8 @@ const loadAvailableModels = async () => {
 
 const resetState = () => {
   status.value = 'idle'
+  bpsConnected.value = false
+  bpsPartialDetail.value = ''
   outputLines.value = []
   streamingContent.value = ''
   errorMessage.value = ''
@@ -856,7 +870,7 @@ const startTest = async () => {
       model_id: showModelSelect.value ? selectedModelId.value : '',
       prompt: supportsPromptInput.value ? testPrompt.value.trim() : ''
     }
-    if (isOpenAIAccount.value) {
+    if (supportsOpenAITestModes.value) {
       requestBody.mode = testMode.value
     }
     if (isGrokAccount.value) {
@@ -942,6 +956,7 @@ const startTest = async () => {
 
 const handleEvent = (event: {
   type: string
+  status?: string
   text?: string
   model?: string
   success?: boolean
@@ -953,7 +968,7 @@ const handleEvent = (event: {
 }) => {
   switch (event.type) {
     case 'test_start':
-      addLine(t('admin.accounts.connectedToApi'), 'text-green-400')
+      if (!isBPSShadow.value) addLine(t('admin.accounts.connectedToApi'), 'text-green-400')
       if (event.model) {
         addLine(t('admin.accounts.usingModel', { model: event.model }), 'text-cyan-400')
       }
@@ -1019,7 +1034,10 @@ const handleEvent = (event: {
       break
 
     case 'status':
-      if (event.text) {
+      if (event.status === 'bps_connected') {
+        bpsConnected.value = true
+        addLine(t('admin.accounts.connectedToApi'), 'text-green-400')
+      } else if (event.text) {
         addLine(event.text, 'text-cyan-300')
       }
       break
@@ -1030,7 +1048,10 @@ const handleEvent = (event: {
         addLine(streamingContent.value, 'text-green-300')
         streamingContent.value = ''
       }
-      if (event.success) {
+      if (event.status === 'bps_connected_only') {
+        bpsPartialDetail.value = event.text || ''
+        status.value = 'partial'
+      } else if (event.success) {
         status.value = 'success'
       } else {
         status.value = 'error'

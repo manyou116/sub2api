@@ -12,18 +12,29 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestBPSShadowRouteIsExplicitAndNeverBorrowsCodex(t *testing.T) {
+func TestBPSShadowUsesOrdinaryModelsAndNeverBorrowsCodex(t *testing.T) {
 	const alias = "bps-example"
+	const model = "gpt-6.1-sol"
 	id := int64(42)
 	ordinary := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	shadow := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &id, QuotaDimension: quotaDimensionBPS}
-	bps := WithBPSResponses(t.Context(), alias)
-	require.False(t, bpsRouteMismatch(bps, shadow, alias, false))
+	bps := WithBPSResponses(t.Context(), model)
+	require.False(t, bpsRouteMismatch(bps, shadow, model, false))
+	require.True(t, supportsOpenAIRequestModel(shadow, model, false))
+	_, mapped := resolveOpenAIForwardMappedModels(shadow, model, false)
+	require.Equal(t, model, mapped)
+	require.False(t, bpsRouteMismatch(bps, ordinary, model, false))
+	require.True(t, bpsRouteMismatch(bps, shadow, "gpt-image-2", false))
+	require.True(t, bpsRouteMismatch(bps, shadow, alias, false))
 	require.True(t, bpsRouteMismatch(bps, ordinary, alias, false))
-	require.True(t, bpsRouteMismatch(t.Context(), shadow, alias, false))
-	require.True(t, bpsRouteMismatch(bps, shadow, alias, true))
-	require.True(t, bpsRouteMismatch(bps, shadow, "ordinary-model", false))
-	require.False(t, bpsRouteMismatch(t.Context(), ordinary, "ordinary-model", false))
+	require.True(t, bpsRouteMismatch(t.Context(), shadow, model, false))
+	require.True(t, bpsRouteMismatch(bps, shadow, model, true))
+	shadow.Credentials = map[string]any{"model_mapping": map[string]any{alias: "example", "team-*": model}}
+	require.False(t, bpsRouteMismatch(bps, shadow, alias, false))
+	require.True(t, supportsOpenAIRequestModel(shadow, "team-text", false))
+	require.False(t, supportsOpenAIRequestModel(shadow, model, false))
+	_, mapped = resolveOpenAIForwardMappedModels(shadow, "team-text", false)
+	require.Equal(t, model, mapped)
 	_, err := resolveCredentialAccount(t.Context(), nil, shadow)
 	require.ErrorContains(t, err, "independent BPS authorization")
 }

@@ -3,7 +3,6 @@ package service
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -21,64 +20,41 @@ import (
 type bpsResponsesKey struct{}
 
 func WithBPSResponses(ctx context.Context, model string) context.Context {
-	if strings.HasPrefix(model, bpsModelPrefix) {
+	if strings.TrimSpace(model) != "" {
 		return context.WithValue(ctx, bpsResponsesKey{}, true)
 	}
 	return ctx
 }
 
 func bpsRouteMismatch(ctx context.Context, a *Account, model string, compact bool) bool {
-	isBPS := strings.HasPrefix(model, bpsModelPrefix)
-	if !isBPS && !a.IsBPSShadow() {
-		return false
+	if !a.IsBPSShadow() {
+		return strings.HasPrefix(model, bpsModelPrefix)
 	}
-	return !isBPS || !a.IsBPSShadow() || compact || ctx.Value(bpsResponsesKey{}) != true
+	mapped, matched := a.ResolveMappedModel(model)
+	return compact || ctx.Value(bpsResponsesKey{}) != true || IsGPTImageGenerationModel(mapped) ||
+		(strings.HasPrefix(model, bpsModelPrefix) && !matched)
 }
 
+// Older shadows had one forced alias; keep its shared quota check for existing bindings.
 func bpsTargetModel(child *Account) string {
 	for alias, model := range child.GetModelMapping() {
-		if alias == bpsModelPrefix+model && bpsModelPattern.MatchString(model) {
+		if model != "" && alias == bpsModelPrefix+model {
 			return model
 		}
 	}
 	return ""
 }
 
-func bpsProbe(ctx context.Context, p bpsbridge.Process, temp string, bound bpsbridge.BoundGrant, child *Account) error {
-	model := bpsTargetModel(child)
-	if model == "" {
-		return bpsbridge.ErrUnavailable
-	}
+func bpsCheckBridge(ctx context.Context, p bpsbridge.Process, temp string, bound bpsbridge.BoundGrant) error {
 	auth := filepath.Join(temp, "probe.json")
 	if err := bpsbridge.Save(auth, bound); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
-	defer cancel()
 	worker, err := p.Start(ctx, auth, filepath.Join(temp, "task"), 1)
 	if err != nil {
 		return err
 	}
-	defer worker.Stop()
-	body, _ := json.Marshal(map[string]any{"model": model, "input": "Reply only OK.", "stream": true, "max_output_tokens": 64})
-	resp, err := worker.Responses(ctx, body)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if !bpsIsStream(resp) {
-		return bpsbridge.ErrUnavailable
-	}
-	terminal, err := bpsReadStream(resp.Body, 32<<10, func(data string, _ []byte) error {
-		event := gjson.Parse(data)
-		if event.Get("type").String() == "response.completed" && strings.TrimSpace(event.Get(`response.output.#(type=="message").content.#(type=="output_text").text`).String()) == "" {
-			return bpsbridge.ErrUnavailable
-		}
-		return nil
-	})
-	if err != nil || terminal.Get("type").String() != "response.completed" {
-		return bpsbridge.ErrUnavailable
-	}
+	worker.Stop()
 	return nil
 }
 
@@ -204,10 +180,11 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 		return fail(http.StatusBadRequest, "bps_responses_only")
 	}
 	model := gjson.GetBytes(body, "model").String()
-	mapped := bpsTargetModel(account)
-	if mapped == "" || model != bpsModelPrefix+mapped || !gjson.GetBytes(body, "stream").Bool() ||
-		gjson.GetBytes(body, "previous_response_id").String() != "" || OpenAIImageGenerationIntentFromContext(ctx) {
-		return fail(http.StatusBadRequest, "bps_requires_streaming_and_full_history")
+	billingModel, mapped := resolveOpenAIForwardMappedModels(account, model, false)
+	if mapped == "" || bpsRouteMismatch(c.Request.Context(), account, model, false) ||
+		!supportsOpenAIRequestModel(account, model, false) || gjson.GetBytes(body, "previous_response_id").String() != "" ||
+		OpenAIImageGenerationIntentFromContext(ctx) {
+		return fail(http.StatusBadRequest, "bps_requires_text_and_full_history")
 	}
 	for _, tool := range gjson.GetBytes(body, "tools").Array() {
 		switch tool.Get("type").String() {
@@ -256,10 +233,13 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 		return fail(http.StatusBadGateway, "bps_upstream_rejected")
 	}
 	SetActualOpenAIUpstreamEndpoint(c, "/bps/responses")
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("X-Accel-Buffering", "no")
-	stats := &OpenAIForwardResult{Model: model, UpstreamModel: mapped, BillingModel: mapped, Stream: true, UpstreamEndpoint: "/bps/responses"}
+	stream := gjson.GetBytes(body, "stream").Bool()
+	if stream {
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("X-Accel-Buffering", "no")
+	}
+	stats := &OpenAIForwardResult{Model: model, UpstreamModel: mapped, BillingModel: billingModel, Stream: stream, UpstreamEndpoint: "/bps/responses"}
 	terminal, err := bpsReadStream(resp.Body, 16<<20, func(data string, _ []byte) error {
 		event := gjson.Parse(data)
 		eventType := event.Get("type").String()
@@ -270,13 +250,23 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 			ms := int(time.Since(start).Milliseconds())
 			stats.FirstTokenMs = &ms
 		}
-		if _, err := c.Writer.WriteString("event: " + eventType + "\ndata: " + data + "\n\n"); err != nil {
+		if !stream {
+			return nil
+		}
+		line := "data: " + data
+		if model != mapped {
+			line = s.replaceModelInSSELine(line, mapped, model)
+		}
+		if _, err := c.Writer.WriteString("event: " + eventType + "\n" + line + "\n\n"); err != nil {
 			return err
 		}
 		c.Writer.Flush()
 		return nil
 	})
 	if err != nil {
+		if !stream && ctx.Err() == nil {
+			return fail(http.StatusBadGateway, "bps_result_unconfirmed")
+		}
 		if ctx.Err() == nil {
 			_, _ = c.Writer.WriteString("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"bps_result_unconfirmed\"}}}\n\n")
 			c.Writer.Flush()
@@ -284,7 +274,16 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 		return nil, errors.New("bps_result_unconfirmed")
 	}
 	switch event := terminal.Get("type").String(); event {
-	case "response.completed":
+	case "response.completed", "response.incomplete":
+		if !stream {
+			if response := terminal.Get("response"); response.IsObject() {
+				c.Data(http.StatusOK, "application/json", s.replaceModelInResponseBody([]byte(response.Raw), mapped, model))
+			} else {
+				return fail(http.StatusBadGateway, "bps_result_unconfirmed")
+			}
+		} else if event == "response.incomplete" {
+			return nil, errors.New("bps_generation_incomplete")
+		}
 		stats.UpstreamResponseModel = terminal.Get("response.model").String()
 		stats.ResponseID = terminal.Get("response.id").String()
 		stats.RequestID = stats.ResponseID
@@ -297,6 +296,9 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 	case "response.failed", "error":
 		s.noteBPSQuota(ctx, parent.ID, terminal.Get("response.error"))
 		s.noteBPSQuota(ctx, parent.ID, terminal.Get("error"))
+		if !stream {
+			return fail(http.StatusBadGateway, "bps_generation_failed")
+		}
 		return nil, errors.New("bps_generation_failed")
 	default:
 		return nil, errors.New("bps_generation_incomplete")

@@ -11,8 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -23,8 +21,7 @@ import (
 const quotaDimensionBPS = "bps"
 const bpsModelPrefix = "bps-"
 
-var bpsModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$`)
-var bpsUnavailable = infraerrors.New(http.StatusServiceUnavailable, "BPS_UNAVAILABLE", "BPS bridge is not configured or unavailable")
+var bpsUnavailable = infraerrors.New(http.StatusServiceUnavailable, "BPS_UNAVAILABLE", "BPS bridge unavailable: check SUB2API_BPS_BINARY, SUB2API_BPS_STATE_DIR and the parent proxy")
 var bpsNotFound = infraerrors.NotFound("BPS_SHADOW_NOT_FOUND", "BPS shadow not found")
 
 func (a *Account) IsBPSShadow() bool {
@@ -39,15 +36,9 @@ func bpsParentIdentity(a *Account) (bpsbridge.Identity, bool) {
 	return id, id.Account != "" && id.User != ""
 }
 
-type BPSShadowOptions struct {
-	Model   string `json:"model"`
-	GroupID int64  `json:"group_id"`
-}
+type BPSShadowOptions struct{}
 
-func (s *adminServiceImpl) CreateBPSShadow(ctx context.Context, parentID int64, opts BPSShadowOptions) (*Account, error) {
-	if _, err := bpsProcess(0); err != nil {
-		return nil, err
-	}
+func (s *adminServiceImpl) CreateBPSShadow(ctx context.Context, parentID int64, _ BPSShadowOptions) (*Account, error) {
 	parent, err := s.accountRepo.GetByID(ctx, parentID)
 	if err != nil {
 		return nil, err
@@ -55,18 +46,20 @@ func (s *adminServiceImpl) CreateBPSShadow(ctx context.Context, parentID int64, 
 	if _, ok := bpsParentIdentity(parent); !ok {
 		return nil, infraerrors.BadRequest("BPS_PARENT_IDENTITY_REQUIRED", "an active OpenAI OAuth parent with a verified account and user identity is required")
 	}
-	model := strings.TrimSpace(opts.Model)
-	if !bpsModelPattern.MatchString(model) || strings.HasPrefix(model, bpsModelPrefix) || IsGPTImageGenerationModel(model) {
-		return nil, infraerrors.BadRequest("BPS_MODEL_INVALID", "specify the exact upstream BPS text model")
+	groupIDs := append([]int64(nil), parent.GroupIDs...)
+	if len(groupIDs) == 0 && s.groupRepo != nil {
+		groups, err := s.groupRepo.ListActiveByPlatform(ctx, PlatformOpenAI)
+		if err != nil {
+			return nil, fmt.Errorf("look up OpenAI default group: %w", err)
+		}
+		for _, group := range groups {
+			if group.Name == PlatformOpenAI+"-default" {
+				groupIDs = []int64{group.ID}
+				break
+			}
+		}
 	}
-	group, err := s.groupRepo.GetByID(ctx, opts.GroupID)
-	if err != nil {
-		return nil, err
-	}
-	if group.Platform != PlatformOpenAI {
-		return nil, infraerrors.BadRequest("BPS_GROUP_INVALID", "BPS requires an OpenAI group")
-	}
-	if err := s.ValidateAccountGroupBindings(ctx, []int64{group.ID}); err != nil {
+	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
 		return nil, err
 	}
 	exists := func() bool {
@@ -85,7 +78,7 @@ func (s *adminServiceImpl) CreateBPSShadow(ctx context.Context, parentID int64, 
 		Name: string(name) + " · BPS", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		ParentAccountID: &parent.ID, QuotaDimension: quotaDimensionBPS, Concurrency: 1, Priority: parent.Priority,
 		Status: StatusActive, Schedulable: true,
-		Credentials: map[string]any{"model_mapping": map[string]any{bpsModelPrefix + model: model}},
+		Credentials: map[string]any{},
 	}
 	if err := s.accountRepo.Create(ctx, child); err != nil {
 		if exists() {
@@ -93,10 +86,12 @@ func (s *adminServiceImpl) CreateBPSShadow(ctx context.Context, parentID int64, 
 		}
 		return nil, err
 	}
-	if err := s.accountRepo.BindGroups(ctx, child.ID, []int64{group.ID}); err != nil {
-		return nil, errors.Join(err, s.accountRepo.Delete(context.WithoutCancel(ctx), child.ID))
+	if len(groupIDs) > 0 {
+		if err := s.accountRepo.BindGroups(ctx, child.ID, groupIDs); err != nil {
+			return nil, errors.Join(err, s.accountRepo.Delete(context.WithoutCancel(ctx), child.ID))
+		}
 	}
-	child.GroupIDs = []int64{group.ID}
+	child.GroupIDs = groupIDs
 	return child, nil
 }
 
@@ -284,13 +279,13 @@ func (s *adminServiceImpl) completeBPSAuthorization(ctx context.Context, id int6
 		return
 	}
 	bound := bpsbridge.BoundGrant{Grant: grant, Identity: identity, ExpiresAt: expiry}
-	child, parent, err := s.bpsTarget(ctx, id)
+	_, parent, err := s.bpsTarget(ctx, id)
 	if err != nil || !bpsMatchesParent(bound, parent) {
 		update("identity_mismatch", nil, nil)
 		return
 	}
-	if err := bpsProbe(ctx, p, temp, bound, child); err != nil {
-		update("probe_failed", nil, nil)
+	if err := bpsCheckBridge(ctx, p, temp, bound); err != nil {
+		update("unavailable", nil, nil)
 		return
 	}
 	bpsAuth.Lock()
