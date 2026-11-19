@@ -1269,7 +1269,7 @@ func (s *AccountTestService) testBPSAccountConnection(c *gin.Context, account *A
 		}
 		return s.sendErrorAndEnd(c, "BPS test request did not complete")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	recordBPSTestBridgeTiming(resp.Header, timing)
 	if resp.StatusCode == http.StatusTooManyRequests {
 		return s.sendErrorAndEnd(c, "BPS request was rate limited (HTTP 429)")
