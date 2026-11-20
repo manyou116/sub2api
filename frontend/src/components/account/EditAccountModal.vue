@@ -26,6 +26,8 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <WebImageShadowSettings v-if="isWebShadow" v-model="webImageSettings" :account-id="account.id" :mode="imageShadowMode(account)" :parent-id="account.parent_account_id" />
+      <template v-if="!isWebShadow">
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
@@ -1918,7 +1920,7 @@
         </div>
       </div>
 
-      <div v-if="!isSparkShadow">
+      <div v-if="!isCredentialShadow">
         <div class="mb-1 flex items-center gap-2">
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
@@ -1931,6 +1933,8 @@
         :platform="account.platform"
         :type="account.type"
       />
+
+      </template>
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
@@ -2014,6 +2018,7 @@
         </p>
       </div>
 
+      <template v-if="!isWebShadow">
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
       <div
         v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
@@ -2548,7 +2553,7 @@
 
       <!-- OpenAI API 长上下文计费开关 -->
       <div
-        v-if="account?.platform === 'openai' && !isSparkShadow && !hideAccountLongContextBilling && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="account?.platform === 'openai' && !isCredentialShadow && !hideAccountLongContextBilling && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2654,7 +2659,7 @@
 
       <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isCredentialShadow"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between gap-4">
@@ -2835,63 +2840,48 @@
       </div>
 
       <div
-        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isSparkShadow"
+        v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isCredentialShadow"
         class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
         data-testid="auto-reset-credit-settings"
       >
-        <div class="flex items-center justify-between gap-4">
-          <div class="min-w-0">
-            <label class="input-label mb-0">{{ t('admin.accounts.autoResetCredit.title') }}</label>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.autoResetCredit.hint') }}
-            </p>
-          </div>
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.autoResetCredit.title') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.autoResetCredit.hint') }}</p>
+        </div>
+        <div v-for="window in (['5h', '7d'] as const)" :key="window" class="flex items-center justify-between gap-4">
+          <label class="input-label mb-0" :for="`auto-reset-credit-${window}`">
+            {{ t(`admin.accounts.autoResetCredit.enable${window === '5h' ? '5h' : '7d'}`) }}
+          </label>
           <button
+            :id="`auto-reset-credit-${window}`"
             type="button"
-            data-testid="auto-reset-credit-enabled"
-            @click="autoResetCreditEnabled = !autoResetCreditEnabled"
+            role="switch"
+            :aria-checked="window === '5h' ? autoResetCredit5hEnabled : autoResetCredit7dEnabled"
+            :data-testid="`auto-reset-credit-${window}-enabled`"
+            @click="window === '5h' ? (autoResetCredit5hEnabled = !autoResetCredit5hEnabled) : (autoResetCredit7dEnabled = !autoResetCredit7dEnabled)"
             :class="[
               'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
-              autoResetCreditEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              (window === '5h' ? autoResetCredit5hEnabled : autoResetCredit7dEnabled) ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
             ]"
           >
-            <span
-              :class="[
-                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                autoResetCreditEnabled ? 'translate-x-5' : 'translate-x-0'
-              ]"
-            />
+            <span :class="[
+              'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+              (window === '5h' ? autoResetCredit5hEnabled : autoResetCredit7dEnabled) ? 'translate-x-5' : 'translate-x-0'
+            ]" />
           </button>
         </div>
         <div class="grid gap-4 sm:grid-cols-2">
           <div>
-            <label class="input-label">{{ t('admin.accounts.autoResetCredit.threshold5h') }}</label>
-            <input
-              v-model.number="autoResetCredit5hThreshold"
-              type="number"
-              min="0.1"
-              max="100"
-              step="0.1"
-              class="input"
-              :disabled="!autoResetCreditEnabled"
-              data-testid="auto-reset-credit-5h-threshold"
-            />
+            <label class="input-label" for="auto-reset-credit-5h-threshold">{{ t('admin.accounts.autoResetCredit.threshold5h') }}</label>
+            <input id="auto-reset-credit-5h-threshold" v-model.number="autoResetCredit5hThreshold" type="number" min="0.1" max="100" step="0.1"
+              class="input" :disabled="!autoResetCredit5hEnabled" data-testid="auto-reset-credit-5h-threshold" />
           </div>
           <div>
-            <label class="input-label">{{ t('admin.accounts.autoResetCredit.threshold7d') }}</label>
-            <input
-              v-model.number="autoResetCredit7dThreshold"
-              type="number"
-              min="0.1"
-              max="100"
-              step="0.1"
-              class="input"
-              :disabled="!autoResetCreditEnabled"
-              data-testid="auto-reset-credit-7d-threshold"
-            />
+            <label class="input-label" for="auto-reset-credit-7d-threshold">{{ t('admin.accounts.autoResetCredit.threshold7d') }}</label>
+            <input id="auto-reset-credit-7d-threshold" v-model.number="autoResetCredit7dThreshold" type="number" min="0.1" max="100" step="0.1"
+              class="input" :disabled="!autoResetCredit7dEnabled" data-testid="auto-reset-credit-7d-threshold" />
           </div>
         </div>
-        <p class="input-hint">{{ t('admin.accounts.autoResetCredit.thresholdHint') }}</p>
       </div>
 
       <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->
@@ -3274,6 +3264,8 @@
         </div>
       </div>
 
+      </template>
+
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div>
           <label class="input-label">{{ t('common.status') }}</label>
@@ -3439,6 +3431,8 @@ import {
 } from '@/components/account/openaiImageSizeTiers'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
+import WebImageShadowSettings from './WebImageShadowSettings.vue'
+import { isImageShadow, imageShadowMode, readWebImageSettings, type WebImageSettings } from './webImageShadow'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
@@ -3550,9 +3544,10 @@ const selectableGroups = computed(() => {
   return Array.from(groups.values())
 })
 
-// Spark 影子账号(parent_account_id 非空):代理恒继承母账号,不可独立编辑(外审 B/P1),
-// 故隐藏代理选择器。
-const isSparkShadow = computed(() => props.account?.parent_account_id != null)
+// Credential shadows inherit parent identity and proxy.
+const isCredentialShadow = computed(() => props.account?.parent_account_id != null)
+const isWebShadow = computed(() => isImageShadow(props.account))
+const webImageSettings = ref<WebImageSettings>(readWebImageSettings(null))
 
 const hideAccountLongContextBilling = computed(() => {
   return allSelectedGroupsEnableLongContextPricing(form.group_ids, props.groups)
@@ -4107,7 +4102,8 @@ const autoPause5hThreshold = ref<number | null>(null)
 const autoPause7dThreshold = ref<number | null>(null)
 const autoPause5hDisabled = ref(false)
 const autoPause7dDisabled = ref(false)
-const autoResetCreditEnabled = ref(false)
+const autoResetCredit5hEnabled = ref(false)
+const autoResetCredit7dEnabled = ref(false)
 const autoResetCredit5hThreshold = ref(100)
 const autoResetCredit7dThreshold = ref(100)
 const upstreamBillingAutoProbeEnabled = ref(false)
@@ -4626,6 +4622,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedChannelWarningDetails.value = null
   mixedChannelWarningRawMessage.value = ''
   mixedChannelWarningAction.value = null
+  webImageSettings.value = readWebImageSettings(newAccount)
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
   form.proxy_id = newAccount.proxy_id
@@ -4667,11 +4664,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
 	autoPause5hDisabled.value = extra?.auto_pause_5h_disabled === true
 	autoPause7dDisabled.value = extra?.auto_pause_7d_disabled === true
-	autoResetCreditEnabled.value = extra?.auto_reset_credit_enabled === true
-	autoResetCredit5hThreshold.value =
-		typeof extra?.auto_reset_credit_5h_threshold === 'number' ? extra.auto_reset_credit_5h_threshold * 100 : 100
-	autoResetCredit7dThreshold.value =
-		typeof extra?.auto_reset_credit_7d_threshold === 'number' ? extra.auto_reset_credit_7d_threshold * 100 : 100
+	autoResetCredit5hEnabled.value = extra?.auto_reset_credit_5h_enabled === true
+	autoResetCredit7dEnabled.value = typeof extra?.auto_reset_credit_7d_enabled === 'boolean'
+		? extra.auto_reset_credit_7d_enabled : extra?.auto_reset_credit_enabled === true
+	autoResetCredit5hThreshold.value = typeof extra?.auto_reset_credit_5h_threshold === 'number' ? extra.auto_reset_credit_5h_threshold * 100 : 100
+	autoResetCredit7dThreshold.value = typeof extra?.auto_reset_credit_7d_threshold === 'number' ? extra.auto_reset_credit_7d_threshold * 100 : 100
 	upstreamBillingAutoProbeEnabled.value = extra?.upstream_billing_probe_enabled === true
   upstreamBillingRateSyncEnabled.value =
     upstreamBillingAutoProbeEnabled.value && extra?.upstream_billing_rate_sync_enabled === true
@@ -5667,15 +5664,23 @@ const handleSubmit = async () => {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
     return
   }
-	if (autoResetCreditEnabled.value) {
-		const thresholds = [autoResetCredit5hThreshold.value, autoResetCredit7dThreshold.value]
-		if (thresholds.some((value) => !Number.isFinite(value) || value < 0.1 || value > 100)) {
-			appStore.showError(t('admin.accounts.autoResetCredit.thresholdInvalid'))
-			return
-		}
-	}
 
+  if (isWebShadow.value) {
+    const { proxy_id: _proxyID, ...fields } = form
+    await submitUpdateAccount(accountID, {
+      ...fields,
+      expires_at: form.expires_at ?? 0,
+      load_factor: form.load_factor || 0,
+      extra: { openai_web_images: { ...webImageSettings.value } }
+    })
+    return
+  }
   const updatePayload: Record<string, unknown> = { ...form }
+  if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isCredentialShadow.value &&
+      [autoResetCredit5hThreshold.value, autoResetCredit7dThreshold.value].some(value => !Number.isFinite(value) || value < 0.1 || value > 100)) {
+    appStore.showError(t('admin.accounts.autoResetCredit.thresholdInvalid'))
+    return
+  }
   try {
     // 后端期望 proxy_id: 0 表示清除代理，而不是 null
     if (updatePayload.proxy_id === null) {
@@ -5997,7 +6002,7 @@ const handleSubmit = async () => {
 
     // OpenAI/Grok OAuth: persist model mapping to credentials
     if ((props.account.platform === 'openai' || props.account.platform === 'grok') && props.account.type === 'oauth') {
-      const currentCredentials = isSparkShadow.value
+      const currentCredentials = isCredentialShadow.value
         ? {}
         : (updatePayload.credentials as Record<string, unknown>) ||
           ((props.account.credentials as Record<string, unknown>) || {})
@@ -6062,7 +6067,7 @@ const handleSubmit = async () => {
     // OpenAI: 手动覆盖订阅档位 plan_type（Plus / Pro 20x / Pro 5x / Business Standard / Business Premium / Free）。
     // 仅 OAuth 非影子账号：
     // 影子账号凭据由母账号管理(且后端会 sanitize),setup-token 无订阅调度语义。
-    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isSparkShadow.value) {
+    if (props.account.platform === 'openai' && props.account.type === 'oauth' && !isCredentialShadow.value) {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
       updatePayload.credentials = applyPlanType({ ...currentCredentials }, editPlanType.value)
@@ -6255,7 +6260,7 @@ const handleSubmit = async () => {
       } else {
         delete newExtra.openai_responses_flatten_namespaces
       }
-      if (isSparkShadow.value) {
+      if (isCredentialShadow.value) {
         delete newExtra.openai_long_context_billing_enabled
       } else {
         newExtra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
@@ -6303,10 +6308,12 @@ const handleSubmit = async () => {
 		} else {
 			delete newExtra.auto_pause_7d_disabled
 		}
-		if (props.account.type === 'oauth' && !isSparkShadow.value) {
-			newExtra.auto_reset_credit_enabled = autoResetCreditEnabled.value
+		if (props.account.type === 'oauth' && !isCredentialShadow.value) {
+			newExtra.auto_reset_credit_5h_enabled = autoResetCredit5hEnabled.value
+			newExtra.auto_reset_credit_7d_enabled = autoResetCredit7dEnabled.value
 			newExtra.auto_reset_credit_5h_threshold = autoResetCredit5hThreshold.value / 100
 			newExtra.auto_reset_credit_7d_threshold = autoResetCredit7dThreshold.value / 100
+			delete newExtra.auto_reset_credit_enabled
 		}
 		// 运行态只允许后端服务更新，账号编辑不得回写旧状态。
 		delete newExtra.codex_auto_reset_credit_state

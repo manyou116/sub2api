@@ -1026,6 +1026,83 @@ export async function createSparkShadow(parentId: number, payload: SparkShadowCr
   return data
 }
 
+export interface WebImageStatus {
+  parent_account_id: number
+  quota_known: boolean
+  remaining: number | null
+  reset_at: string | null
+  probed_at: string | null
+  cooldown_until: string | null
+  cooldown_reason?: string
+  retry_after_seconds?: number
+}
+
+export type ImageShadowMode = 'web' | 'work'
+
+export interface ImageShadowModel {
+  id: string
+  label: string
+  modes: ImageShadowMode[]
+  thinking_efforts: string[]
+  default_thinking_effort: string
+  recommended?: boolean
+  verified: boolean
+}
+
+export interface ImageShadowModelCatalog {
+  models: ImageShadowModel[]
+  recommended: Record<ImageShadowMode, string>
+}
+
+export async function getImageShadowModels(): Promise<ImageShadowModelCatalog> {
+  const { data } = await apiClient.get<ImageShadowModelCatalog>('/admin/accounts/image-shadow-models')
+  return data
+}
+
+export interface WebImageShadowBatchItem {
+  parent_id: number
+  mode: ImageShadowMode
+  shadow_id?: number
+  status: 'created' | 'existing' | 'skipped' | 'failed'
+  code?: string
+  message?: string
+}
+
+export interface WebImageShadowBatchResult {
+  created: number
+  existing: number
+  skipped: number
+  failed: number
+  results: WebImageShadowBatchItem[]
+}
+
+export async function createWebImageShadows(parentIds: number[], concurrency = 1, modes: ImageShadowMode[] = ['web']): Promise<WebImageShadowBatchResult> {
+  const { data } = await apiClient.post<WebImageShadowBatchResult>('/admin/accounts/web-image-shadows', {
+    parent_ids: parentIds, concurrency, modes
+  })
+  return data
+}
+
+export async function getWebImageStatuses(accountIds: number[]): Promise<{ statuses: Record<string, WebImageStatus>; errors: Record<string, string> }> {
+  const { data } = await apiClient.post('/admin/accounts/web-image/status', { account_ids: accountIds })
+  return data
+}
+
+export async function createWebImageShadow(parentId: number, payload: SparkShadowCreatePayload & { mode?: ImageShadowMode } = {}): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${parentId}/web-image-shadow`, payload)
+  return data
+}
+
+export async function getWebImageStatus(id: number): Promise<WebImageStatus> {
+  const { data } = await apiClient.get<WebImageStatus>(`/admin/accounts/${id}/web-image/status`)
+  return data
+}
+
+export async function probeWebImageStatus(id: number): Promise<WebImageStatus> {
+  const { data } = await apiClient.post<WebImageStatus>(`/admin/accounts/${id}/web-image/probe`)
+  return data
+}
+
 export async function getUpstreamBillingProbeSettings(): Promise<UpstreamBillingProbeSettings> {
   const { data } = await apiClient.get<UpstreamBillingProbeSettings>('/admin/accounts/upstream-billing-probe/settings')
   return data
@@ -1186,6 +1263,12 @@ export const accountsAPI = {
   refreshOpenAIQuota,
   resetOpenAIQuota,
   createSparkShadow,
+  createWebImageShadow,
+  createWebImageShadows,
+  getImageShadowModels,
+  getWebImageStatus,
+  getWebImageStatuses,
+  probeWebImageStatus,
   getUpstreamBillingProbeSettings,
   updateUpstreamBillingProbeSettings,
   setUpstreamBillingProbeEnabled,
@@ -1203,6 +1286,31 @@ export const accountsAPI = {
   getOpenCodeGoUsage,
   setOpenCodeGoUsageAutoRefresh,
   refreshOpenCodeGoUsage
+}
+
+// ============== Kiro (P5) ==============
+
+export interface KiroImportItemResult {
+  index: number
+  id?: string
+  email?: string
+  created: boolean
+  error?: string
+}
+
+export interface KiroImportResponse {
+  results: KiroImportItemResult[]
+  summary: { total: number; succeeded: number; failed: number }
+}
+
+export async function importKiro(payload: {
+  items: Record<string, unknown>[]
+  group_ids?: number[]
+  concurrency?: number
+  skip_mixed_channel_check?: boolean
+}): Promise<KiroImportResponse> {
+  const { data } = await apiClient.post<KiroImportResponse>('/admin/accounts/kiro/import', payload)
+  return data
 }
 
 export default accountsAPI

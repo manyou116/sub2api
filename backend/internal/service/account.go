@@ -22,6 +22,7 @@ import (
 )
 
 type Account struct {
+	capacityAttempt         *openAICapacityAttempt // Request-local; never stored in scheduler snapshots.
 	ID                      int64
 	Name                    string
 	Notes                   *string
@@ -1911,20 +1912,23 @@ func (a *Account) IsChatGPTAccountFedRAMP() bool {
 }
 
 func (a *Account) GetOpenAIDeviceID() string {
-	if !a.IsOpenAIOAuth() {
+	if !a.IsOpenAIOAuthLike() {
 		return ""
 	}
 	return strings.TrimSpace(a.GetExtraString("openai_device_id"))
 }
 
 func (a *Account) GetOpenAISessionID() string {
-	if !a.IsOpenAIOAuth() {
+	if !a.IsOpenAIOAuthLike() {
 		return ""
 	}
 	return strings.TrimSpace(a.GetExtraString("openai_session_id"))
 }
 
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
+	if a.IsImageShadow() {
+		return capability == ""
+	}
 	if a == nil {
 		return false
 	}
@@ -2113,6 +2117,12 @@ func (a *Account) openAIEndpointCapabilitySet() (map[string]bool, bool) {
 }
 
 func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapability) bool {
+	if a.IsImageShadow() {
+		return capability == OpenAIImagesCapabilityBasic || capability == OpenAIImagesCapabilityNative
+	}
+	if a.IsSparkShadow() && capability != "" {
+		return false
+	}
 	if capability == "" {
 		return true
 	}
@@ -3386,11 +3396,27 @@ func parseExtraInt(value any) int {
 	return 0
 }
 
-// IsShadow 报告账号是否为影子账号（parent_account_id 非空；当前唯一预设是 spark 维度）。
+// IsShadow reports any linked credential shadow.
 func (a *Account) IsShadow() bool { return a != nil && a.ParentAccountID != nil }
 
 // IsCredentialShadow 语义别名，供「凭据消费者跳过影子」处使用（管理/后台 OAuth 路径）。
 func (a *Account) IsCredentialShadow() bool { return a.IsShadow() }
+
+func (a *Account) IsSparkShadow() bool {
+	return a.IsShadow() && a.QuotaDimension == QuotaDimensionSpark
+}
+
+func (a *Account) IsWebImageShadow() bool {
+	return a.IsShadow() && a.QuotaDimension == QuotaDimensionWebImages
+}
+
+func (a *Account) IsWorkImageShadow() bool {
+	return a.IsShadow() && a.QuotaDimension == QuotaDimensionWorkImages
+}
+
+func (a *Account) IsImageShadow() bool {
+	return a.IsWebImageShadow() || a.IsWorkImageShadow()
+}
 
 // QuotaDimensionOrDefault 返回账号的用量维度，未设置时回退 "global"。
 func (a *Account) QuotaDimensionOrDefault() string {

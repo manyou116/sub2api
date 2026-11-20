@@ -198,9 +198,9 @@ func (Account) Fields() []ent.Field {
 			MaxLen(20),
 
 		field.Int64("parent_account_id").Optional().Nillable().
-			Comment("Parent account id for a linked spark shadow (NULL = normal)."),
-		field.Enum("quota_dimension").Values("global", "spark").Default("global").
-			Comment("'global' (default) or 'spark' (shadow reads codex_bengalfox)."),
+			Comment("Parent account id for a linked credential shadow (NULL = normal)."),
+		field.Enum("quota_dimension").Values("global", "spark", "web_images", "work_images").Default("global").
+			Comment("Quota purpose: global, spark, web_images or work_images."),
 	}
 }
 
@@ -217,9 +217,8 @@ func (Account) Edges() []ent.Edge {
 		edge.To("proxy", Proxy.Type).
 			Field("proxy_id").
 			Unique(),
-		// children/parent: linked spark shadow relationship.
-		// parent_account_id is nullable, and the active one-shadow-per-parent rule
-		// is enforced by the partial unique index in migration 154a.
+		// children/parent: linked credential shadow relationship.
+		// One live child per quota dimension is enforced by migrations 154a and 246.
 		edge.To("children", Account.Type).
 			Annotations(entsql.OnDelete(entsql.Restrict)).
 			From("parent").

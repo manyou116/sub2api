@@ -446,7 +446,7 @@ func TestBuildSchedulerMetadataAccount_KeepsQuotaAutoPauseFields(t *testing.T) {
 	require.Equal(t, false, got.Extra["auto_pause_7d_disabled"])
 }
 
-// 候选过滤读的是 Redis 元数据投影；自动用卡的开关、阈值和卡状态缺失时，
+// 候选过滤读的是 Redis 元数据投影；自动用卡的窗口开关和卡状态缺失时，
 // 卡可用的 OpenAI 号会在暂停阈值处被一刀切停调，放行到用卡阈值的逻辑永远不生效。
 func TestSchedulerMetadataPayload_KeepsOpenAIAutoResetCreditFields(t *testing.T) {
 	checkedAt := time.Now().UTC().Format(time.RFC3339)
@@ -459,6 +459,8 @@ func TestSchedulerMetadataPayload_KeepsOpenAIAutoResetCreditFields(t *testing.T)
 		Extra: map[string]any{
 			"codex_7d_used_percent":                          90.0,
 			service.OpenAIAutoResetCreditEnabledExtraKey:     true,
+			service.OpenAIAutoResetCredit5hEnabledExtraKey:   true,
+			service.OpenAIAutoResetCredit7dEnabledExtraKey:   false,
 			service.OpenAIAutoResetCredit5hThresholdExtraKey: 0.95,
 			service.OpenAIAutoResetCredit7dThresholdExtraKey: 0.98,
 			service.OpenAIAutoResetCreditStateExtraKey: map[string]any{
@@ -477,8 +479,8 @@ func TestSchedulerMetadataPayload_KeepsOpenAIAutoResetCreditFields(t *testing.T)
 
 	config := service.ResolveOpenAIAutoResetCreditConfig(&cached)
 	require.True(t, config.Enabled)
-	require.Equal(t, 0.95, config.Threshold5h)
-	require.Equal(t, 0.98, config.Threshold7d)
+	require.True(t, config.Enabled5h)
+	require.False(t, config.Enabled7d, "显式关闭必须覆盖旧总开关")
 
 	state, ok := cached.Extra[service.OpenAIAutoResetCreditStateExtraKey].(map[string]any)
 	require.True(t, ok, "卡状态必须进入调度投影")

@@ -516,3 +516,13 @@ func TestSetClaudeCodeClientContext_ParsedRequestProbeWithoutSystemPrompt(t *tes
 	SetClaudeCodeClientContext(c2, nil, &service.ParsedRequest{Model: "claude-sonnet-4-5", MaxTokens: 64})
 	require.False(t, service.IsClaudeCodeClient(c2.Request.Context()))
 }
+
+func (s *helperConcurrencyCacheStub) TrackAPIKeyImageSlot(context.Context, int64, string) error {
+	return nil
+}
+func (s *helperConcurrencyCacheStub) ReleaseAPIKeyImageSlot(context.Context, int64, string) error {
+	return nil
+}
+func (s *helperConcurrencyCacheStub) GetAPIKeyImageConcurrencyBatch(context.Context, []int64) (map[int64]int, error) {
+	return map[int64]int{}, nil
+}

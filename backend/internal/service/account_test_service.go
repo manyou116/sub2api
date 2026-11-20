@@ -813,6 +813,12 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string) error {
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
+	if account.IsImageShadow() {
+		if modelID == "" {
+			modelID = "gpt-image-2"
+		}
+		return s.testWebImage(c, account, account.GetMappedModel(modelID), prompt)
+	}
 
 	// Default to openai.DefaultTestModel for OpenAI testing
 	testModelID := modelID
@@ -903,7 +909,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	if isOAuth {
 		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
 	}
-	payload := createOpenAITestPayload(upstreamTestModelID, isOAuth)
+	payload := createOpenAITestPayload(upstreamTestModelID, prompt, isOAuth)
 	payloadBytes, _ := json.Marshal(payload)
 
 	// Send test_start event once. A task-invalid Agent Identity response may
@@ -2848,7 +2854,11 @@ func (s *AccountTestService) processGeminiStream(c *gin.Context, body io.Reader)
 }
 
 // createOpenAITestPayload creates a test payload for OpenAI Responses API
-func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
+func createOpenAITestPayload(modelID string, prompt string, isOAuth bool) map[string]any {
+	if strings.TrimSpace(prompt) == "" {
+		prompt = "hi"
+	}
+
 	payload := map[string]any{
 		"model": modelID,
 		"input": []map[string]any{
@@ -2857,7 +2867,7 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 				"content": []map[string]any{
 					{
 						"type": "input_text",
-						"text": "hi",
+						"text": prompt,
 					},
 				},
 			},
@@ -3346,7 +3356,6 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
 }
-
 func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 	if event.Type == "test_complete" {
 		if suppress, ok := c.Get(accountTestSuppressCompletionContextKey); ok {

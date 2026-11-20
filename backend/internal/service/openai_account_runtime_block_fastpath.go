@@ -116,6 +116,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 				return s.rateLimitService.HandleTempUnschedulable(stateCtx, account, statusCode, ruleBody, model)
 			}
 		}
+		observeOpenAICapacity(account, 1)
 		return false
 	}
 	stateCtx, cancel := openAIAccountStateContext(ctx)

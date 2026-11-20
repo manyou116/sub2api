@@ -257,6 +257,7 @@ func TestAccountRepository_UpdateGrokOAuthCredentialsIfUnchanged_UsesExactAttemp
 	require.Contains(t, normalized, "credentials = $5::jsonb")
 	require.Contains(t, normalized, "proxy_id IS NOT DISTINCT FROM $6")
 	require.Contains(t, normalized, "INSERT INTO scheduler_outbox")
+	require.Contains(t, normalized, `SELECT $7, updated.id, NULL, '{"cache_only":true}'::jsonb FROM updated`)
 	require.Len(t, exec.execArgs[0], 7)
 	require.Equal(t, &proxyID, exec.execArgs[0][5])
 }

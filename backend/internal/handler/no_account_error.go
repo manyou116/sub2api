@@ -35,6 +35,7 @@ type noAccountErrorClassification struct {
 }
 
 var selectionModelRateLimitedPattern = regexp.MustCompile(`(?:model_rate_limited|rate_limited)=(\d+)`)
+var selectionFailureCountPattern = regexp.MustCompile(`\b([a-z][a-z0-9_]*)=(\d+)\b`)
 
 // classifySelectionFailureError preserves the scheduler's compact reason when
 // every model-capable account is temporarily rate limited.
@@ -66,6 +67,19 @@ func classifySelectionFailureError(err error, fallback noAccountErrorClassificat
 	count, parseErr := strconv.Atoi(match[1])
 	if parseErr != nil || count <= 0 {
 		return fallback
+	}
+	// A rate-limited candidate does not describe the whole pool when other
+	// candidates are blocked by cooldowns, authentication, quota or capacity.
+	// Ignore unsupported models and explicitly excluded accounts: neither is
+	// available to this selection in the first place.
+	for _, match := range selectionFailureCountPattern.FindAllStringSubmatch(strings.ToLower(err.Error()), -1) {
+		switch match[1] {
+		case "pool", "total", "eligible", "model_rate_limited", "rate_limited", "model_not_supported", "excluded":
+			continue
+		}
+		if n, err := strconv.Atoi(match[2]); err != nil || n > 0 {
+			return fallback
+		}
 	}
 	return noAccountErrorClassification{
 		Status:  http.StatusTooManyRequests,

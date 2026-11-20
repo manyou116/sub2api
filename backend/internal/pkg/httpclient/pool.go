@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/proxybudget"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
@@ -94,6 +95,8 @@ func buildClient(opts Options) (*http.Client, error) {
 		rt = newValidatedTransport(transport)
 	}
 	rt = servertiming.WrapRoundTripper(rt)
+	// 共享客户端的代理请求统一经预算 adapter；直连和未配置时保持原 RoundTripper。
+	rt = proxybudget.NewFromEnv().WrapRoundTripper(rt, opts.ProxyURL)
 	return &http.Client{
 		Transport: rt,
 		Timeout:   opts.Timeout,

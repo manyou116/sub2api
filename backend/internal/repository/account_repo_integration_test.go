@@ -1284,7 +1284,7 @@ func (s *AccountRepoSuite) TestUpdateGrokOAuthCredentialsIfUnchanged_AppliesAndP
 	err = scanSingleRow(
 		s.ctx,
 		s.repo.sql,
-		"SELECT COUNT(*) FROM scheduler_outbox WHERE event_type = $1 AND account_id = $2",
+		`SELECT COUNT(*) FROM scheduler_outbox WHERE event_type = $1 AND account_id = $2 AND payload = '{"cache_only":true}'::jsonb`,
 		[]any{service.SchedulerOutboxEventAccountChanged, account.ID},
 		&outboxCount,
 	)

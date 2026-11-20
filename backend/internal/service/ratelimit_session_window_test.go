@@ -48,6 +48,7 @@ func (m *sessionWindowMockRepo) ClearRateLimit(_ context.Context, id int64) erro
 	m.clearRateLimitIDs = append(m.clearRateLimitIDs, id)
 	return nil
 }
+
 func (m *sessionWindowMockRepo) ClearAntigravityQuotaScopes(_ context.Context, _ int64) error {
 	return nil
 }
@@ -141,6 +142,7 @@ func (m *sessionWindowMockRepo) ListSchedulableByPlatforms(context.Context, []st
 func (m *sessionWindowMockRepo) ListSchedulableByGroupIDAndPlatforms(context.Context, int64, []string) ([]Account, error) {
 	panic("unexpected")
 }
+
 func (m *sessionWindowMockRepo) ListSchedulableUngroupedByPlatform(context.Context, string) ([]Account, error) {
 	panic("unexpected")
 }

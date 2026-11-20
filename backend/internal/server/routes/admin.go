@@ -379,6 +379,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/:id/duplicate", h.Admin.Account.Duplicate)
 		accounts.POST("/check-mixed-channel", h.Admin.Account.CheckMixedChannel)
 		accounts.POST("/import/codex-session", h.Admin.Account.ImportCodexSession)
+		registerKiroAdminRoutes(accounts, h)
 		accounts.POST("/sync/crs", h.Admin.Account.SyncFromCRS)
 		accounts.POST("/sync/crs/preview", h.Admin.Account.PreviewFromCRS)
 		accounts.PUT("/:id", h.Admin.Account.Update)
@@ -432,6 +433,13 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 
 		// Spark 影子账号
 		accounts.POST("/:id/shadow", h.Admin.OpenAIOAuth.CreateShadow)
+		accounts.POST("/:id/web-image-shadow", h.Admin.OpenAIOAuth.CreateWebImageShadow)
+		accounts.POST("/web-image-shadows", h.Admin.OpenAIOAuth.CreateWebImageShadows)
+		accounts.GET("/image-shadow-models", h.Admin.OpenAIOAuth.ImageShadowModels)
+		accounts.POST("/:id/web-image-shadow-conversion", h.Admin.OpenAIOAuth.ConvertLegacyWebImageShadow)
+		accounts.POST("/web-image/status", h.Admin.OpenAIOAuth.BatchWebImageStatus)
+		accounts.GET("/:id/web-image/status", h.Admin.OpenAIOAuth.WebImageStatus)
+		accounts.POST("/:id/web-image/probe", h.Admin.OpenAIOAuth.ProbeWebImage)
 
 		// Claude OAuth routes
 		accounts.POST("/generate-auth-url", h.Admin.OAuth.GenerateAuthURL)
@@ -592,6 +600,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		// 429默认回避配置
 		adminSettings.GET("/rate-limit-429-cooldown", h.Admin.Setting.GetRateLimit429CooldownSettings)
 		adminSettings.PUT("/rate-limit-429-cooldown", h.Admin.Setting.UpdateRateLimit429CooldownSettings)
+		adminSettings.GET("/openai-capacity-cooldown", h.Admin.Setting.GetOpenAICapacityCooldownSettings)
+		adminSettings.PUT("/openai-capacity-cooldown", h.Admin.Setting.UpdateOpenAICapacityCooldownSettings)
 		// OpenAI OAuth image-tool unavailable cooldown configuration
 		adminSettings.GET("/openai-images-oauth-unavailable-cooldown", h.Admin.Setting.GetOpenAIImagesOAuthUnavailableCooldownSettings)
 		adminSettings.PUT("/openai-images-oauth-unavailable-cooldown", h.Admin.Setting.UpdateOpenAIImagesOAuthUnavailableCooldownSettings)

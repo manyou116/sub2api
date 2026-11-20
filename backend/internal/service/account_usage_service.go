@@ -393,7 +393,7 @@ func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *A
 		return s.getPassiveUsageForAccount(ctx, account)
 	}
 
-	if account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth {
+	if account.Platform == PlatformOpenAI && (account.Type == AccountTypeOAuth || account.IsImageShadow()) {
 		// Usage can come from a stored snapshot even when a probe fails. Neither
 		// that nor a working access token proves a rejected refresh token recovered.
 		return s.getOpenAIUsage(ctx, account, forceProbe)
@@ -780,8 +780,16 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 	now := time.Now()
 	usage := &UsageInfo{Source: "passive"}
 
-	if account == nil {
+	if account == nil || account.IsWebImageShadow() {
 		return usage, nil
+	}
+
+	if account.IsWorkImageShadow() {
+		parent, err := resolveCredentialAccount(ctx, s.accountRepo, account)
+		if err != nil {
+			return nil, err
+		}
+		return s.getOpenAIUsage(ctx, parent, force)
 	}
 
 	applyExtraToUsage(usage, account.Extra, now)
@@ -792,7 +800,7 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 			if s.openAIQuotaService != nil {
 				if quotaUsage, err := s.openAIQuotaService.QueryUsage(WithScopedAdminAccountOperation(ctx, "accounts.usage.read"), account.ID); err == nil {
 					updates := buildOpenAIAutoResetUsageUpdates(quotaUsage, now)
-					if account.IsShadow() {
+					if account.IsSparkShadow() {
 						updates = buildCodexSparkWindowExtraUpdates(quotaUsage, now)
 					}
 					if hasOpenAIQuotaObservation(updates) {
@@ -803,7 +811,7 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 					}
 				}
 			}
-		} else if account.IsShadow() {
+		} else if account.IsSparkShadow() {
 			// Spark shadow accounts fetch usage from /wham/usage (bengalfox channel)
 			// via the shared OpenAIQuotaService, which resolves credentials from the
 			// parent account.  The result is written to the shadow row's own codex_*
@@ -881,7 +889,7 @@ func isOpenAICodexSnapshotStale(account *Account, now time.Time) bool {
 	// (/wham/usage body 的 codex_bengalfox),与 WSv2 无关——不能用 WSv2 门控其 staleness,否则首刷后
 	// codex_5h/7d 已存在→staleness 恒 false→spark 窗口永久冻结(外审第9轮 P1)。影子改按
 	// codex_usage_updated_at TTL 判定;实际查询频率仍由 shouldProbeOpenAICodexSnapshot 的缓存 TTL 节流。
-	if !account.IsShadow() && !account.IsOpenAIResponsesWebSocketV2Enabled() {
+	if !account.IsSparkShadow() && !account.IsOpenAIResponsesWebSocketV2Enabled() {
 		return false
 	}
 	if account.Extra == nil {
@@ -926,7 +934,7 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 		return nil, fmt.Errorf("no access token available")
 	}
 	modelID := openaipkg.CodexUsageProbeModel
-	payload := createOpenAITestPayload(modelID, true)
+	payload := createOpenAITestPayload(modelID, "", true)
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal openai probe payload: %w", err)

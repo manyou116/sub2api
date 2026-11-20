@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
@@ -32,8 +33,8 @@ type OpenAIQuotaResetPostProcessResult struct {
 	WarningCode           string
 }
 
-// RunOpenAIQuotaResetPostProcess 按“解除限流、刷新额度缓存、刷新账号行”的固定顺序
-// 执行消费后恢复，避免手动和自动入口在失败语义上逐渐分叉。
+// RunOpenAIQuotaResetPostProcess 解除限流、刷新额度缓存，再核对刷新期间重新出现的
+// 阈值停调，避免手动和自动用卡后仍需人工重置账号状态。
 func RunOpenAIQuotaResetPostProcess(
 	ctx context.Context,
 	accountID int64,
@@ -52,6 +53,7 @@ func RunOpenAIQuotaResetPostProcess(
 		return result
 	}
 	result.AccountStateRecovered = true
+	usageRefreshed := false
 
 	if quota != nil {
 		usage, usageErr := quota.QueryUsage(ctx, accountID)
@@ -61,9 +63,11 @@ func RunOpenAIQuotaResetPostProcess(
 			result.WarningCode = OpenAIQuotaResetWarningCacheRefreshFailed
 		default:
 			if err := quota.CachePostResetSnapshot(ctx, accountID, usage); err != nil {
+				usageRefreshed = infraerrors.Reason(err) == "OPENAI_QUOTA_RESET_CREDITS_REFRESH_FAILED"
 				slog.Warn("openai_quota_reset_cache_refresh_failed", "account_id", accountID, "error_code", infraerrors.Reason(err))
 				result.WarningCode = OpenAIQuotaResetWarningCacheRefreshFailed
 			} else {
+				usageRefreshed = true
 				result.Quota = usage
 				result.CacheRefreshed = true
 			}
@@ -74,6 +78,20 @@ func RunOpenAIQuotaResetPostProcess(
 		return result
 	}
 	account, err := loadAccount(ctx, accountID)
+	// The initial recovery exposes the account while its old exhausted usage
+	// is still cached. A concurrent scheduler can persist another threshold
+	// pause during the upstream refresh; clear that pause after the new usage
+	// has been written. Other newly observed failures must remain intact.
+	if usageRefreshed && err == nil && shouldRecoverPostResetThresholdPause(account) {
+		if _, recoveryErr := recoverer.RecoverAccountState(ctx, accountID, AccountRecoveryOptions{InvalidateToken: true}); recoveryErr != nil {
+			slog.Warn("openai_quota_reset_account_recovery_failed", "account_id", accountID, "error_code", infraerrors.Reason(recoveryErr))
+			result.AccountStateRecovered = false
+			result.WarningCode = OpenAIQuotaResetWarningAccountRecoveryFailed
+			result.Account = account
+			return result
+		}
+		account, err = loadAccount(ctx, accountID)
+	}
 	if err != nil {
 		slog.Warn("openai_quota_reset_account_refresh_failed", "account_id", accountID, "error_code", infraerrors.Reason(err))
 		if result.WarningCode == "" {
@@ -83,4 +101,18 @@ func RunOpenAIQuotaResetPostProcess(
 	}
 	result.Account = account
 	return result
+}
+
+func shouldRecoverPostResetThresholdPause(account *Account) bool {
+	if account == nil || account.TempUnschedulableUntil == nil {
+		return false
+	}
+	reason, ok := parseTempUnschedReasonPayload(account.TempUnschedulableReason)
+	if !ok || reason.Source != AccountSchedulingThresholdReasonSource {
+		return false
+	}
+	// A different window can remain exhausted after a partial upstream reset.
+	// Reuse the threshold evaluator so a valid pause is not cleared as stale.
+	decision := EvaluateAccountSchedulingThreshold(account, map[string]int{account.Platform: reason.ThresholdPercent}, time.Now())
+	return reason.ThresholdPercent < 1 || !decision.ShouldPause
 }

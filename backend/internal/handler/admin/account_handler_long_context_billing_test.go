@@ -182,7 +182,7 @@ func TestApplyOAuthCredentialsPreservesExistingNonAuthCredentials(t *testing.T) 
 
 func TestOpenAIOAuthCodexPATBoundaryRejectsMalformedOpenAILongContextBillingValueBeforeTokenValidation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	handler := NewOpenAIOAuthHandler(nil, newStubAdminService(), nil, nil)
+	handler := NewOpenAIOAuthHandler(nil, newStubAdminService(), nil, nil, nil)
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.POST("/openai/create-from-codex-pat", handler.CreateAccountFromCodexPAT)

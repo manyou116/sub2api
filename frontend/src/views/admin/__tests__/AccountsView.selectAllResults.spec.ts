@@ -2,11 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import AccountsView from '../AccountsView.vue'
+import BatchWebImageShadowDialog from '@/components/account/BatchWebImageShadowDialog.vue'
 
 const {
   listAccounts,
   listWithEtag,
   batchRefresh,
+  bulkUpdate,
   getBatchTodayStats,
   getUpstreamBillingProbeSettings,
   getAllProxies,
@@ -16,6 +18,7 @@ const {
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
   batchRefresh: vi.fn(),
+  bulkUpdate: vi.fn(),
   getBatchTodayStats: vi.fn(),
   getUpstreamBillingProbeSettings: vi.fn(),
   getAllProxies: vi.fn(),
@@ -33,7 +36,7 @@ vi.mock('@/api/admin', () => ({
       batchDelete: vi.fn(),
       batchClearError: vi.fn(),
       batchRefresh,
-      bulkUpdate: vi.fn()
+      bulkUpdate
     },
     proxies: {
       getAll: getAllProxies
@@ -80,8 +83,8 @@ const makeAccounts = (count: number) => Array.from({ length: count }, (_, index)
 }))
 
 const AccountBulkActionsBarStub = {
-  props: ['selectedIds', 'totalResults', 'selectingAll', 'allResultsSelected'],
-  emits: ['select-all-results', 'select-page', 'clear', 'refresh-token'],
+  props: ['selectedIds', 'totalResults', 'selectingAll', 'allResultsSelected', 'rateLimitReconcileBusy'],
+  emits: ['select-all-results', 'select-page', 'clear', 'refresh-token', 'toggle-rate-limit-reconcile', 'create-web-image-shadows'],
   template: `
     <div>
       <span data-test="selected-count">{{ selectedIds.length }}</span>
@@ -91,6 +94,9 @@ const AccountBulkActionsBarStub = {
       <button data-test="select-all-results" @click="$emit('select-all-results')">select all</button>
       <button data-test="clear" @click="$emit('clear')">clear</button>
       <button data-test="refresh-token" @click="$emit('refresh-token')">refresh token</button>
+      <button data-test="enable-reconcile" @click="$emit('toggle-rate-limit-reconcile', true)">enable</button>
+      <button data-test="disable-reconcile" @click="$emit('toggle-rate-limit-reconcile', false)">disable</button>
+      <button data-test="create-web-shadows" @click="$emit('create-web-image-shadows')">create images</button>
     </div>
   `
 }
@@ -129,6 +135,7 @@ const mountView = () => mount(AccountsView, {
       CreateAccountModal: true,
       EditAccountModal: true,
       BulkEditAccountModal: true,
+      BatchWebImageShadowDialog: true,
       PlatformTypeBadge: true,
       AccountCapacityCell: true,
       AccountStatusIndicator: true,
@@ -146,6 +153,7 @@ describe('admin AccountsView select all filtered results', () => {
     listAccounts.mockReset()
     listWithEtag.mockReset()
     batchRefresh.mockReset()
+    bulkUpdate.mockReset()
     getBatchTodayStats.mockReset()
     getUpstreamBillingProbeSettings.mockReset()
     getAllProxies.mockReset()
@@ -195,6 +203,59 @@ describe('admin AccountsView select all filtered results', () => {
     wrapper.unmount()
   })
 
+  it.each([true, false])('updates only selected accounts with reconciliation enabled=%s', async (enabled) => {
+    listAccounts.mockResolvedValue({ items: makeAccounts(3), total: 3, page: 1, page_size: 20, pages: 1 })
+    bulkUpdate.mockResolvedValue({ success: 2, failed: 0, success_ids: [1, 3], failed_ids: [] })
+    const wrapper = mountView()
+    await flushPromises()
+    const rows = wrapper.findAll<HTMLInputElement>('[data-test="data-table"] input')
+    await rows[0].setValue(true)
+    await rows[2].setValue(true)
+    await wrapper.get(`[data-test="${enabled ? 'enable' : 'disable'}-reconcile"]`).trigger('click')
+    await flushPromises()
+
+    expect(bulkUpdate).toHaveBeenCalledWith([1, 3], { extra: { openai_rate_limit_reconcile_enabled: enabled } })
+    expect(wrapper.getComponent(AccountBulkActionsBarStub).props('selectedIds')).toEqual([])
+    expect(listAccounts).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('blocks concurrent quota toggles and keeps failed accounts selected', async () => {
+    listAccounts.mockResolvedValue({ items: makeAccounts(3), total: 3, page: 1, page_size: 20, pages: 1 })
+    let finish!: (value: unknown) => void
+    bulkUpdate.mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-test="select-page"]').trigger('click')
+    await wrapper.get('[data-test="enable-reconcile"]').trigger('click')
+    await wrapper.get('[data-test="disable-reconcile"]').trigger('click')
+    expect(bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(wrapper.getComponent(AccountBulkActionsBarStub).props('rateLimitReconcileBusy')).toBe(true)
+    finish({ success: 2, failed: 1, failed_ids: [2] })
+    await flushPromises()
+    expect(wrapper.getComponent(AccountBulkActionsBarStub).props('selectedIds')).toEqual([2])
+    expect(wrapper.getComponent(AccountBulkActionsBarStub).props('rateLimitReconcileBusy')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it.each([
+    { result: { success: 0, failed: 0 }, reject: false },
+    { result: null, reject: true }
+  ])('keeps selection when quota toggle completion is uncertain: %s', async ({ result, reject }) => {
+    listAccounts.mockResolvedValue({ items: makeAccounts(3), total: 3, page: 1, page_size: 20, pages: 1 })
+    if (reject) bulkUpdate.mockRejectedValue(new Error('unsupported target'))
+    else bulkUpdate.mockResolvedValue(result)
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-test="select-page"]').trigger('click')
+    await wrapper.get('[data-test="enable-reconcile"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.getComponent(AccountBulkActionsBarStub).props('selectedIds')).toEqual([1, 2, 3])
+    expect(showError).toHaveBeenCalled()
+    expect(wrapper.getComponent(AccountBulkActionsBarStub).props('rateLimitReconcileBusy')).toBe(false)
+    wrapper.unmount()
+  })
+
   it('selects all matching IDs in one commit and clears the selection when filters change', async () => {
     const allAccounts = makeAccounts(45)
     listAccounts.mockImplementation(async (_page: number, pageSize: number) => {
@@ -230,10 +291,19 @@ describe('admin AccountsView select all filtered results', () => {
       include_scheduler_score: '0'
     }))
 
+    await wrapper.get('[data-test="create-web-shadows"]').trigger('click')
+    const batchDialog = wrapper.getComponent(BatchWebImageShadowDialog)
+    expect(batchDialog.props('show')).toBe(true)
+    expect(batchDialog.props('parentIds')).toEqual(allAccounts.map(account => account.id))
+    batchDialog.vm.$emit('close')
+    await flushPromises()
+    expect(batchDialog.props('show')).toBe(false)
+
     await wrapper.get('[data-test="change-filter"]').trigger('click')
 
     expect(wrapper.get('[data-test="selected-count"]').text()).toBe('0')
     expect(wrapper.get('[data-test="all-results-selected"]').text()).toBe('false')
+    wrapper.unmount()
   })
 
   it('keeps the original page selection when loading all results fails', async () => {

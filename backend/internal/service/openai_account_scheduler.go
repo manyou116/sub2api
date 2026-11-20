@@ -119,6 +119,8 @@ type OpenAIAccountSchedulerMetricsSnapshot struct {
 	AccountSwitchRate        float64
 	LoadSkewAvg              float64
 	RuntimeStatsAccountCount int
+	BoundedProbeTotal        int64
+	BoundedProbeFallbacks    int64
 }
 
 type OpenAIAccountScheduler interface {
@@ -574,7 +576,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		)
 		return nil, true, nil
 	}
-	result, acquireErr := s.service.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
+	result, acquireErr := s.service.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
 	if acquireErr != nil && req.DisableStickyEscape {
 		return nil, false, acquireErr
 	}
@@ -582,11 +584,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 		if !req.PreserveStickyBinding {
 			_ = s.service.refreshStickySessionTTL(ctx, req.GroupID, sessionHash, s.service.openAIWSSessionStickyTTL())
 		}
-		return attachSelectionProfitGate(ctx, &AccountSelectionResult{
-			Account:     account,
-			Acquired:    true,
-			ReleaseFunc: result.ReleaseFunc,
-		}), false, nil
+		return attachSelectionProfitGate(ctx, &AccountSelectionResult{Account: account, Acquired: true, ReleaseFunc: result.ReleaseFunc}), false, nil
 	}
 
 	cfg := s.service.schedulingConfig()
@@ -1331,11 +1329,7 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 			if req.SessionHash != "" && !req.PreserveStickyBinding {
 				_ = s.service.bindOpenAIStickySessionDuringSelection(ctx, req.GroupID, req.SessionHash, account.ID)
 			}
-			return attachSelectionProfitGate(ctx, &AccountSelectionResult{
-				Account:     account,
-				Acquired:    true,
-				ReleaseFunc: result.ReleaseFunc,
-			}), nil
+			return attachSelectionProfitGate(ctx, &AccountSelectionResult{Account: account, Acquired: true, ReleaseFunc: result.ReleaseFunc}), nil
 		}
 		if s.service.concurrencyService != nil {
 			cfg := s.service.schedulingConfig()
@@ -1435,9 +1429,15 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		accounts = modelFiltered
 	}
 
+	requirePrivacy := req.RequirePrivacySet
+	if !requirePrivacy && req.GroupID != nil && s.service.schedulerSnapshot != nil {
+		group, _ := s.service.schedulerSnapshot.GetGroupByIDLite(ctx, *req.GroupID)
+		requirePrivacy = group != nil && group.RequirePrivacySet
+	}
 	filterStats := openAISelectionFilterStats{pool: len(accounts)}
 	filtered := make([]*Account, 0, len(accounts))
 	loadReq := make([]AccountWithConcurrency, 0, len(accounts))
+	candidateCtx := s.service.webImageCandidateContext(ctx, accounts)
 	for i := range accounts {
 		account := &accounts[i]
 		if req.ExcludedIDs != nil {
@@ -1446,27 +1446,26 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 				continue
 			}
 		}
-		if !account.IsSchedulable() {
-			filterStats.exclude("not_schedulable")
-			continue
-		}
 		if account.Platform != NormalizeOpenAICompatiblePlatform(req.Platform) || !account.IsOpenAICompatible() {
 			filterStats.exclude("platform_mismatch")
 			continue
 		}
-		if s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) {
+		if !account.IsSchedulable() {
+			filterStats.exclude("not_schedulable")
+			continue
+		}
+		if s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) || openAICapacityBlocked(ctx, account, req.RequestedModel) {
 			filterStats.exclude("runtime_blocked")
 			continue
 		}
 		// require_privacy_set is a group-scoped eligibility gate. Do not mutate the
 		// shared account: another group may intentionally allow accounts whose
 		// upstream privacy setting has not been confirmed.
-		// Select already resolved the group requirement into req.
-		if req.RequirePrivacySet && !account.IsPrivacySet() {
+		if requirePrivacy && !s.service.openAIRequestPrivacySet(candidateCtx, account) {
 			filterStats.exclude("privacy_not_set")
 			continue
 		}
-		if compatible, reason := s.isAccountRequestCompatibleReason(ctx, account, req); !compatible {
+		if compatible, reason := s.isAccountRequestCompatibleReason(candidateCtx, account, req); !compatible {
 			filterStats.exclude(reason)
 			continue
 		}
@@ -1746,6 +1745,11 @@ func (s *defaultOpenAIAccountScheduler) isAccountTransportCompatible(account *Ac
 }
 
 func (s *defaultOpenAIAccountScheduler) lookupShadowParentAccount(ctx context.Context, id int64) *Account {
+	if state, ok := ctx.Value(webImageCandidateKey{}).(*webImageCandidateState); ok {
+		if parent, exists := state.parents[id]; exists {
+			return parent
+		}
+	}
 	if s == nil || s.service == nil {
 		return nil
 	}
@@ -1774,15 +1778,26 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	if imageShadowRouteMismatch(ctx, account, req.RequestedModel) {
+		return false, "image_shadow_mode_mismatch"
+	}
+	if account.IsImageShadow() {
+		if s == nil || s.service == nil {
+			return false, "web_image_service_unavailable"
+		}
+		if reason := s.service.webImageSchedulingReason(ctx, account, req.RequestedModel); reason != "" {
+			return false, reason
+		}
+	}
 	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
 		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
 			return false, "account_model_not_owned"
 		}
 	}
-	if req.RequirePrivacySet && !account.IsPrivacySet() {
+	if req.RequirePrivacySet && (s == nil || s.service == nil || !s.service.openAIRequestPrivacySet(ctx, account)) {
 		return false, "privacy_not_set"
 	}
-	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) {
+	if (s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel)) || openAICapacityBlocked(ctx, account, req.RequestedModel) {
 		return false, "runtime_blocked"
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(ctx, account) {
@@ -2143,6 +2158,10 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 	excludedIDs map[int64]struct{},
 	requiredCapability OpenAIImagesCapability,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	ctx, routeErr := s.imageShadowRoutingContext(ctx, groupID, requestedModel)
+	if routeErr != nil {
+		return nil, OpenAIAccountScheduleDecision{}, routeErr
+	}
 	selection, decision, err := s.selectAccountWithScheduler(ctx, groupID, "", sessionHash, requestedModel, excludedIDs, OpenAIUpstreamTransportHTTPSSE, "", requiredCapability, false, PlatformOpenAI, false, false)
 	if err == nil && selection != nil && selection.Account != nil {
 		return selection, decision, nil
@@ -2161,7 +2180,7 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 // zeroing out capacity. The retry re-runs the exact same selection with the
 // quarantine checks bypassed, so healthy proxies always win the first pass
 // and quarantined ones only serve when nothing else can.
-func (s *OpenAIGatewayService) selectAccountWithScheduler(
+func (s *OpenAIGatewayService) selectAccountWithSchedulerBase(
 	ctx context.Context,
 	groupID *int64,
 	previousResponseID string,
@@ -2560,6 +2579,7 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(account *Accoun
 		return false
 	}
 	accountID := account.ID
+	observeOpenAICapacityResult(account, success, observedErr...)
 	healthTripped := false
 	if s != nil && s.rateLimitService != nil {
 		if success {
@@ -2586,6 +2606,7 @@ func (s *OpenAIGatewayService) ObserveOpenAIAccountHealthFailure(ctx context.Con
 	if s == nil || s.rateLimitService == nil || account == nil || observedErr == nil {
 		return false
 	}
+	observeOpenAICapacityResult(account, false, observedErr)
 	return s.rateLimitService.ObserveOpenAIAPIKeyHealthFailure(ctx, account, observedErr)
 }
 
@@ -2598,11 +2619,20 @@ func (s *OpenAIGatewayService) RecordOpenAIAccountSwitch() {
 }
 
 func (s *OpenAIGatewayService) SnapshotOpenAIAccountSchedulerMetrics() OpenAIAccountSchedulerMetricsSnapshot {
-	scheduler := s.getOpenAIAccountScheduler(context.Background())
-	if scheduler == nil {
+	if s == nil {
 		return OpenAIAccountSchedulerMetricsSnapshot{}
 	}
-	return scheduler.SnapshotMetrics()
+	scheduler := s.getOpenAIAccountScheduler(context.Background())
+	if scheduler == nil {
+		return OpenAIAccountSchedulerMetricsSnapshot{
+			BoundedProbeTotal:     s.legacyBoundedProbeTotal.Load(),
+			BoundedProbeFallbacks: s.legacyBoundedProbeFallbacks.Load(),
+		}
+	}
+	snapshot := scheduler.SnapshotMetrics()
+	snapshot.BoundedProbeTotal += s.legacyBoundedProbeTotal.Load()
+	snapshot.BoundedProbeFallbacks += s.legacyBoundedProbeFallbacks.Load()
+	return snapshot
 }
 
 func (s *OpenAIGatewayService) openAIWSSessionStickyTTL() time.Duration {

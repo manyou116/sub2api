@@ -536,6 +536,11 @@ func (r *accountRepository) updateLockedAccount(
 	if err != nil {
 		return nil, err
 	}
+	if account.Platform == service.PlatformOpenAI && account.Type == service.AccountTypeOAuth {
+		if err := preserveOpenAIReconcileExtra(ctx, client, account, extra); err != nil {
+			return nil, err
+		}
+	}
 	account.Extra = extra
 
 	schedulable := account.Schedulable
@@ -962,7 +967,7 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				ELSE extra
 			END,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND deleted_at IS NULL AND parent_account_id IS NULL
 	`, string(payload), id)
 	if err != nil {
 		return err
@@ -974,7 +979,10 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 	if affected == 0 {
 		return service.ErrAccountNotFound
 	}
-	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+	// Credentials and their derived observation fields do not change bucket
+	// membership or ordering. Keep durable replay, but only refresh the account
+	// payload; older consumers safely ignore this hint and rebuild as before.
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, map[string]any{"cache_only": true}); err != nil {
 		return err
 	}
 	if tx != nil {
@@ -1683,7 +1691,7 @@ func (r *accountRepository) UpdateGrokOAuthCredentialsIfUnchanged(
 		RETURNING a.id
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
-		SELECT $7, updated.id, NULL, NULL FROM updated
+		SELECT $7, updated.id, NULL, '{"cache_only":true}'::jsonb FROM updated
 	`,
 		string(credentialsJSON),
 		id,
@@ -2127,10 +2135,27 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			}
 			for i := range accounts {
 				acc := &accounts[i]
+				if acc.IsShadow() {
+					parent, err := r.GetByID(ctx, *acc.ParentAccountID)
+					if err != nil || parent == nil || parent.IsShadow() {
+						continue
+					}
+					if acc.IsImageShadow() {
+						if service.ValidateWebImageShadowParent(parent) != nil || !parent.IsCredentialUsableForWebImages() {
+							continue
+						}
+						if acc.IsWorkImageShadow() && (parent.IsRateLimited() || parent.IsOverloaded()) {
+							continue
+						}
+					} else if !parent.IsOpenAIOAuth() || !parent.IsCredentialUsableForShadow() {
+						continue
+					}
+				}
 				rows = append(rows, service.GroupAccountCapacityRow{
 					GroupID:             groupID,
 					AccountID:           acc.ID,
 					Concurrency:         acc.Concurrency,
+					QuotaDimension:      acc.QuotaDimensionOrDefault(),
 					Extra:               copyJSONMap(acc.Extra),
 					SessionWindowStart:  acc.SessionWindowStart,
 					SessionWindowEnd:    acc.SessionWindowEnd,
@@ -2146,6 +2171,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			ag.group_id,
 			a.id AS account_id,
 			a.concurrency,
+			a.quota_dimension,
 			COALESCE(a.extra, '{}'::jsonb)::text AS extra,
 			a.session_window_start,
 			a.session_window_end,
@@ -2160,8 +2186,23 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
 			AND (a.overload_until IS NULL OR a.overload_until <= $3)
 			AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= $3)
+			AND (a.parent_account_id IS NULL OR EXISTS (
+				SELECT 1 FROM accounts p WHERE p.id = a.parent_account_id
+				AND p.deleted_at IS NULL AND p.parent_account_id IS NULL AND p.status = $2
+				AND p.platform = 'openai'
+				AND (p.expires_at IS NULL OR p.expires_at > $3 OR p.auto_pause_on_expired = FALSE)
+				AND (p.temp_unschedulable_until IS NULL OR p.temp_unschedulable_until <= $3
+					OR (a.quota_dimension IN ('web_images', 'work_images') AND left(COALESCE(p.temp_unschedulable_reason, ''), length($4)) = $4))
+				AND ((a.quota_dimension = 'spark' AND p.type = 'oauth') OR
+					(a.quota_dimension IN ('web_images', 'work_images') AND p.type IN ('oauth', 'setup-token')
+					AND trim(COALESCE(p.credentials->>'access_token', '')) <> ''
+					AND lower(trim(COALESCE(p.credentials->>'auth_mode', ''))) <> 'agentidentity'
+					AND ((a.quota_dimension = 'web_images' AND (p.web_image_rate_limit_reset_at IS NULL OR p.web_image_rate_limit_reset_at <= $3))
+						OR (a.quota_dimension = 'work_images' AND (p.rate_limit_reset_at IS NULL OR p.rate_limit_reset_at <= $3)
+							AND (p.overload_until IS NULL OR p.overload_until <= $3)))))
+			))
 		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC
-	`, pq.Array(groupIDs), service.StatusActive, time.Now())
+	`, pq.Array(groupIDs), service.StatusActive, time.Now(), service.OpenAICapacityCooldownReasonPrefix)
 	if err != nil {
 		return nil, err
 	}
@@ -2175,6 +2216,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			&row.GroupID,
 			&row.AccountID,
 			&row.Concurrency,
+			&row.QuotaDimension,
 			&extraRaw,
 			&row.SessionWindowStart,
 			&row.SessionWindowEnd,
@@ -2550,15 +2592,31 @@ func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until t
 }
 
 func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
+	// A scheduler may still hold a snapshot from before an administrator
+	// disabled this window. Fence that delayed threshold write in the DB too.
+	var thresholdReason struct{ Source, Window string }
+	disabledKey := ""
+	if json.Unmarshal([]byte(reason), &thresholdReason) == nil && thresholdReason.Source == service.AccountSchedulingThresholdReasonSource &&
+		(thresholdReason.Window == "5h" || thresholdReason.Window == "7d") {
+		disabledKey = "auto_pause_" + thresholdReason.Window + "_disabled"
+	}
 	result, err := r.sql.ExecContext(ctx, `
 		UPDATE accounts
-		SET temp_unschedulable_until = $1,
-			temp_unschedulable_reason = $2,
+		SET temp_unschedulable_until = GREATEST(temp_unschedulable_until, $1),
+			temp_unschedulable_reason = CASE
+				WHEN temp_unschedulable_until > NOW()
+					AND left(COALESCE(temp_unschedulable_reason, ''), length($4)) <> $4
+					AND left($2, length($4)) = $4 THEN temp_unschedulable_reason
+				ELSE $2 END,
 			updated_at = NOW()
 		WHERE id = $3
 			AND deleted_at IS NULL
-			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1)
-	`, until, reason, id)
+			AND ($5 = '' OR platform <> 'openai' OR lower(COALESCE(extra ->> $5, 'false')) NOT IN ('true', '1'))
+			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1
+				OR (temp_unschedulable_until > NOW()
+					AND left(COALESCE(temp_unschedulable_reason, ''), length($4)) = $4
+					AND left($2, length($4)) <> $4))
+	`, until, reason, id, service.OpenAICapacityCooldownReasonPrefix, disabledKey)
 	if err != nil {
 		return err
 	}
@@ -2618,6 +2676,42 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 		return false, err
 	}
 	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
+}
+
+// CompareAndSwapSchedulingThresholdPause fences a background reconciliation
+// against new pauses, usage snapshots, credentials and administrator edits.
+func (r *accountRepository) CompareAndSwapSchedulingThresholdPause(ctx context.Context, observed *service.Account, until *time.Time, reason string) (bool, error) {
+	extra, err := json.Marshal(normalizeJSONMap(observed.Extra))
+	if err != nil {
+		return false, err
+	}
+	credentials, err := json.Marshal(normalizeJSONMap(observed.Credentials))
+	if err != nil {
+		return false, err
+	}
+	result, err := r.sql.ExecContext(ctx, `
+		WITH changed AS (
+			UPDATE accounts
+			SET temp_unschedulable_until = $1, temp_unschedulable_reason = NULLIF($2, ''), updated_at = NOW()
+			WHERE id = $3 AND deleted_at IS NULL AND platform = 'openai'
+				AND temp_unschedulable_until = $4 AND temp_unschedulable_reason = $5
+				AND COALESCE(extra, '{}'::jsonb) = $6::jsonb
+				AND COALESCE(credentials, '{}'::jsonb) = $7::jsonb
+			RETURNING id
+		)
+		INSERT INTO scheduler_outbox(event_type, account_id, created_at)
+		SELECT $8, id, NOW() FROM changed
+	`, until, reason, observed.ID, observed.TempUnschedulableUntil, observed.TempUnschedulableReason,
+		string(extra), string(credentials), service.SchedulerOutboxEventAccountChanged)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	if err != nil || count == 0 {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshot(ctx, observed.ID)
 	return true, nil
 }
 
@@ -4202,16 +4296,13 @@ func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID i
 	return nil
 }
 
-// ListShadowsByParent 返回指定父账号的影子账号；当前实现仅查 quota_dimension='spark'（唯一预设）。
-// 同时过滤 parent_account_id 和 quota_dimension='spark'，防止未来其它 linked 维度被误伤。
-// ⚠️ 新增影子维度时：须更新此函数（或新增维度专用列举），并检查所有调用点（级联删除/一母一影校验/type 守卫），否则会静默漏掉新维度。
-// 软删除行由 SoftDeleteMixin 拦截器自动排除，无需手写 deleted_at IS NULL。
+// ListShadowsByParent lists every live credential shadow for lifecycle operations.
 func (r *accountRepository) ListShadowsByParent(ctx context.Context, parentID int64) ([]*service.Account, error) {
 	if scoped := r.accountTransactionScope(ctx); scoped != r {
 		return scoped.ListShadowsByParent(ctx, parentID)
 	}
 	rows, err := r.client.Account.Query().
-		Where(dbaccount.ParentAccountIDEQ(parentID), dbaccount.QuotaDimensionEQ(dbaccount.QuotaDimensionSpark)).
+		Where(dbaccount.ParentAccountIDEQ(parentID)).
 		All(ctx)
 	if err != nil {
 		return nil, err

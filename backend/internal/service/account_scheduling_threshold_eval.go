@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -184,10 +186,66 @@ func openAIThresholdCandidates(account *Account, now time.Time) []*accountSchedu
 	if !openAICodexSnapshotIdentityTrusted(account) {
 		return nil
 	}
-	return []*accountSchedulingThresholdCandidate{
-		openAIThresholdCandidate(account.Extra, "5h", now),
-		openAIThresholdCandidate(account.Extra, "7d", now),
+	var candidates []*accountSchedulingThresholdCandidate
+	for _, window := range []string{"5h", "7d"} {
+		if !resolveAccountExtraBool(account.Extra, "auto_pause_"+window+"_disabled") {
+			candidates = append(candidates, openAIThresholdCandidate(account.Extra, window, now))
+		}
 	}
+	return candidates
+}
+
+func hasDisabledOpenAIQuotaPause(account *Account) bool {
+	return account != nil && account.IsOpenAI() &&
+		(resolveAccountExtraBool(account.Extra, "auto_pause_5h_disabled") || resolveAccountExtraBool(account.Extra, "auto_pause_7d_disabled"))
+}
+
+// ReconcileDisabledSchedulingThresholdPause removes only a persisted threshold
+// pause for an explicitly disabled window. An enabled exhausted window replaces
+// the old pause, and concurrent configuration or cooldown changes win the CAS.
+func (s *RateLimitService) ReconcileDisabledSchedulingThresholdPause(ctx context.Context, accountID int64) error {
+	repo, ok := s.accountRepo.(interface {
+		CompareAndSwapSchedulingThresholdPause(context.Context, *Account, *time.Time, string) (bool, error)
+	})
+	if !ok || s.settingService == nil {
+		return nil
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || !hasDisabledOpenAIQuotaPause(account) || account.TempUnschedulableUntil == nil {
+		return err
+	}
+	reason, valid := parseTempUnschedReasonPayload(account.TempUnschedulableReason)
+	if !valid || reason.Source != AccountSchedulingThresholdReasonSource ||
+		(reason.Window != "5h" && reason.Window != "7d") ||
+		!resolveAccountExtraBool(account.Extra, "auto_pause_"+reason.Window+"_disabled") {
+		return nil
+	}
+	now := time.Now().UTC()
+	decision := EvaluateAccountSchedulingThreshold(account, s.settingService.GetAccountSchedulingThresholds(ctx), now)
+	var until *time.Time
+	var nextReason string
+	if decision.ShouldPause {
+		until = decision.Until
+		nextReason = BuildDetailedAccountSchedulingThresholdReason(AccountSchedulingThresholdReasonInput{
+			Platform: decision.Platform, Window: decision.Window, Scope: decision.Scope,
+			ThresholdPercent: decision.ThresholdPercent, UsedPercent: decision.UsedPercent,
+			Until: *until, Now: now,
+		})
+	}
+	changed, err := repo.CompareAndSwapSchedulingThresholdPause(ctx, account, until, nextReason)
+	if err != nil || !changed {
+		return err
+	}
+	if s.tempUnschedCache != nil {
+		if err := s.tempUnschedCache.DeleteTempUnsched(ctx, accountID); err != nil {
+			slog.Warn("disabled_threshold_pause_cache_delete_failed", "account_id", accountID, "error", err)
+		}
+	}
+	s.notifyAccountSchedulingBlockCleared(accountID)
+	if until != nil {
+		s.notifyAccountSchedulingBlocked(account, *until, "account_scheduling_threshold")
+	}
+	return nil
 }
 
 func openAICodexSnapshotIdentityTrusted(account *Account) bool {

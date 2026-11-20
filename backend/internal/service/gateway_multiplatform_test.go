@@ -150,6 +150,7 @@ func (m *mockAccountRepoForPlatform) ListSchedulableByPlatforms(ctx context.Cont
 func (m *mockAccountRepoForPlatform) ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]Account, error) {
 	return m.ListSchedulableByPlatforms(ctx, platforms)
 }
+
 func (m *mockAccountRepoForPlatform) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error) {
 	return m.ListSchedulableByPlatform(ctx, platform)
 }
@@ -205,6 +206,7 @@ func (m *mockAccountRepoForPlatform) ClearTempUnschedulable(ctx context.Context,
 func (m *mockAccountRepoForPlatform) ClearRateLimit(ctx context.Context, id int64) error {
 	return nil
 }
+
 func (m *mockAccountRepoForPlatform) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
 	return nil
 }

@@ -56,7 +56,7 @@ func (s *sparkShadowRepoStub) GetByID(_ context.Context, id int64) (*Account, er
 func (s *sparkShadowRepoStub) ListShadowsByParent(_ context.Context, parentID int64) ([]*Account, error) {
 	var result []*Account
 	for _, acc := range s.accounts {
-		if acc.ParentAccountID != nil && *acc.ParentAccountID == parentID && acc.QuotaDimension == QuotaDimensionSpark {
+		if acc.ParentAccountID != nil && *acc.ParentAccountID == parentID {
 			cp := *acc
 			result = append(result, &cp)
 		}
@@ -390,7 +390,7 @@ func TestPersistOpenAICodexSnapshot_SkipsShadow(t *testing.T) {
 	t.Run("shadow_skipped", func(t *testing.T) {
 		spy := &updateExtraSpyRepo{sparkShadowRepoStub: newSparkShadowRepoStub()}
 		s := &RateLimitService{accountRepo: spy}
-		shadow := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID}
+		shadow := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parentID, QuotaDimension: QuotaDimensionSpark}
 		s.persistOpenAICodexSnapshot(context.Background(), shadow, headers)
 		require.False(t, spy.updateExtraCalled, "影子不应写 codex_* 头快照")
 	})

@@ -1096,9 +1096,11 @@ func TestSchedulerCacheSnapshotMemoChunkedMGetUsesOnePipeline(t *testing.T) {
 	got := memoRead(t, cache, bucket)
 	require.Equal(t, []int64{161, 162, 163, 164, 165}, memoIDs(got))
 	batches := recorder.pipelineBatches()
-	require.Len(t, batches, 2, "metadata and last_used each travel in one pipeline")
-	for _, batch := range batches {
-		require.Len(t, batch, 3)
+	require.Len(t, batches, 1, "metadata and last_used share one bounded pipeline")
+	require.Len(t, batches[0], 6)
+	for i := 0; i < len(batches[0]); i += 2 {
+		require.Contains(t, batches[0][i], schedulerAccountMetaPrefix)
+		require.Contains(t, batches[0][i+1], schedulerAccountLastUsedPrefix)
 	}
 	require.Equal(t, 3, recorder.countPrefix("mget "+schedulerAccountMetaPrefix))
 }

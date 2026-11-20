@@ -945,7 +945,7 @@ export interface UpdateGroupRequest {
 // ==================== Account & Proxy Types ====================
 
 /** 前端内置专属界面（图标、配色、表单等）的平台。 */
-export type KnownAccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'typesafe' | 'command_code' | 'cline'
+export type KnownAccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'typesafe' | 'command_code' | 'cline' | 'kiro'
 /**
  * 账号平台：内置平台，或后端平台清单中新登记的平台（任意字符串）。
  * `string & {}` 保留内置平台的字面量补全。
@@ -1298,6 +1298,8 @@ export interface Account {
     auto_reset_credit_enabled?: boolean
     auto_reset_credit_5h_threshold?: number
     auto_reset_credit_7d_threshold?: number
+    auto_reset_credit_5h_enabled?: boolean
+    auto_reset_credit_7d_enabled?: boolean
     codex_auto_reset_credit_state?: {
       status?: 'checking' | 'available' | 'resetting' | 'success' | 'no_credit' | 'failed'
       trigger_window?: string
@@ -1399,7 +1401,7 @@ export interface Account {
   active_sessions?: number | null // 当前活跃会话数
   current_rpm?: number | null // 当前分钟 RPM 计数
 
-  // 影子账号关系（spark 维度影子）
+  // Credential shadows: spark, web_images or work_images purpose.
   parent_account_id?: number | null
   quota_dimension?: string
   // 影子账号回填的母账号信息（仅影子非空）
@@ -1706,7 +1708,7 @@ export interface AdminDataPayload {
   exported_at: string
   proxies: AdminDataProxy[]
   accounts: AdminDataAccount[]
-  // 导出时被排除的 spark 影子账号数量(影子不持凭据、其调度配置不在备份范围)。
+  // Spark shadows and image shadows whose parent was not selected are omitted.
   skipped_shadows?: number
 }
 
@@ -1734,6 +1736,24 @@ export interface AdminDataAccount {
   rate_multiplier?: number | null
   expires_at?: number | null
   auto_pause_on_expired?: boolean
+  web_image_shadow?: AdminDataImageShadow
+  work_image_shadow?: AdminDataImageShadow
+}
+
+export interface AdminDataImageShadow {
+  name: string
+  concurrency: number
+  priority: number
+  group_names: string[]
+  status: 'active' | 'inactive' | 'error'
+  schedulable: boolean
+  notes?: string | null
+  rate_multiplier?: number | null
+  load_factor?: number | null
+  expires_at?: number | null
+  auto_pause_on_expired: boolean
+  model_mapping: Record<string, unknown>
+  model_options?: Record<string, unknown>
 }
 
 export interface AdminDataImportError {

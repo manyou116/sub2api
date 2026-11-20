@@ -63,10 +63,10 @@ func guardCRSShadowParentInvariant(ctx context.Context, repo AccountRepository, 
 	}
 	shadows, err := repo.ListShadowsByParent(ctx, existing.ID)
 	if err != nil {
-		return fmt.Errorf("check spark shadows for crs update: %w", err)
+		return fmt.Errorf("check credential shadows for crs update: %w", err)
 	}
 	if len(shadows) > 0 {
-		return fmt.Errorf("cannot change a spark-shadow parent account to %s/%s; it must stay OpenAI OAuth (delete the shadow first)", newPlatform, newType)
+		return fmt.Errorf("cannot change a credential-shadow parent account to %s/%s; it must stay OpenAI OAuth (delete the shadow first)", newPlatform, newType)
 	}
 	return nil
 }

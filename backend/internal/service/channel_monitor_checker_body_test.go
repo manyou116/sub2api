@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"regexp"
 	"strconv"
 	"strings"
@@ -54,8 +53,7 @@ func (h *captureHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func setupFakeAnthropic(t *testing.T, handler *captureHandler) string {
 	t.Helper()
 	swapMonitorHTTPClient(t)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
+	srv := newIPv4TestServer(t, handler)
 	return srv.URL
 }
 
@@ -116,8 +114,7 @@ func (h *openAICaptureHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 func setupFakeOpenAI(t *testing.T, handler *openAICaptureHandler) string {
 	t.Helper()
 	swapMonitorHTTPClient(t)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
+	srv := newIPv4TestServer(t, handler)
 	return srv.URL
 }
 

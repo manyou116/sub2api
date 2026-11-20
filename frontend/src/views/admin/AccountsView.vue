@@ -185,11 +185,14 @@
           @refresh-token="handleBulkRefreshToken"
           @probe-upstream-billing="handleBulkProbeUpstreamBilling"
           @edit-selected="openBulkEditSelected"
+          @create-web-image-shadows="creatingWebImageShadow = null; showBatchWebImageShadows = true"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
           @select-page="selectPage"
           @select-all-results="handleSelectAllResults"
           @toggle-schedulable="handleBulkToggleSchedulable"
+          :rate-limit-reconcile-busy="rateLimitReconcileBusy"
+          @toggle-rate-limit-reconcile="handleBulkToggleRateLimitReconcile"
         />
         <div ref="accountTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden" :aria-busy="loading" :inert="loading && accounts.length > 0">
         <DataTable
@@ -263,6 +266,9 @@
                   :plan-type="getAccountPlanType(row)"
                   :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
                   :subscription-expires-at="row.credentials?.subscription_expires_at || row.parent_subscription_expires_at" />
+                <span v-if="isImageShadow(row)" class="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-900/30 dark:text-sky-300" :title="t(`admin.accounts.webImageShadow.${isWorkImageShadow(row) ? 'workParent' : 'parent'}`, { id: row.parent_account_id })">
+                  {{ t(`admin.accounts.webImageShadow.${isWorkImageShadow(row) ? 'workBadge' : 'badge'}`) }}
+                </span>
                 <span
                   v-if="getAntigravityTierLabel(row)"
                   :class="['inline-block rounded px-1.5 py-0.5 text-[10px] font-medium', getAntigravityTierClass(row)]"
@@ -296,6 +302,25 @@
               <span class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out" :class="[row.schedulable ? 'translate-x-4' : 'translate-x-0']" />
             </button>
           </template>
+          <template #cell-rate_limit_reconcile="{ row }">
+            <span
+              v-if="row.platform === 'openai' && row.type === 'oauth' && !row.parent_account_id"
+              :title="t('admin.accounts.rateLimitReconcile.help')"
+              class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium"
+              :class="row.extra?.openai_rate_limit_reconcile_enabled === true
+                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-dark-300'"
+            >
+              {{ row.extra?.openai_rate_limit_reconcile_enabled === true
+                ? t('admin.accounts.rateLimitReconcile.enabled')
+                : t('admin.accounts.rateLimitReconcile.disabled') }}
+            </span>
+            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+            <div v-if="row.extra?.openai_rate_limit_reconcile_state?.checked_at" class="mt-1 text-xs text-gray-500 dark:text-dark-400">
+              {{ t(`admin.accounts.rateLimitReconcile.${row.extra.openai_rate_limit_reconcile_state.status}`) }}
+              · {{ formatDateTime(row.extra.openai_rate_limit_reconcile_state.checked_at) }}
+            </div>
+          </template>
           <template #cell-today_stats="{ row }">
             <AccountTodayStatsCell
               :stats="todayStatsByAccountId[String(row.id)] ?? null"
@@ -313,6 +338,9 @@
             </div>
           </template>
           <template #cell-usage="{ row }">
+            <WebImageQuotaCell v-if="isWebImageShadow(row)" :account-id="row.id" :refresh-token="usageManualRefreshToken" />
+            <template v-else>
+            <p v-if="isWorkImageShadow(row)" class="mb-1 text-xs text-sky-600">{{ t('admin.accounts.webImageShadow.workParent', { id: row.parent_account_id }) }}</p>
             <AccountUsageCell
               :account="row"
               :today-stats="todayStatsByAccountId[String(row.id)] ?? null"
@@ -325,6 +353,7 @@
               @account-updated="handleAccountUpdated"
               @usage-loaded="handleAccountUsageLoaded(row.id, $event)"
             />
+            </template>
           </template>
           <template #cell-proxy="{ row }">
             <div class="flex flex-col gap-1">
@@ -460,7 +489,7 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :anchor-rect="menu.anchorRect" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" @create-web-image-shadow="handleCreateWebImageShadow" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -476,6 +505,7 @@
     />
     <TempUnschedStatusModal :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
     <ConfirmDialog :show="showDeleteDialog" :title="t('admin.accounts.deleteAccount')" :message="t('admin.accounts.deleteConfirm', { name: deletingAcc?.name })" :confirm-text="t('common.delete')" :cancel-text="t('common.cancel')" :danger="true" @confirm="confirmDelete" @cancel="showDeleteDialog = false" />
+    <BatchWebImageShadowDialog :show="showBatchWebImageShadows" :parent-ids="creatingWebImageShadow ? [creatingWebImageShadow.id] : selIds" @close="showBatchWebImageShadows = false; creatingWebImageShadow = null" @completed="reload" />
     <ConfirmDialog :show="showCreateShadowDialog" :title="t('admin.accounts.createSparkShadow')" :message="t('admin.accounts.createSparkShadowConfirm', { name: creatingShadowAcc?.name })" @confirm="confirmCreateSparkShadow" @cancel="showCreateShadowDialog = false" />
     <ConfirmDialog :show="showExportDataDialog" :title="t('admin.accounts.dataExport')" :message="t('admin.accounts.dataExportConfirmMessage')" :confirm-text="t('admin.accounts.dataExportConfirm')" :cancel-text="t('common.cancel')" @confirm="handleExportData" @cancel="showExportDataDialog = false">
       <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
@@ -513,6 +543,7 @@ import AccountTableActions from '@/components/admin/account/AccountTableActions.
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
+import BatchWebImageShadowDialog from '@/components/account/BatchWebImageShadowDialog.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
@@ -521,6 +552,8 @@ import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
+import WebImageQuotaCell from '@/components/account/WebImageQuotaCell.vue'
+import { isWebImageShadow, isWorkImageShadow, isImageShadow } from '@/components/account/webImageShadow'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
@@ -613,6 +646,7 @@ const edAcc = ref<Account | null>(null)
 const tempUnschedAcc = ref<Account | null>(null)
 const deletingAcc = ref<Account | null>(null)
 const creatingShadowAcc = ref<Account | null>(null)
+const creatingWebImageShadow = ref<Account | null>(null)
 const reAuthAcc = ref<Account | null>(null)
 const testingAcc = ref<Account | null>(null)
 const statsAcc = ref<Account | null>(null)
@@ -1830,6 +1864,7 @@ const allColumns = computed(() => {
     { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
+    { key: 'rate_limit_reconcile', label: t('admin.accounts.columns.rateLimitReconcile'), sortable: false },
     { key: 'today_stats', label: t('admin.accounts.columns.todayStats'), sortable: false }
   ]
   if (!authStore.isSimpleMode) {
@@ -2084,6 +2119,36 @@ const handleBulkToggleSchedulable = async (schedulable: boolean) => {
   } catch (error) {
     console.error('Failed to bulk toggle schedulable:', error)
     appStore.showError(t('common.error'))
+  }
+}
+
+const rateLimitReconcileBusy = ref(false)
+const handleBulkToggleRateLimitReconcile = async (enabled: boolean) => {
+  if (rateLimitReconcileBusy.value) return
+  const accountIds = [...selIds.value]
+  if (accountIds.length === 0) return
+  rateLimitReconcileBusy.value = true
+  try {
+    const result = await adminAPI.accounts.bulkUpdate(accountIds, {
+      extra: { openai_rate_limit_reconcile_enabled: enabled }
+    })
+    if (result.success + result.failed !== accountIds.length) {
+      appStore.showError(t('admin.accounts.bulkSchedulableResultUnknown'))
+    } else if (result.failed > 0) {
+      appStore.showError(t('admin.accounts.bulkActions.partialSuccess', { success: result.success, failed: result.failed }))
+      setSelectedIds(result.failed_ids?.length ? result.failed_ids : accountIds)
+    } else {
+      appStore.showSuccess(t(enabled
+        ? 'admin.accounts.bulkActions.rateLimitReconcileEnabled'
+        : 'admin.accounts.bulkActions.rateLimitReconcileDisabled', { count: result.success }))
+      clearSelection()
+    }
+    await reload()
+  } catch (error) {
+    console.error('Failed to bulk toggle OpenAI rate-limit reconciliation:', error)
+    appStore.showError(extractApiErrorMessage(error, t('common.error')))
+  } finally {
+    rateLimitReconcileBusy.value = false
   }
 }
 const buildBulkEditFilterSnapshot = () => {
@@ -2470,6 +2535,11 @@ const onRevertFallback = async (a: Account) => {
     console.error('Failed to revert proxy fallback:', error)
     appStore.showError(error?.response?.data?.message || t('admin.accounts.revertProxyFailed'))
   }
+}
+const showBatchWebImageShadows = ref(false)
+const handleCreateWebImageShadow = (account: Account) => {
+  creatingWebImageShadow.value = account
+  showBatchWebImageShadows.value = true
 }
 const handleCreateSparkShadow = (a: Account) => {
   creatingShadowAcc.value = a

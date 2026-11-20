@@ -371,6 +371,8 @@
             </div>
           </div>
 
+          <OpenAICapacityCooldownSettings />
+
           <!-- Stream Timeout Settings -->
           <div class="card">
             <div
@@ -8996,6 +8998,7 @@ import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import RechargeBonusTierEditor from "@/components/admin/settings/RechargeBonusTierEditor.vue";
+import OpenAICapacityCooldownSettings from "@/components/admin/settings/OpenAICapacityCooldownSettings.vue";
 import {
   normalizeRechargeBonusMode,
   normalizeRechargeBonusTiers,

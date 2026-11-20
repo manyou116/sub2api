@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import {
   BUILTIN_PLATFORM_CATALOG,
   resetPlatformCatalog,
@@ -33,6 +33,15 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       update: updateAccountMock,
+      getWebImageStatus: vi.fn().mockResolvedValue({ parent_account_id: 1, quota_known: false, remaining: null }),
+      getImageShadowModels: vi.fn().mockResolvedValue({
+        recommended: { web: 'gpt-5-6-thinking', work: 'gpt-5.6-luna-wm' },
+        models: [
+          { id: 'gpt-5-6-thinking', label: 'GPT-5.6 Sol', modes: ['web'], thinking_efforts: ['standard', 'extended'], default_thinking_effort: 'standard', verified: true },
+          { id: 'gpt-5.6-luna-wm', label: 'GPT-5.6 Luna WM', modes: ['work'], thinking_efforts: ['standard', 'extended'], default_thinking_effort: 'standard', verified: true },
+          { id: 'auto', label: 'Auto', modes: ['web'], thinking_efforts: [], default_thinking_effort: '', verified: true }
+        ]
+      }),
       checkMixedChannelRisk: checkMixedChannelRiskMock
     },
     settings: {
@@ -1247,6 +1256,29 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.base_url).toBe('https://api.x.ai/v1')
   })
 
+  it('edits Web image settings and ordinary scheduling fields without parent credentials or proxy', async () => {
+    const account = { ...buildOpenAISparkShadowAccount(), quota_dimension: 'web_images', extra: { openai_web_images: { model_mode: 'fixed', model: 'gpt-5-6-thinking', thinking_effort: 'extended', require_download_attachment: true } } }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.findComponent({ name: 'ProxySelector' }).exists()).toBe(false)
+    expect(wrapper.find('[data-testid="edit-openai-flatten-namespaces-toggle"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="web-image-model"]').element).toHaveProperty('value', 'gpt-5-6-thinking')
+    expect(wrapper.get('[data-testid="web-image-model"]').findAll('option').map(option => option.attributes('value')))
+      .toEqual(['', 'gpt-5-6-thinking', 'auto'])
+    await wrapper.get('[data-testid="web-image-model"]').setValue('auto')
+    await wrapper.get('[data-testid="set-shadow-group"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload.group_ids).toEqual([7])
+    expect(payload.concurrency).toBe(account.concurrency)
+    expect(payload.priority).toBe(account.priority)
+    expect(payload).not.toHaveProperty('credentials')
+    expect(payload).not.toHaveProperty('proxy_id')
+    expect(payload.extra).toEqual({ openai_web_images: { model_mode: 'fixed', model: 'auto', thinking_effort: '', require_download_attachment: true } })
+    wrapper.unmount()
+  })
+
   it('only submits model mapping credentials when saving an OpenAI spark shadow account', async () => {
     authIsSimpleMode.value = false
     const account = buildOpenAISparkShadowAccount()
@@ -1931,14 +1963,14 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
     checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
   })
 
-  it('仅对 OpenAI OAuth 母账号显示，默认关闭且阈值为 100/100', () => {
+  it('仅对 OpenAI OAuth 母账号显示两个默认关闭的窗口开关', () => {
     const parent = mountModal(buildOpenAIOAuthParentAccount())
     expect(parent.find('[data-testid="auto-reset-credit-settings"]').exists()).toBe(true)
+    expect(parent.get('[data-testid="auto-reset-credit-5h-enabled"]').attributes('aria-checked')).toBe('false')
+    expect(parent.get('[data-testid="auto-reset-credit-7d-enabled"]').attributes('aria-checked')).toBe('false')
     expect((parent.get('[data-testid="auto-reset-credit-5h-threshold"]').element as HTMLInputElement).value).toBe('100')
     expect((parent.get('[data-testid="auto-reset-credit-7d-threshold"]').element as HTMLInputElement).value).toBe('100')
-    expect(parent.get('[data-testid="auto-reset-credit-5h-threshold"]').attributes('disabled')).toBeDefined()
     parent.unmount()
-
     for (const account of [buildAccount(), buildOpenAISetupTokenAccount(), buildOpenAISparkShadowAccount()]) {
       const wrapper = mountModal(account)
       expect(wrapper.find('[data-testid="auto-reset-credit-settings"]').exists()).toBe(false)
@@ -1946,38 +1978,34 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
     }
   })
 
-  it('独立保存两个阈值，并禁止把运行态回写到管理请求', async () => {
+  it('独立保存窗口开关和百分比，旧开关仅迁移为 7d，并清理运行态', async () => {
     const account = buildOpenAIOAuthParentAccount()
     account.extra = {
-      codex_auto_reset_credit_state: {
-        status: 'success',
-        trigger_window: '5h',
-        available_count: 1
-      }
+      auto_reset_credit_enabled: true,
+      auto_reset_credit_5h_threshold: 0.5,
+      codex_auto_reset_credit_state: { status: 'success', trigger_window: '5h', available_count: 1 }
     }
     updateAccountMock.mockResolvedValue(account)
     const wrapper = mountModal(account)
-
-    await wrapper.get('[data-testid="auto-reset-credit-enabled"]').trigger('click')
-    await wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').setValue('75.5')
-    await wrapper.get('[data-testid="auto-reset-credit-7d-threshold"]').setValue('92')
+    expect(wrapper.get('[data-testid="auto-reset-credit-5h-enabled"]').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('[data-testid="auto-reset-credit-7d-enabled"]').attributes('aria-checked')).toBe('true')
+    expect((wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').element as HTMLInputElement).value).toBe('50')
+    await wrapper.get('[data-testid="auto-reset-credit-5h-enabled"]').trigger('click')
+    await wrapper.get('[data-testid="auto-reset-credit-7d-threshold"]').setValue('95.5')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
-
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
-    expect(extra).toMatchObject({
-      auto_reset_credit_enabled: true,
-      auto_reset_credit_5h_threshold: 0.755,
-      auto_reset_credit_7d_threshold: 0.92
-    })
+    expect(extra).toMatchObject({ auto_reset_credit_5h_enabled: true, auto_reset_credit_7d_enabled: true })
+    expect(extra).not.toHaveProperty('auto_reset_credit_enabled')
+    expect(extra).toMatchObject({ auto_reset_credit_5h_threshold: 0.5, auto_reset_credit_7d_threshold: 0.955 })
     expect(extra).not.toHaveProperty('codex_auto_reset_credit_state')
     wrapper.unmount()
   })
 
-  it('开启后拒绝超出 0.1–100 范围的任一阈值', async () => {
+  it.each(['0', '100.1', ''])('拒绝无效自动用卡百分比 %s', async value => {
     const wrapper = mountModal(buildOpenAIOAuthParentAccount())
-    await wrapper.get('[data-testid="auto-reset-credit-enabled"]').trigger('click')
-    await wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').setValue('0')
+    await wrapper.get('[data-testid="auto-reset-credit-5h-enabled"]').trigger('click')
+    await wrapper.get('[data-testid="auto-reset-credit-5h-threshold"]').setValue(value)
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     expect(updateAccountMock).not.toHaveBeenCalled()
     wrapper.unmount()

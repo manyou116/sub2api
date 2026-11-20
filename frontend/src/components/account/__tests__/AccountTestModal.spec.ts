@@ -118,6 +118,22 @@ describe('AccountTestModal', () => {
     localStorage.clear()
   })
 
+  it('defaults a Web image shadow test to gpt-image-2', async () => {
+    getAvailableModelsMock.mockResolvedValue([{ id: 'gpt-image-1', display_name: 'Image 1' }, { id: 'gpt-image-2', display_name: 'Image 2' }])
+    const wrapper = mount(AccountTestModal, {
+      props: { show: false, account: { ...buildAccount(), parent_account_id: 1, quota_dimension: 'web_images' } },
+      global: { stubs: { BaseDialog: BaseDialogStub, Select: SelectStub, TextArea: TextAreaStub, Icon: true } }
+    })
+    await flushPromises()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    const start = wrapper.findAll('button').find(button => button.text().includes('admin.accounts.startTest'))!
+    await start.trigger('click')
+    await flushPromises()
+    expect(JSON.parse((global.fetch as any).mock.calls[0][1].body).model_id).toBe('gpt-image-2')
+    wrapper.unmount()
+  })
+
   it('posts compact mode for OpenAI compact probe', async () => {
     const wrapper = mount(AccountTestModal, {
       props: {
