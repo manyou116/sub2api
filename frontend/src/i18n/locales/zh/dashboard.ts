@@ -340,6 +340,18 @@ export default {
 
   // Usage
   usage: {
+    sourceIntegration: {
+      bodyStats: '已计量上游请求体：{gb} GB，覆盖 {count} 条记录；包含记录内重试，不代表 IDC 总流量。',
+      "title": "new-api 用户来源对接",
+      "description": "绑定 new-api 使用的 API Key ID，记录实际请求用户。不会同步用户表或改变计费归属；清空绑定可关闭。",
+      "loadFailed": "无法读取来源配置",
+      "sourceId": "来源站点 ID",
+      "name": "显示名称",
+      "keys": "绑定的 API Key ID（逗号分隔）",
+      "userId": "来源用户 ID",
+      "invalid": "请检查来源 ID 和 API Key ID；来源 ID 不能重复，每把 Key 只能绑定一次。",
+      "saveFailed": "保存来源配置失败"
+},
     requestBody: {
       title: '上游请求体',
       saved: '节省 {percent}%',

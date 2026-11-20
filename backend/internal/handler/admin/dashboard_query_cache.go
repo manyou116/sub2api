@@ -18,6 +18,8 @@ var (
 )
 
 type dashboardTrendCacheKey struct {
+	SourceID              string `json:"source_id,omitempty"`
+	SourceUserID          string `json:"source_user_id,omitempty"`
 	StartTime             string `json:"start_time"`
 	EndTime               string `json:"end_time"`
 	Granularity           string `json:"granularity"`
@@ -34,6 +36,8 @@ type dashboardTrendCacheKey struct {
 }
 
 type dashboardModelGroupCacheKey struct {
+	SourceID              string `json:"source_id,omitempty"`
+	SourceUserID          string `json:"source_user_id,omitempty"`
 	StartTime             string `json:"start_time"`
 	EndTime               string `json:"end_time"`
 	UserID                int64  `json:"user_id"`
@@ -91,8 +95,14 @@ func (h *DashboardHandler) getUsageTrendCached(
 	nativeCompactionV2 *bool,
 	billingType *int8,
 	upstreamModelMismatch *bool,
+	attribution ...usagestats.UsageLogFilters,
 ) ([]usagestats.TrendDataPoint, bool, error) {
+	sourceFilter := usagestats.UsageLogFilters{}
+	if len(attribution) > 0 {
+		sourceFilter = attribution[0]
+	}
 	key := mustMarshalDashboardCacheKey(dashboardTrendCacheKey{
+		SourceID: sourceFilter.SourceID, SourceUserID: sourceFilter.SourceUserID,
 		StartTime:             startTime.UTC().Format(time.RFC3339),
 		EndTime:               endTime.UTC().Format(time.RFC3339),
 		Granularity:           granularity,
@@ -109,6 +119,7 @@ func (h *DashboardHandler) getUsageTrendCached(
 	})
 	entry, hit, err := dashboardTrendCache.GetOrLoad(key, func() (any, error) {
 		return h.dashboardService.GetUsageTrendWithUsageFilters(ctx, startTime, endTime, granularity, usagestats.UsageLogFilters{
+			SourceID: sourceFilter.SourceID, SourceUserID: sourceFilter.SourceUserID,
 			UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID,
 			Model: model, RequestType: requestType, Stream: stream, NativeCompactionV2: nativeCompactionV2, BillingType: billingType,
 			UpstreamModelMismatch: upstreamModelMismatch,
@@ -131,8 +142,14 @@ func (h *DashboardHandler) getModelStatsCached(
 	nativeCompactionV2 *bool,
 	billingType *int8,
 	upstreamModelMismatch *bool,
+	attribution ...usagestats.UsageLogFilters,
 ) ([]usagestats.ModelStat, bool, error) {
+	sourceFilter := usagestats.UsageLogFilters{}
+	if len(attribution) > 0 {
+		sourceFilter = attribution[0]
+	}
 	key := mustMarshalDashboardCacheKey(dashboardModelGroupCacheKey{
+		SourceID: sourceFilter.SourceID, SourceUserID: sourceFilter.SourceUserID,
 		StartTime:             startTime.UTC().Format(time.RFC3339),
 		EndTime:               endTime.UTC().Format(time.RFC3339),
 		UserID:                userID,
@@ -148,6 +165,7 @@ func (h *DashboardHandler) getModelStatsCached(
 	})
 	entry, hit, err := dashboardModelStatsCache.GetOrLoad(key, func() (any, error) {
 		return h.dashboardService.GetModelStatsWithUsageFiltersBySource(ctx, startTime, endTime, usagestats.UsageLogFilters{
+			SourceID: sourceFilter.SourceID, SourceUserID: sourceFilter.SourceUserID,
 			UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID,
 			RequestType: requestType, Stream: stream, NativeCompactionV2: nativeCompactionV2, BillingType: billingType,
 			UpstreamModelMismatch: upstreamModelMismatch,
@@ -169,8 +187,14 @@ func (h *DashboardHandler) getGroupStatsCached(
 	nativeCompactionV2 *bool,
 	billingType *int8,
 	upstreamModelMismatch *bool,
+	attribution ...usagestats.UsageLogFilters,
 ) ([]usagestats.GroupStat, bool, error) {
+	sourceFilter := usagestats.UsageLogFilters{}
+	if len(attribution) > 0 {
+		sourceFilter = attribution[0]
+	}
 	key := mustMarshalDashboardCacheKey(dashboardModelGroupCacheKey{
+		SourceID: sourceFilter.SourceID, SourceUserID: sourceFilter.SourceUserID,
 		StartTime:             startTime.UTC().Format(time.RFC3339),
 		EndTime:               endTime.UTC().Format(time.RFC3339),
 		UserID:                userID,
@@ -185,6 +209,7 @@ func (h *DashboardHandler) getGroupStatsCached(
 	})
 	entry, hit, err := dashboardGroupStatsCache.GetOrLoad(key, func() (any, error) {
 		return h.dashboardService.GetGroupStatsWithUsageFilters(ctx, startTime, endTime, usagestats.UsageLogFilters{
+			SourceID: sourceFilter.SourceID, SourceUserID: sourceFilter.SourceUserID,
 			UserID: userID, APIKeyID: apiKeyID, AccountID: accountID, GroupID: groupID,
 			RequestType: requestType, Stream: stream, NativeCompactionV2: nativeCompactionV2, BillingType: billingType,
 			UpstreamModelMismatch: upstreamModelMismatch,

@@ -335,6 +335,18 @@ export default {
 
   // Usage
   usage: {
+    sourceIntegration: {
+      bodyStats: 'Measured upstream request bodies: {gb} GB across {count} records, including recorded retries. This is not total network or IDC traffic.',
+      "title": "new-api user attribution",
+      "description": "Bind the API key IDs used by new-api to record the requesting user. Billing ownership stays unchanged. Remove bindings to disable.",
+      "loadFailed": "Could not load source settings",
+      "sourceId": "Source site ID",
+      "name": "Display name",
+      "keys": "API key IDs (comma separated)",
+      "userId": "Source user ID",
+      "invalid": "Check source IDs and API key IDs. Source IDs must be unique; each key can be bound once.",
+      "saveFailed": "Could not save source settings"
+},
     requestBody: {
       title: 'Upstream request body',
       saved: '{percent}% saved',

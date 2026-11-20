@@ -89,6 +89,7 @@ var usageLogInsertArgTypes = [...]string{
 	"integer",     // cache_creation_12h_tokens
 	"timestamptz", // created_at
 	"jsonb",       // upstream_request_body
+	"jsonb",       // source_user
 }
 
 const (
@@ -158,6 +159,9 @@ func (r *usageLogRepository) Create(ctx context.Context, log *service.UsageLog) 
 		return false, nil
 	}
 
+	if log.SourceUser == nil {
+		log.SourceUser = service.SourceUserFromContext(ctx)
+	}
 	if tx := dbent.TxFromContext(ctx); tx != nil {
 		return r.createSingle(ctx, tx.Client(), log)
 	}
@@ -174,6 +178,9 @@ func (r *usageLogRepository) CreateBestEffort(ctx context.Context, log *service.
 		return nil
 	}
 
+	if log.SourceUser == nil {
+		log.SourceUser = service.SourceUserFromContext(ctx)
+	}
 	if tx := dbent.TxFromContext(ctx); tx != nil {
 		_, err := r.createSingle(ctx, tx.Client(), log)
 		return err
@@ -292,7 +299,8 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			cache_creation_30m_tokens,
 			cache_creation_12h_tokens,
 			created_at,
-			upstream_request_body
+			upstream_request_body,
+			source_user
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
 			$10, $11,
@@ -755,7 +763,8 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			cache_creation_30m_tokens,
 			cache_creation_12h_tokens,
 			created_at,
-			upstream_request_body
+			upstream_request_body,
+			source_user
 		) AS (VALUES `)
 
 	// Each batch row prepends a synthetic input_index before the usage-log values.
@@ -1028,7 +1037,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			cache_creation_30m_tokens,
 			cache_creation_12h_tokens,
 			created_at,
-			upstream_request_body
+			upstream_request_body,
+			source_user
 		) AS (VALUES `)
 
 	args := make([]any, 0, len(preparedList)*len(usageLogInsertArgTypes))
@@ -1121,7 +1131,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			cache_creation_30m_tokens,
 			cache_creation_12h_tokens,
 			created_at,
-			upstream_request_body
+			upstream_request_body,
+			source_user
 		)
 		SELECT
 			user_id,
@@ -1188,7 +1199,8 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			cache_creation_30m_tokens,
 			cache_creation_12h_tokens,
 			created_at,
-			upstream_request_body
+			upstream_request_body,
+			source_user
 		FROM input
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`)
@@ -1263,7 +1275,8 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			cache_creation_30m_tokens,
 			cache_creation_12h_tokens,
 			created_at,
-			upstream_request_body
+			upstream_request_body,
+			source_user
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
 			$10, $11,
@@ -1279,6 +1292,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 
 func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	var upstreamRequestBody sql.NullString
+	sourceUser := sourceUserJSON(log.SourceUser)
 	if log.UpstreamRequestBody != nil {
 		raw, _ := json.Marshal(log.UpstreamRequestBody)
 		upstreamRequestBody = sql.NullString{String: string(raw), Valid: true}
@@ -1403,6 +1417,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			log.CacheCreation12hTokens,
 			createdAt,
 			upstreamRequestBody,
+			sourceUser,
 		},
 	}
 }

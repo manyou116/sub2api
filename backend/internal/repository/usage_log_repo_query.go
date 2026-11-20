@@ -140,6 +140,7 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 		args = append(args, *filters.EndTime)
 	}
 
+	conditions, args = appendSourceUserWhere(conditions, args, filters.SourceID, filters.SourceUserID, "")
 	whereClause := buildWhere(conditions)
 	var (
 		logs []service.UsageLog
@@ -173,7 +174,7 @@ func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {
 		return false
 	}
 	// 强选择过滤下记录集通常较小，保留精确总数。
-	return filters.UserID == 0 && filters.APIKeyID == 0 && filters.AccountID == 0
+	return filters.SourceID == "" && filters.SourceUserID == "" && filters.UserID == 0 && filters.APIKeyID == 0 && filters.AccountID == 0
 }
 
 func (r *usageLogRepository) listUsageLogsWithPagination(ctx context.Context, whereClause string, args []any, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
@@ -505,6 +506,7 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		cacheCreation30m          int
 		cacheCreation12h          int
 		upstreamRequestBody       sql.NullString
+		sourceUser                sql.NullString
 		createdAt                 time.Time
 	)
 
@@ -575,6 +577,7 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		&cacheCreation12h,
 		&createdAt,
 		&upstreamRequestBody,
+		&sourceUser,
 	); err != nil {
 		return nil, err
 	}
@@ -615,6 +618,7 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		LongContextBillingApplied: longContextBillingApplied,
 		CreatedAt:                 createdAt,
 	}
+	log.SourceUser = decodeSourceUser(sourceUser)
 	if upstreamRequestBody.Valid {
 		var stats service.UpstreamRequestBodyStats
 		if err := json.Unmarshal([]byte(upstreamRequestBody.String), &stats); err != nil {

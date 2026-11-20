@@ -188,7 +188,12 @@ func (h *UsageHandler) List(c *gin.Context) {
 		SortBy:    c.DefaultQuery("sort_by", "created_at"),
 		SortOrder: c.DefaultQuery("sort_order", "desc"),
 	}
+	sourceID, sourceUserID, valid := parseSourceUserFilter(c)
+	if !valid {
+		return
+	}
 	filters := usagestats.UsageLogFilters{
+		SourceID: sourceID, SourceUserID: sourceUserID,
 		UserID:                userID,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,
@@ -344,7 +349,12 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 	}
 
 	// Build filters and call GetStatsWithFilters
+	sourceID, sourceUserID, valid := parseSourceUserFilter(c)
+	if !valid {
+		return
+	}
 	filters := usagestats.UsageLogFilters{
+		SourceID: sourceID, SourceUserID: sourceUserID,
 		UserID:                userID,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,

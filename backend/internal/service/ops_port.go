@@ -62,6 +62,7 @@ type OpsRepository interface {
 }
 
 type OpsInsertErrorLogInput struct {
+	SourceUser      *SourceUser
 	RequestID       string
 	ClientRequestID string
 

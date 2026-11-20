@@ -2,6 +2,9 @@
   <AppLayout>
     <div class="space-y-6">
       <UsageStatsCards :stats="usageStats" />
+      <p v-if="usageStats?.upstream_body" class="card p-4 text-sm">
+        {{ t('usage.sourceIntegration.bodyStats', { count: usageStats.upstream_body.measured_requests, gb: (usageStats.upstream_body.encoded_bytes / 1e9).toFixed(2) }) }}
+      </p>
       <!-- Charts Section -->
       <div class="space-y-4">
         <div class="card p-4">
@@ -133,6 +136,7 @@
             :default-sort-order="'desc'"
             @sort="handleSort"
             @userClick="handleUserClick"
+            @sourceUserClick="handleSourceUserClick"
             @ipGeoBatchFailed="handleIpGeoBatchFailed"
           />
           <Pagination v-if="pagination.total > 0" :page="pagination.page" :total="pagination.total" :page-size="pagination.page_size" @update:page="handlePageChange" @update:pageSize="handlePageSizeChange" />
@@ -145,6 +149,7 @@
             :visible-column-keys="errVisibleColumnKeys"
             user-clickable
             @userClick="handleUserClick"
+            @sourceUserClick="handleSourceUserClick"
             @openErrorDetail="openError"
             @sort="onErrSort"
             @update:page="onErrPage"
@@ -254,6 +259,11 @@ const breakdownFilters = computed(() => {
 const modelNameOptions = computed(() =>
   Array.from(new Set(requestedModelStats.value.map((m) => m.model).filter(Boolean))).sort()
 )
+
+const handleSourceUserClick = (user: import('@/types').SourceUser) => {
+  filters.value = { ...filters.value, source_id: user.source_id, source_user_id: user.user_id }
+  applyFilters()
+}
 
 const handleUserClick = async (userId: number) => {
   try {
@@ -445,6 +455,8 @@ const loadModelStats = async (source: ModelDistributionSource, force = false) =>
     const baseParams = {
       start_date: filters.value.start_date || startDate.value,
       end_date: filters.value.end_date || endDate.value,
+      source_id: filters.value.source_id || undefined,
+      source_user_id: filters.value.source_user_id || undefined,
       user_id: filters.value.user_id,
       model: filters.value.model,
       api_key_id: filters.value.api_key_id,
@@ -496,6 +508,8 @@ const loadChartData = async () => {
       start_date: filters.value.start_date || startDate.value,
       end_date: filters.value.end_date || endDate.value,
       granularity: granularity.value,
+      source_id: filters.value.source_id || undefined,
+      source_user_id: filters.value.source_user_id || undefined,
       user_id: filters.value.user_id,
       model: filters.value.model,
       api_key_id: filters.value.api_key_id,
@@ -579,7 +593,7 @@ const exportToExcel = async () => {
     let p = 1; let total = pagination.total; let exportedCount = 0
     const XLSX = await import('xlsx')
     const headers = [
-      t('usage.time'), t('admin.usage.user'), t('usage.apiKeyFilter'),
+      t('usage.time'), t('admin.usage.user'), t('usage.sourceIntegration.sourceId'), t('usage.sourceIntegration.userId'), t('usage.sourceIntegration.name'), t('usage.apiKeyFilter'),
       t('admin.usage.account'), t('usage.requestedModel'), t('usage.sentUpstreamModel'), t('usage.upstreamResponseModel'), t('usage.upstreamModelMismatch'), t('usage.requestedReasoningEffort'), t('usage.reasoningEffort'), t('admin.usage.group'),
       t('usage.inboundEndpoint'), t('usage.upstreamEndpoint'),
       t('usage.type'),
@@ -599,7 +613,7 @@ const exportToExcel = async () => {
       )
       if (c.signal.aborted) break; if (p === 1) { total = res.total; exportProgress.total = total }
       const rows = (res.items || []).map((log: AdminUsageLog) => [
-        log.created_at, log.user?.email || '', log.api_key?.name || '', log.account?.name || '', log.model,
+        log.created_at, log.user?.email || '', log.source_user?.source_id || '', log.source_user?.user_id || '', log.source_user?.username || '', log.api_key?.name || '', log.account?.name || '', log.model,
         log.upstream_model || log.model, log.upstream_response_model || '', log.upstream_model_mismatch == null ? '' : t(log.upstream_model_mismatch ? 'common.yes' : 'common.no'), formatReasoningEffort(log.reasoning_effort), formatReasoningEffort(log.upstream_reasoning_effort || log.reasoning_effort), log.group?.name || '',
         log.inbound_endpoint || '', log.upstream_endpoint || '', getRequestTypeLabel(log),
         log.input_tokens, log.output_tokens, log.cache_read_tokens, log.cache_creation_tokens,
@@ -825,6 +839,8 @@ const loadAdminErrors = async () => {
       view: 'all',
       start_time: toRFC3339(filters.value.start_date),
       end_time: toRFC3339(filters.value.end_date, true),
+      source_id: filters.value.source_id || undefined,
+      source_user_id: filters.value.source_user_id || undefined,
       user_id: filters.value.user_id ?? undefined,
       api_key_id: filters.value.api_key_id ?? undefined,
       account_id: filters.value.account_id ?? undefined,

@@ -103,7 +103,11 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 		return
 	}
 
-	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize}
+	sourceID, sourceUserID, valid := parseSourceUserFilter(c)
+	if !valid {
+		return
+	}
+	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize, SourceID: sourceID, SourceUserID: sourceUserID}
 
 	if !startTime.IsZero() {
 		filter.StartTime = &startTime
@@ -233,7 +237,11 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 		return
 	}
 
-	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize}
+	sourceID, sourceUserID, valid := parseSourceUserFilter(c)
+	if !valid {
+		return
+	}
+	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize, SourceID: sourceID, SourceUserID: sourceUserID}
 	if !startTime.IsZero() {
 		filter.StartTime = &startTime
 	}
@@ -378,7 +386,11 @@ func (h *OpsHandler) ListRequestErrorUpstreamErrors(c *gin.Context) {
 		return
 	}
 
-	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize}
+	sourceID, sourceUserID, valid := parseSourceUserFilter(c)
+	if !valid {
+		return
+	}
+	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize, SourceID: sourceID, SourceUserID: sourceUserID}
 	if !startTime.IsZero() {
 		filter.StartTime = &startTime
 	}
@@ -461,7 +473,11 @@ func (h *OpsHandler) ListUpstreamErrors(c *gin.Context) {
 		return
 	}
 
-	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize}
+	sourceID, sourceUserID, valid := parseSourceUserFilter(c)
+	if !valid {
+		return
+	}
+	filter := &service.OpsErrorLogFilter{Page: page, PageSize: pageSize, SourceID: sourceID, SourceUserID: sourceUserID}
 	if !startTime.IsZero() {
 		filter.StartTime = &startTime
 	}

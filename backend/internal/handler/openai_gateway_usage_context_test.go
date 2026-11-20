@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,4 +39,26 @@ func TestOpenAISubmitUsageRecordTaskCopiesRequestContext(t *testing.T) {
 
 	require.Equal(t, "openai-client-request-123", gotClientRequestID)
 	require.Equal(t, "openai-request-456", gotRequestID)
+}
+
+func TestSourceUserSnapshotSurvivesAsyncUsageTask(t *testing.T) {
+	identity := &service.SourceUser{SourceID: "factory", UserID: "123", Username: "Alice"}
+	parent := service.WithSourceUser(context.Background(), identity)
+	identity.UserID = "forged-after-snapshot"
+	handler := &GatewayHandler{usageRecordWorkerPool: newUsageRecordTestPool(t)}
+	done := make(chan *service.SourceUser, 1)
+	handler.submitUsageRecordTask(parent, func(ctx context.Context) { done <- service.SourceUserFromContext(ctx) })
+	got := <-done
+	require.Equal(t, &service.SourceUser{SourceID: "factory", UserID: "123", Username: "Alice"}, got)
+}
+
+func TestUsageRecordContextPreservesSourceAfterRequestCancellation(t *testing.T) {
+	identity := &service.SourceUser{SourceID: "factory", UserID: "123", Username: "Alice"}
+	parent, cancel := context.WithCancel(service.WithSourceUser(context.Background(), identity))
+	t.Cleanup(cancel)
+	recordContext := usageRecordContext(parent, context.Background())
+	cancel()
+	identity.Username = "renamed-after-snapshot"
+	require.NoError(t, recordContext.Err())
+	require.Equal(t, "Alice", service.SourceUserFromContext(recordContext).Username)
 }

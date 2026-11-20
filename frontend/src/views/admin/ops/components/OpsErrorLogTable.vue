@@ -76,6 +76,7 @@
             </button>
             <span v-else class="font-medium text-gray-900 dark:text-white">{{ row.user_email || '-' }}</span>
             <span class="ml-1 text-gray-500 dark:text-gray-400">#{{ row.user_id }}</span>
+            <SourceUserLabel :user="row.source_user" @select="emit('sourceUserClick', $event)" />
           </div>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
@@ -179,6 +180,7 @@
 </template>
 
 <script setup lang="ts">
+import SourceUserLabel from '@/components/common/SourceUserLabel.vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataTable from '@/components/common/DataTable.vue'
@@ -308,6 +310,7 @@ interface Emits {
   (e: 'ipGeoBatchFailed'): void
   (e: 'sort', sortBy: string, sortOrder: 'asc' | 'desc'): void
   (e: 'userClick', userId: number, email?: string): void
+  (e: 'sourceUserClick', user: import('@/types').SourceUser): void
 }
 
 const props = defineProps<Props>()

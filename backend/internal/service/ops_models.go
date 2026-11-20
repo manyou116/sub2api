@@ -23,8 +23,9 @@ type OpsSystemLog struct {
 }
 
 type OpsErrorLog struct {
-	ID        int64     `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
+	SourceUser *SourceUser `json:"source_user,omitempty"`
+	ID         int64       `json:"id"`
+	CreatedAt  time.Time   `json:"created_at"`
 
 	// Standardized classification
 	// - phase: request|auth|account_auth|routing|upstream|network|internal
@@ -102,8 +103,10 @@ type OpsErrorLogDetail struct {
 }
 
 type OpsErrorLogFilter struct {
-	StartTime *time.Time
-	EndTime   *time.Time
+	SourceID     string
+	SourceUserID string
+	StartTime    *time.Time
+	EndTime      *time.Time
 
 	Platform  string
 	GroupID   *int64
