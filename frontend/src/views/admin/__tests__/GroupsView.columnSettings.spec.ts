@@ -11,6 +11,7 @@ const {
   getUsageSummary,
   getCapacitySummary,
   getLiveCapability,
+  getCapacityMonitor,
   listAccounts,
   showError,
   showSuccess,
@@ -24,6 +25,7 @@ const {
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
   getLiveCapability: vi.fn(),
+  getCapacityMonitor: vi.fn(),
   listAccounts: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
@@ -33,6 +35,7 @@ const {
 }))
 
 const messages: Record<string, string> = {
+  'admin.groups.capacityMonitor.title': 'Quota Trends',
   'admin.groups.columnSettings': 'Column Settings',
   'admin.groups.columns.name': 'Name',
   'admin.groups.columns.id': 'ID',
@@ -49,6 +52,10 @@ const messages: Record<string, string> = {
   'admin.groups.usageYesterday': 'Yesterday',
   'admin.groups.usageTotal': 'Total',
 }
+
+vi.mock('@/api/admin/groupCapacityMonitor', () => ({
+  getGroupCapacityMonitor: getCapacityMonitor,
+}))
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
@@ -94,6 +101,8 @@ vi.mock('vue-i18n', async () => {
     ...actual,
     useI18n: () => ({
       t: (key: string) => messages[key] ?? key,
+      te: () => false,
+      locale: { value: 'en' },
     }),
   }
 })
@@ -162,6 +171,7 @@ const DataTableStub = {
       <div data-test="rows">{{ data.map((row) => row.name).join(',') }}</div>
       <div v-if="data.length" data-test="usage-cell">
         <slot name="cell-usage" :row="data[0]" />
+        <slot name="cell-actions" :row="data[0]" />
       </div>
     </div>
   `,
@@ -207,6 +217,8 @@ const mountView = async () => {
         PlatformIcon: true,
         Icon: IconStub,
         GroupCapacityBadge: true,
+        CapacityForecastChart: true,
+        ConsumptionTrendChart: true,
         GroupRateMultipliersModal: true,
         GroupRPMOverridesModal: true,
         VueDraggable: { template: '<div><slot /></div>' },
@@ -243,6 +255,7 @@ describe('admin GroupsView column settings', () => {
     getUsageSummary.mockReset()
     getCapacitySummary.mockReset()
     getLiveCapability.mockReset()
+    getCapacityMonitor.mockReset()
     listAccounts.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
@@ -262,6 +275,12 @@ describe('admin GroupsView column settings', () => {
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
     getLiveCapability.mockResolvedValue({ supported: false })
+    getCapacityMonitor.mockResolvedValue({
+      as_of: '2026-10-24T01:00:00Z', timezone: 'UTC', currency: 'USD',
+      inventory: { member_count: 3, eligible_count: 0, schedulable_count: 2, modeled_count: 0 },
+      quality: {}, history: [], capacity_points: [], demand_bases: [], scenarios: [], shared_usage: [], limitations: [],
+      cache: { expires_at: '2099-01-01T00:00:00Z' },
+    })
     listAccounts.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
     isCurrentStep.mockReturnValue(false)
   })
@@ -285,6 +304,26 @@ describe('admin GroupsView column settings', () => {
 
   afterEach(() => {
     localStorage.clear()
+  })
+
+  it('always shows the quota monitor entry without requesting monitoring data on mount', async () => {
+    const wrapper = await mountView()
+    expect(wrapper.find('[data-testid="group-capacity-monitor"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="capacity-monitor"]').exists()).toBe(false)
+    expect(getCapacityMonitor).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('loads the quota monitor only after clicking the selected group without leaving the table', async () => {
+    const wrapper = await mountView()
+    expect(getCapacityMonitor).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="group-capacity-monitor"]').trigger('click')
+    await vi.waitFor(() => expect(getCapacityMonitor).toHaveBeenCalledOnce())
+    await flushPromises()
+    expect(getCapacityMonitor).toHaveBeenCalledWith(1, expect.any(AbortSignal))
+    expect(wrapper.find('[data-testid="capacity-monitor"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="rows"]').text()).toContain('Core Anthropic')
+    wrapper.unmount()
   })
 
   it('hides the id column by default while keeping other group columns visible', async () => {
