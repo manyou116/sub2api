@@ -127,7 +127,6 @@ scripts
 .code-review-state
 #openspec/
 code-reviews/
-AGENTS.md
 backend/cmd/server/server
 deploy/docker-compose.override.yml
 .gocache/
@@ -135,8 +134,12 @@ vite.config.js
 docs/*
 !docs/agent-resource-safety.md
 !docs/moego-json-batching.md
+!docs/FORK_RELEASE_INVENTORY.md
+!docs/WEB_IMAGE_SHADOWS.md
 !docs/admin-api-keys.md
 !docs/mcp.md
+!docs/FORK_HOOKS.md
+!docs/OPENAI_WEB_IMAGES.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
@@ -166,3 +169,9 @@ issues/
 .vite/
 # 本地闭源插件开发目录及构建产物不进入 Sub2API 仓库
 /plugins/
+
+# Local dev helpers (web images fork / air) — do not commit
+DEV_LOCAL.md
+backend/.air.toml
+backend/tmp/
+backend/build-errors.log

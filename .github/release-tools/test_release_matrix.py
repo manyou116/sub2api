@@ -131,6 +131,20 @@ class ReleaseMatrixTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'does not match'):
                 release.plan(args)
 
+    def test_fork_tag_plan_and_archive_keep_full_version(self):
+        version = '99.0.2.8-plus.1'
+        args = argparse.Namespace(ref='v' + version, dry_run=False, simple=True)
+        with patch.dict(os.environ, {'GITHUB_OUTPUT': 'outputs'}), patch.object(subprocess, 'check_output', return_value='a' * 40 + '\n'):
+            release.plan(args)
+        output = dict(line.split('=', 1) for line in Path('outputs').read_text().splitlines())
+        self.assertEqual(output['version'], version)
+        self.assertEqual(release.VERSION_FILE.read_text(), version + '\n')
+        self.assertEqual(json.loads(output['matrix'])['include'], [{'goos': 'linux', 'goarch': 'amd64'}])
+        self.assertEqual(release.archive_name(version, release.targets(True)[0]), f'sub2api_{version}_linux_amd64.tar.gz')
+        for invalid in ('98.0.2.8-plus.1', '99.0.2.8/escape', '99.0.2.8.1'):
+            with self.subTest(version=invalid), self.assertRaises(ValueError):
+                release.archive_name(invalid, release.targets(True)[0])
+
     def test_dry_run_plan_resolves_matrix_without_a_new_tag(self):
         with patch.dict(os.environ, {'GITHUB_OUTPUT': 'outputs', 'GITHUB_REPOSITORY_OWNER': 'ExampleOwner'}), patch.object(subprocess, 'check_output', return_value='a' * 40 + '\n'):
             release.plan(argparse.Namespace(ref='feature/matrix', dry_run=True, simple=False))
@@ -185,6 +199,57 @@ class ReleaseMatrixTest(unittest.TestCase):
                     self.assertIn('fixturehub/sub2api:9.8', log)
                     self.assertIn('ghcr.io/exampleowner/sub2api:9', log)
 
+
+
+class ReleaseVersionGuardTest(unittest.TestCase):
+    def test_syncs_only_when_release_source_is_on_default_branch(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/release.yml').read_text())
+        job = workflow['jobs']['sync-version-file']
+        checkout = next(step for step in job['steps'] if 'uses' in step)
+        self.assertEqual(checkout['with']['fetch-depth'], 0)
+        self.assertIn('RELEASE_SHA', job['env'])
+        script = next(step['run'] for step in job['steps'] if 'run' in step)
+        script = script.replace('${{ github.event.repository.default_branch }}', 'main')
+        for source_on_main in (False, True):
+            with self.subTest(source_on_main=source_on_main), tempfile.TemporaryDirectory() as directory:
+                work = Path(directory) / 'work'
+                remote = Path(directory) / 'remote.git'
+                work.mkdir()
+
+                def git(*args):
+                    result = subprocess.run(['git', *args], cwd=work, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    return result.stdout.strip()
+
+                git('init', '-b', 'main')
+                # Fixture repositories must not inherit machine-specific interactive hooks.
+                (work / 'empty-hooks').mkdir()
+                git('config', 'core.hooksPath', str(work / 'empty-hooks'))
+                git('config', 'user.name', 'fixture')
+                git('config', 'user.email', 'fixture@example.invalid')
+                version = work / 'backend/cmd/server/VERSION'
+                version.parent.mkdir(parents=True)
+                version.write_text('99.0.2.19-plus.2\n')
+                git('add', '.')
+                git('commit', '-m', 'base')
+                git('init', '--bare', str(remote))
+                git('remote', 'add', 'origin', str(remote))
+                git('push', 'origin', 'main')
+                if not source_on_main:
+                    git('checkout', '-b', 'isolated-feature')
+                    (work / 'feature').write_text('released separately')
+                    git('add', '.')
+                    git('commit', '-m', 'feature release')
+                released = git('rev-parse', 'HEAD')
+                git('checkout', 'main')
+                before = git('rev-parse', 'HEAD')
+                env = dict(os.environ, RELEASE_SHA=released, RELEASE_VERSION='99.0.2.19-plus.3')
+                result = subprocess.run(['bash', '-e', '-c', script], cwd=work, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                expected = '99.0.2.19-plus.3' if source_on_main else '99.0.2.19-plus.2'
+                self.assertEqual(version.read_text().strip(), expected)
+                self.assertEqual(git('rev-parse', 'HEAD') == before, not source_on_main)
+                self.assertEqual(git('rev-parse', 'origin/main'), git('rev-parse', 'HEAD'))
 
 
 if __name__ == '__main__':

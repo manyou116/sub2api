@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
   pull_request:
 
@@ -9,9 +10,12 @@ permissions:
 
 jobs:
   shell:
-    runs-on: macos-15
+    # Shell compatibility checks do not need the capacity-constrained ARM pool.
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v6
+      - name: Check published fork feature hooks
+        run: /bin/bash deploy/upstream-sync/check-fork-hooks.sh
       - name: Check deployment scripts
         run: |
           /bin/bash -n deploy/apple-container.sh
@@ -35,7 +39,7 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Verify Go version
         run: |
-          go version | grep -q 'go1.27.4'
+          go version | grep -q 'go1.27.3'
       - name: Unit tests
         working-directory: backend
         run: make test-unit
@@ -54,7 +58,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '20'
           cache: 'pnpm'
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install frontend dependencies
@@ -75,7 +79,7 @@ jobs:
           cache-dependency-path: backend/go.sum
       - name: Verify Go version
         run: |
-          go version | grep -q 'go1.27.4'
+          go version | grep -q 'go1.27.3'
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:

@@ -1,0 +1,39 @@
+# =============================================================================
+# Caddy layer-7 proxy for Docker Swarm rolling updates
+# =============================================================================
+# The sub2api service uses endpoint_mode: dnsrr, so tasks.sub2api resolves
+# directly to the running task IPs. During start-first updates, new requests go
+# to healthy tasks while old upstream TCP connections can finish naturally.
+# =============================================================================
+
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	@health path /caddy-health
+	respond @health "caddy ok" 200
+
+	reverse_proxy tasks.sub2api:8080 {
+		lb_policy round_robin
+		lb_try_duration 30s
+		lb_try_interval 250ms
+
+		fail_duration 10s
+		max_fails 1
+		unhealthy_status 5xx
+
+		transport http {
+			read_timeout 10m
+			write_timeout 10m
+			response_header_timeout 60s
+			dial_timeout 5s
+			keepalive 30s
+			keepalive_idle_conns 64
+			versions 1.1
+		}
+
+		header_up X-Real-IP {remote_host}
+	}
+}

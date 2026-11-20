@@ -14,7 +14,7 @@ on:
         description: 'Simple release: only x86_64 GHCR image, skip other artifacts'
         required: false
         type: boolean
-        default: false
+        default: true
       dry_run:
         description: 'Build and verify all selected artifacts without publishing'
         required: false
@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 env:
-  SIMPLE_RELEASE: ${{ inputs.simple_release == true || vars.SIMPLE_RELEASE == 'true' }}
+  SIMPLE_RELEASE: ${{ (github.event_name == 'workflow_dispatch' && inputs.simple_release == true) || (github.event_name != 'workflow_dispatch' && vars.SIMPLE_RELEASE != 'false') }}
   DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
 
 jobs:
@@ -92,7 +92,7 @@ jobs:
           version: 9
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '20'
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
@@ -137,7 +137,7 @@ jobs:
           check-latest: false
           cache: false
       - name: Verify Go version
-        run: go version | grep -q 'go1.27.4'
+        run: go version | grep -q 'go1.27.3'
       - name: Restore target-specific Go cache
         id: go-cache
         uses: actions/cache/restore@v6
@@ -230,6 +230,7 @@ jobs:
           go-version-file: backend/go.mod
           cache: false
       - name: Set up QEMU
+        if: ${{ env.SIMPLE_RELEASE != 'true' }}
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -383,15 +384,22 @@ jobs:
       contents: write
     env:
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
     steps:
       - name: Checkout default branch
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
 
       - name: Sync VERSION file to released tag
         run: |
           VERSION="$RELEASE_VERSION"
+
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" HEAD; then
+            echo "Release source is not on the default branch; keeping its VERSION unchanged"
+            exit 0
+          fi
 
           CURRENT_VERSION=$(tr -d '\r\n' < backend/cmd/server/VERSION || true)
           if [ "$CURRENT_VERSION" = "$VERSION" ]; then
