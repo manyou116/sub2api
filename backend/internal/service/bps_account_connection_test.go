@@ -3,13 +3,14 @@
 package service
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,9 +21,6 @@ import (
 )
 
 func TestBPSAccountConnection(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX bridge fixture")
-	}
 	for _, tc := range []struct{ name, terminal string }{
 		{"completed", `{"type":"response.completed"}`},
 		{"failed", `{"type":"response.failed","response":{"error":{"message":"private upstream detail"}}}`},
@@ -56,10 +54,8 @@ func TestBPSAccountConnection(t *testing.T) {
 				}
 			}))
 			t.Cleanup(bridge.Close)
-			dir := t.TempDir()
-			binary := filepath.Join(dir, "bridge")
-			require.NoError(t, os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s\\n' 'bridge listening on "+bridge.URL+"' >&2\nexec /bin/sleep 60\n"), 0700))
-			t.Setenv("SUB2API_BPS_BINARY", binary)
+			dir := filepath.Join(t.TempDir(), "bps")
+			require.NoError(t, os.Mkdir(dir, 0700))
 			t.Setenv("SUB2API_BPS_STATE_DIR", dir)
 			repo := newSparkShadowRepoStub()
 			parent := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
@@ -102,13 +98,17 @@ func TestBPSAccountConnection(t *testing.T) {
 			require.ErrorContains(t, err, "standard test mode")
 			_, err = run(AccountTestModeDefault, true)
 			require.ErrorContains(t, err, "manual connection tests only")
-			process, err := bpsProcess(shadow.ID)
+			process, err := bpsRuntime(shadow.ID)
 			require.NoError(t, err)
 			require.NoError(t, os.Mkdir(process.Dir, 0700))
 			require.NoError(t, bpsbridge.Save(bpsGrantPath(process), bpsbridge.BoundGrant{
 				Grant: bpsbridge.Grant{AccessToken: "fixture-only"}, Identity: bpsbridge.Identity{Account: "workspace", User: "user"},
 				ExpiresAt: time.Now().Add(time.Hour),
 			}))
+			bpsWorkers.Store(shadow.ID, &bpsRuntimeWorker{
+				key:    bpsRuntimeKey{shadowID: shadow.ID, dir: process.Dir, concurrency: shadow.Concurrency},
+				worker: bpsTestWorker{endpoint: bridge.URL},
+			})
 			output, err := run(AccountTestModeDefault, false)
 			require.Contains(t, output, `"text":"OK"`)
 			require.Contains(t, output, `"status":"bps_connected"`)
@@ -135,4 +135,16 @@ func TestBPSAccountConnection(t *testing.T) {
 			require.JSONEq(t, `{"model":"gpt-5.4","input":"Reply with only OK.","stream":true,"store":false,"reasoning":{"effort":"low"}}`, body)
 		})
 	}
+}
+
+type bpsTestWorker struct{ endpoint string }
+
+func (w bpsTestWorker) Stop()                 {}
+func (w bpsTestWorker) Done() <-chan struct{} { return nil }
+func (w bpsTestWorker) Responses(ctx context.Context, _ bpsbridge.BoundGrant, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.endpoint+"/v1/responses", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	return http.DefaultClient.Do(req)
 }

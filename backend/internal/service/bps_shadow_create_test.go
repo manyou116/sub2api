@@ -3,14 +3,15 @@
 package service
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
 func TestBPSCreateInheritsParentGroupsWithoutModelOrBridge(t *testing.T) {
-	t.Setenv("SUB2API_BPS_BINARY", "")
-	t.Setenv("SUB2API_BPS_STATE_DIR", "")
+	t.Setenv("SUB2API_BPS_STATE_DIR", "relative-path")
 	repo := newSparkShadowRepoStub()
 	admin := &adminServiceImpl{accountRepo: repo}
 	parent := &Account{Name: "parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
@@ -46,7 +47,8 @@ func TestBPSCreateFallsBackToOpenAIDefaultGroup(t *testing.T) {
 }
 
 func TestBPSCreateAllowsAuthorizationWithoutAnyGroup(t *testing.T) {
-	t.Setenv("SUB2API_BPS_BINARY", "")
+	t.Setenv("SUB2API_BPS_STATE_DIR", "")
+	t.Setenv("DATA_DIR", t.TempDir())
 	repo := newSparkShadowRepoStub()
 	admin := &adminServiceImpl{accountRepo: repo, groupRepo: &sparkShadowGroupRepoStub{}}
 	parent := &Account{Name: "parent", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
@@ -59,4 +61,22 @@ func TestBPSCreateAllowsAuthorizationWithoutAnyGroup(t *testing.T) {
 	status, err := admin.BPSAuthorizationStatus(t.Context(), child.ID, 1, "")
 	require.NoError(t, err)
 	require.Equal(t, "authorization_required", status.State)
+}
+
+func TestBPSRuntimeStatePath(t *testing.T) {
+	data := t.TempDir()
+	t.Setenv("DATA_DIR", data)
+	t.Setenv("SUB2API_BPS_STATE_DIR", "")
+	r, err := bpsRuntime(42)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(data, "bps", "42"), r.Dir)
+	explicit := filepath.Join(data, "custom")
+	t.Setenv("SUB2API_BPS_STATE_DIR", explicit)
+	r, err = bpsRuntime(42)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(explicit, "42"), r.Dir)
+	require.NoError(t, os.Mkdir(explicit, 0700))
+	require.NoError(t, os.Symlink(data, r.Dir))
+	_, err = bpsRuntime(42)
+	require.ErrorIs(t, err, bpsUnavailable)
 }

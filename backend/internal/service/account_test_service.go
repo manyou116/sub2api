@@ -1220,7 +1220,7 @@ func (s *AccountTestService) testBPSAccountConnection(c *gin.Context, account *A
 		return s.sendErrorAndEnd(c, "BPS authorization is missing or expired; reauthorize the shadow")
 	}
 	if err != nil {
-		return s.sendErrorAndEnd(c, "BPS bridge is unavailable")
+		return s.sendErrorAndEnd(c, "BPS runtime is unavailable")
 	}
 	parent, err := s.accountRepo.GetByID(ctx, *account.ParentAccountID)
 	if err != nil || !bpsMatchesParent(bound, parent) {
@@ -1241,7 +1241,7 @@ func (s *AccountTestService) testBPSAccountConnection(c *gin.Context, account *A
 		logger.FromContext(ctx).Info("account_test.bps_timing", zap.Any("timing_ms", timing))
 		if c.Request.Context().Err() == nil {
 			var parts []string
-			for _, phase := range []string{"bridge_acquire", "queue", "rate_wait", "handshake_rate_wait", "ws_dial_span", "upstream_open", "first_event", "first_text", "completed", "total"} {
+			for _, phase := range []string{"runtime_acquire", "queue", "rate_wait", "handshake_rate_wait", "ws_dial_span", "upstream_open", "first_event", "first_text", "completed", "total"} {
 				if ms, ok := timing[phase]; ok {
 					parts = append(parts, fmt.Sprintf("%s=%dms", phase, ms))
 				}
@@ -1251,9 +1251,9 @@ func (s *AccountTestService) testBPSAccountConnection(c *gin.Context, account *A
 	}()
 	acquireStart := time.Now()
 	worker, release, err := bpsAcquireWorker(ctx, process, account)
-	timing["bridge_acquire"] = time.Since(acquireStart).Milliseconds()
+	timing["runtime_acquire"] = time.Since(acquireStart).Milliseconds()
 	if err != nil {
-		return s.sendErrorAndEnd(c, "BPS bridge is unavailable")
+		return s.sendErrorAndEnd(c, "BPS runtime is unavailable")
 	}
 	defer release()
 	body, err := json.Marshal(gin.H{"model": mapped, "input": "Reply with only OK.", "stream": true, "store": false, "reasoning": gin.H{"effort": "low"}})
@@ -1262,7 +1262,7 @@ func (s *AccountTestService) testBPSAccountConnection(c *gin.Context, account *A
 	}
 	streamCtx, cancelStream := context.WithCancelCause(ctx)
 	defer cancelStream(nil)
-	resp, err := worker.Responses(streamCtx, body)
+	resp, err := worker.Responses(streamCtx, bound, body)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return s.sendErrorAndEnd(c, "BPS timed out before receiving a response")

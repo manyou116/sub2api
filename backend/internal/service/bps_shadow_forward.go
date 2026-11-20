@@ -45,7 +45,7 @@ func bpsTargetModel(child *Account) string {
 	return ""
 }
 
-func bpsCheckBridge(ctx context.Context, p bpsbridge.Process, temp string, bound bpsbridge.BoundGrant) error {
+func bpsCheckRuntime(ctx context.Context, p bpsbridge.Runtime, temp string, bound bpsbridge.BoundGrant) error {
 	auth := filepath.Join(temp, "probe.json")
 	if err := bpsbridge.Save(auth, bound); err != nil {
 		return err
@@ -60,21 +60,28 @@ func bpsCheckBridge(ctx context.Context, p bpsbridge.Process, temp string, bound
 
 type bpsRuntimeKey struct {
 	shadowID    int64
+	dir         string
 	proxy       string
 	concurrency int
 }
+type bpsResponseWorker interface {
+	Responses(context.Context, bpsbridge.BoundGrant, []byte) (*http.Response, error)
+	Done() <-chan struct{}
+	Stop()
+}
+
 type bpsRuntimeWorker struct {
 	mu     sync.Mutex
 	key    bpsRuntimeKey
-	worker *bpsbridge.Worker
+	worker bpsResponseWorker
 	users  int
 	idle   *time.Timer
 }
 
 var bpsWorkers sync.Map
 
-func bpsAcquireWorker(ctx context.Context, p bpsbridge.Process, child *Account) (*bpsbridge.Worker, func(), error) {
-	key := bpsRuntimeKey{child.ID, p.Proxy, child.Concurrency}
+func bpsAcquireWorker(ctx context.Context, p bpsbridge.Runtime, child *Account) (bpsResponseWorker, func(), error) {
+	key := bpsRuntimeKey{child.ID, p.Dir, p.Proxy, child.Concurrency}
 	entry, _ := bpsWorkers.LoadOrStore(child.ID, &bpsRuntimeWorker{})
 	slot, ok := entry.(*bpsRuntimeWorker)
 	if !ok {
@@ -84,7 +91,7 @@ func bpsAcquireWorker(ctx context.Context, p bpsbridge.Process, child *Account) 
 	defer slot.mu.Unlock()
 	if slot.worker != nil {
 		select {
-		case <-slot.worker.Done:
+		case <-slot.worker.Done():
 			slot.worker = nil
 		default:
 		}
@@ -219,7 +226,7 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 		return fail(http.StatusServiceUnavailable, "bps_bridge_unavailable")
 	}
 	defer release()
-	resp, err := worker.Responses(ctx, body)
+	resp, err := worker.Responses(ctx, bound, body)
 	if err != nil {
 		return fail(http.StatusBadGateway, "bps_result_unconfirmed")
 	}

@@ -11,24 +11,25 @@ Model selection and mapping use the ordinary Sub2API configuration, with no mode
 required at creation. Existing explicit `bps-<model>` mappings stay valid and can
 be edited in the account model mapping. Send full history. Compact,
 previous-response state, hosted tools, and resubmission to Codex after a BPS
-attempt are unsupported. The bridge emits SSE; Sub2API can return the final
+attempt are unsupported. The runtime emits SSE; Sub2API can return the final
 response object to non-streaming clients.
 
 ## Deployment
 
-Install a trusted standalone [bps-local](https://github.com/manyou116/bps-local-public/tree/8d9e164571eea63cc322717337de82f8dce6e219)
-binary alongside Sub2API. The Sub2API image does not redistribute it. Set both:
+Sub2API runs the BPS service in-process. The normal Sub2API binary and
+image include the runtime. Deployments that previously set
+`SUB2API_BPS_BINARY` can remove the variable and executable mount.
 
-- `SUB2API_BPS_BINARY`: absolute path to the executable (read-only mount in Docker).
-- `SUB2API_BPS_STATE_DIR`: absolute path on a dedicated, writable, private
-  persistent volume owned by the Sub2API process (mode 0700).
+The default private state directory is `${DATA_DIR}/bps` or `./data/bps`
+when `DATA_DIR` is unset. The default is `/app/data/bps` in the official
+container. Keep an existing absolute `SUB2API_BPS_STATE_DIR` and its persistent
+volume to retain authorized shadows and task keys across upgrades. The BPS
+state root and per-shadow directories must be private (0700).
 
-This version supports a **single Sub2API replica** for BPS use. Authorization
-sessions are local to the process, and task slots are coordinated with local
-bridge processes. Do not use a shared state directory across active replicas
-or expose the workers' ephemeral loopback listeners. Run the binary only in
-an isolated container or network namespace. Sub2API uses the parent's outbound
-proxy for BPS; preserve that configuration during authorization and execution.
+Run BPS on a single active replica. Authorization sessions and task admission
+are local to each Sub2API process. Sub2API uses the parent's outbound proxy
+for device authorization and generation. The runtime's upstream transport is
+WebSocket, with one upstream request per Responses submission.
 
 ## Authorization
 
@@ -37,12 +38,12 @@ a fresh JSON file exported by `bps-local --login` or select
 device-code authorization in the same dialog. Device codes must only be entered on the
 provider page. The server verifies the BPS access token against OpenAI signing
 keys and checks both ChatGPT user and workspace against the parent. It checks
-that the bridge can start without sending a generation request. Upstream model
+that the embedded runtime can start without sending a generation request. Upstream model
 permission is checked by BPS when the model is used. Failed or canceled
 authorization leaves a newly created shadow pending and does not replace an
 existing grant.
 
-The bridge's credentials live only on its private state volume (files mode
+BPS credentials live only on the private state volume (files mode
 0600). They are not included in account data export or admin API responses.
 Back up that volume as a secret, separately from the account configuration.
 The account menu shows the BPS expiry; this version uses manual reauthorization,
@@ -53,4 +54,4 @@ performed using a real grant during development.
 The shadow uses a normal account concurrency slot and owns its usage logs.
 A confirmed shared `usage_limit_reached` with an explicit reset timestamp
 updates the parent quota. A generic 429, auth or transport error does not.
-Once a request is sent to the bridge, Sub2API never resubmits it to any account.
+Once a request is sent to the BPS runtime, Sub2API never resubmits it to any account.

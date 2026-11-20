@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,7 +23,7 @@ import (
 const quotaDimensionBPS = "bps"
 const bpsModelPrefix = "bps-"
 
-var bpsUnavailable = infraerrors.New(http.StatusServiceUnavailable, "BPS_UNAVAILABLE", "BPS bridge unavailable: check SUB2API_BPS_BINARY, SUB2API_BPS_STATE_DIR and the parent proxy")
+var bpsUnavailable = infraerrors.New(http.StatusServiceUnavailable, "BPS_UNAVAILABLE", "BPS runtime unavailable: check the private state directory and parent proxy")
 var bpsNotFound = infraerrors.NotFound("BPS_SHADOW_NOT_FOUND", "BPS shadow not found")
 
 func (a *Account) IsBPSShadow() bool {
@@ -95,23 +97,39 @@ func (s *adminServiceImpl) CreateBPSShadow(ctx context.Context, parentID int64, 
 	return child, nil
 }
 
-func bpsProcess(id int64) (bpsbridge.Process, error) {
-	binary, root := os.Getenv("SUB2API_BPS_BINARY"), os.Getenv("SUB2API_BPS_STATE_DIR")
-	if !filepath.IsAbs(binary) || !filepath.IsAbs(root) {
-		return bpsbridge.Process{}, bpsUnavailable
+func bpsRuntime(id int64) (bpsbridge.Runtime, error) {
+	root := strings.TrimSpace(os.Getenv("SUB2API_BPS_STATE_DIR"))
+	if root == "" {
+		base := strings.TrimSpace(os.Getenv("DATA_DIR"))
+		if base == "" {
+			base = "data"
+		}
+		var err error
+		root, err = filepath.Abs(filepath.Join(base, "bps"))
+		if err != nil {
+			return bpsbridge.Runtime{}, bpsUnavailable
+		}
 	}
-	//nolint:gosec // Absolute binary path comes from the operator's process environment.
-	if info, err := os.Stat(binary); err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
-		return bpsbridge.Process{}, bpsUnavailable
+	if id <= 0 || !filepath.IsAbs(root) {
+		return bpsbridge.Runtime{}, bpsUnavailable
 	}
-	return bpsbridge.Process{Binary: binary, Dir: filepath.Join(root, fmt.Sprint(id))}, nil
+	root = filepath.Clean(root)
+	dir := filepath.Join(root, fmt.Sprint(id))
+	for _, path := range []string{root, dir} {
+		//nolint:gosec // The root comes from operator configuration and the child name is a positive integer.
+		info, err := os.Lstat(path)
+		if !errors.Is(err, os.ErrNotExist) && (err != nil || !info.IsDir() || (runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0)) {
+			return bpsbridge.Runtime{}, bpsUnavailable
+		}
+	}
+	return bpsbridge.Runtime{Dir: dir}, nil
 }
 
-func bpsGrantPath(p bpsbridge.Process) string { return filepath.Join(p.Dir, "grant.json") }
+func bpsGrantPath(p bpsbridge.Runtime) string { return filepath.Join(p.Dir, "grant.json") }
 
-func bpsReadBound(id int64) (bpsbridge.BoundGrant, bpsbridge.Process, error) {
+func bpsReadBound(id int64) (bpsbridge.BoundGrant, bpsbridge.Runtime, error) {
 	var bound bpsbridge.BoundGrant
-	p, err := bpsProcess(id)
+	p, err := bpsRuntime(id)
 	if err != nil {
 		return bound, p, err
 	}
@@ -183,7 +201,7 @@ func (s *adminServiceImpl) BPSAuthorizationStatus(ctx context.Context, id, actor
 	return BPSAuthorization{State: "authorization_required"}, nil
 }
 
-func bpsAdminProxy(ctx context.Context, s *adminServiceImpl, p *bpsbridge.Process, parent *Account) error {
+func bpsAdminProxy(ctx context.Context, s *adminServiceImpl, p *bpsbridge.Runtime, parent *Account) error {
 	if parent.ProxyID == nil {
 		return nil
 	}
@@ -203,7 +221,7 @@ func (s *adminServiceImpl) StartBPSAuthorization(ctx context.Context, id, actor 
 	if method != "device" && (method != "paste" || len(data) == 0 || len(data) > bpsbridge.MaxGrantBytes) {
 		return BPSAuthorization{}, infraerrors.BadRequest("BPS_AUTH_INPUT_INVALID", "choose device or supply a BPS authorization JSON")
 	}
-	p, err := bpsProcess(id)
+	p, err := bpsRuntime(id)
 	if err != nil || bpsAdminProxy(ctx, s, &p, parent) != nil || os.MkdirAll(p.Dir, 0700) != nil {
 		return BPSAuthorization{}, bpsUnavailable
 	}
@@ -242,7 +260,7 @@ func (s *adminServiceImpl) StartBPSAuthorization(ctx context.Context, id, actor 
 	return initial, nil
 }
 
-func (s *adminServiceImpl) completeBPSAuthorization(ctx context.Context, id int64, op *bpsAuthSession, p bpsbridge.Process, method string, raw []byte) {
+func (s *adminServiceImpl) completeBPSAuthorization(ctx context.Context, id int64, op *bpsAuthSession, p bpsbridge.Runtime, method string, raw []byte) {
 	defer op.stop()
 	update := func(state string, expiry *time.Time, prompt *bpsbridge.Prompt) {
 		bpsAuth.Lock()
@@ -258,9 +276,7 @@ func (s *adminServiceImpl) completeBPSAuthorization(ctx context.Context, id int6
 	}
 	defer func() { _ = os.RemoveAll(temp) }()
 	if method == "device" {
-		device := p
-		device.Dir = temp
-		raw, err = device.Device(ctx, func(prompt bpsbridge.Prompt) {
+		raw, err = p.Device(ctx, func(prompt bpsbridge.Prompt) {
 			expires, _ := ctx.Deadline()
 			update("pending", &expires, &prompt)
 		})
@@ -284,7 +300,7 @@ func (s *adminServiceImpl) completeBPSAuthorization(ctx context.Context, id int6
 		update("identity_mismatch", nil, nil)
 		return
 	}
-	if err := bpsCheckBridge(ctx, p, temp, bound); err != nil {
+	if err := bpsCheckRuntime(ctx, p, temp, bound); err != nil {
 		update("unavailable", nil, nil)
 		return
 	}
@@ -326,9 +342,8 @@ func removeBPSAuthorization(id int64) {
 		op.stop()
 		delete(bpsAuth.sessions, id)
 	}
-	root := os.Getenv("SUB2API_BPS_STATE_DIR")
-	if filepath.IsAbs(root) {
+	if p, err := bpsRuntime(id); err == nil {
 		//nolint:gosec // The root is operator-configured and the only dynamic component is a positive integer.
-		_ = os.Remove(filepath.Join(root, fmt.Sprint(id), "grant.json"))
+		_ = os.Remove(bpsGrantPath(p))
 	}
 }
