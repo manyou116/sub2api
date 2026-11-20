@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -63,7 +64,7 @@ func (p *PrereadBody) Bytes() []byte {
 
 // ReadRequestBodyWithPrealloc reads request body with preallocated buffer based
 // on content length, transparently decoding any Content-Encoding the upstream
-// client used to compress the body (zstd, gzip, deflate).
+// client used to compress the body (zstd, gzip, br, deflate).
 // 已由 PrereadBody 回填的请求体直接返回其完整切片（零拷贝），不检查内部
 // reader 是否已被消费——见 PrereadBody 的文档说明。
 func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
@@ -233,6 +234,8 @@ func decompressRequestBody(encoding string, raw []byte) ([]byte, error) {
 func decompressRequestBodyWithBudget(ctx context.Context, encoding string, raw []byte) (requestBodyBuffer, error) {
 	var reader io.Reader
 	switch encoding {
+	case "br":
+		reader = brotli.NewReader(bytes.NewReader(raw))
 	case "zstd":
 		if err := reserveRequestBodyMemory(ctx, maxRequestZstdWindowSize); err != nil {
 			return requestBodyBuffer{}, err

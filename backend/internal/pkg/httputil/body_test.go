@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -99,13 +100,40 @@ func TestReadRequestBodyWithPrealloc_DecodesDeflate(t *testing.T) {
 }
 
 func TestReadRequestBodyWithPrealloc_RejectsUnsupportedEncoding(t *testing.T) {
-	req := newRequestWithBody(t, []byte(samplePayload), "br")
+	req := newRequestWithBody(t, []byte(samplePayload), "compress")
 	_, err := ReadRequestBodyWithPrealloc(req)
 	if err == nil {
 		t.Fatal("expected error for unsupported encoding, got nil")
 	}
-	if !strings.Contains(err.Error(), "br") {
+	if !strings.Contains(err.Error(), "compress") {
 		t.Fatalf("error should mention encoding, got %v", err)
+	}
+}
+
+func TestReadRequestBodyWithPrealloc_DecodesBrotli(t *testing.T) {
+	var encoded bytes.Buffer
+	writer := brotli.NewWriterLevel(&encoded, 4)
+	if _, err := writer.Write([]byte(samplePayload)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := newRequestWithBody(t, encoded.Bytes(), " Br ")
+	req.Header.Set("Content-Length", "123")
+	got, err := ReadRequestBodyWithPrealloc(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != samplePayload || req.ContentLength != int64(len(samplePayload)) {
+		t.Fatal("Brotli request body was not restored")
+	}
+	if req.Header.Get("Content-Encoding") != "" || req.Header.Get("Content-Length") != "" {
+		t.Fatal("compressed request metadata was not cleared")
+	}
+	_, err = ReadRequestBodyWithPrealloc(newRequestWithBody(t, []byte{0xff, 0xff, 0xff}, "br"))
+	if err == nil {
+		t.Fatal("corrupt Brotli request must fail")
 	}
 }
 
