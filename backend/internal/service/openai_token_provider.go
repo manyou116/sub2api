@@ -141,10 +141,13 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 	}
 
 	cacheKey := OpenAITokenCacheKey(account)
+	if openAIOAuthTokenRejected(account) {
+		return "", errors.New("OpenAI access token rejected; awaiting OAuth refresh")
+	}
 
 	// 1) Try cache first.
 	if p.tokenCache != nil {
-		if token, err := p.tokenCache.GetAccessToken(ctx, cacheKey); err == nil && strings.TrimSpace(token) != "" {
+		if token, err := p.tokenCache.GetAccessToken(ctx, cacheKey); err == nil && strings.TrimSpace(token) != "" && !openAIOAuthTokenMatches401(account, token) {
 			slog.Debug("openai_token_cache_hit", "account_id", account.ID)
 			return token, nil
 		} else if err != nil {
@@ -189,7 +192,7 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 				if waitErr != nil {
 					return "", waitErr
 				}
-				if strings.TrimSpace(token) != "" {
+				if strings.TrimSpace(token) != "" && !openAIOAuthTokenMatches401(account, token) {
 					slog.Debug("openai_token_cache_hit_after_wait", "account_id", account.ID)
 					return token, nil
 				}
@@ -220,7 +223,7 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 			if waitErr != nil {
 				return "", waitErr
 			}
-			if strings.TrimSpace(token) != "" {
+			if strings.TrimSpace(token) != "" && !openAIOAuthTokenMatches401(account, token) {
 				slog.Debug("openai_token_cache_hit_after_wait", "account_id", account.ID)
 				return token, nil
 			}
