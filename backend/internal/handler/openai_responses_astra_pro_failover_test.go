@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -54,7 +55,10 @@ func newAstraProCapturedUpstream(answers ...*http.Response) *astraProCapturedUps
 func (u *astraProCapturedUpstream) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	body, _ := io.ReadAll(req.Body)
+	body, err := httputil.ReadRequestBodyWithPrealloc(req)
+	if err != nil {
+		return nil, err
+	}
 	u.urls = append(u.urls, req.URL.String())
 	u.accountIDs = append(u.accountIDs, accountID)
 	u.bodies = append(u.bodies, body)

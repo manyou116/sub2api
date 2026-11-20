@@ -21,6 +21,7 @@ import (
 // ChatCompletions handles OpenAI Chat Completions API requests.
 // POST /v1/chat/completions
 func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
+	c.Request = c.Request.WithContext(service.WithUpstreamRequestBodyStats(c.Request.Context()))
 	streamStarted := false
 	defer h.recoverResponsesPanic(c, &streamStarted)
 

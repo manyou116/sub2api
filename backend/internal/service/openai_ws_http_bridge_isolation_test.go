@@ -66,6 +66,10 @@ func (u *httpBridgeIsolationUpstream) Do(req *http.Request, _ string, _ int64, _
 		return nil, err
 	}
 	_ = req.Body.Close()
+	body, err = decodeOpenAITestUpstreamBody(req, body)
+	if err != nil {
+		return nil, err
+	}
 	input := gjson.GetBytes(body, "input")
 	var texts []string
 	if input.Type == gjson.String {

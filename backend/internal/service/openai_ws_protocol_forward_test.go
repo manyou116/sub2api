@@ -40,9 +40,13 @@ func (u *httpUpstreamSequenceRecorder) Do(req *http.Request, proxyURL string, ac
 	u.reqs = append(u.reqs, req)
 	if req != nil && req.Body != nil {
 		b, _ := io.ReadAll(req.Body)
-		u.bodies = append(u.bodies, b)
 		_ = req.Body.Close()
 		req.Body = io.NopCloser(bytes.NewReader(b))
+		decoded, err := decodeOpenAITestUpstreamBody(req, b)
+		if err != nil {
+			return nil, err
+		}
+		u.bodies = append(u.bodies, decoded)
 	} else {
 		u.bodies = append(u.bodies, nil)
 	}
