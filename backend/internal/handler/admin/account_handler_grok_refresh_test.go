@@ -97,3 +97,24 @@ func TestRefreshSingleAccountRoutesGrokThroughGrokOAuthService(t *testing.T) {
 	require.Equal(t, "ACTIVE", adminSvc.updatedCredentials["entitlement_status"])
 	require.Equal(t, adminSvc.updatedCredentials, updated.Credentials)
 }
+
+func TestRefreshSingleAccountGrokPreservesGlobalUpstream(t *testing.T) {
+	for _, baseURL := range []string{"", "  "} {
+		t.Run("base_url="+baseURL, func(t *testing.T) {
+			adminSvc := &grokRefreshAdminService{stubAdminService: newStubAdminService()}
+			handler := &AccountHandler{
+				adminService: adminSvc,
+				grokOAuthService: &grokRefreshOAuthStub{info: &service.GrokTokenInfo{
+					AccessToken: "new-access", RefreshToken: "new-refresh", ExpiresAt: 1_900_000_000,
+				}},
+			}
+			account := &service.Account{ID: 4227, Platform: service.PlatformGrok, Type: service.AccountTypeOAuth,
+				Credentials: map[string]any{"base_url": baseURL, "refresh_token": "old-refresh"}}
+			updated, warning, err := handler.refreshSingleAccount(context.Background(), account)
+			require.NoError(t, err)
+			require.Empty(t, warning)
+			require.Empty(t, updated.GetCredential("base_url"))
+			require.Equal(t, "new-access", updated.GetCredential("access_token"))
+		})
+	}
+}
