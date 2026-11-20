@@ -17,6 +17,7 @@ var (
 		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo, PlatformTypeSafe,
 		PlatformCommandCode,
 		PlatformCline,
+		PlatformKiro,
 	}
 	legacySchedulerSnapshotPlatforms = []string{
 		PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok,
@@ -57,7 +58,7 @@ func legacyIsUpstreamBillingProbeIdentity(platform, accountType string) bool {
 	switch platform {
 	case PlatformOpenAI, PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformGrok,
 		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo,
-		PlatformTypeSafe, PlatformCommandCode, PlatformCline:
+		PlatformTypeSafe, PlatformCommandCode, PlatformCline, PlatformKiro:
 		return true
 	}
 	return false
@@ -74,6 +75,9 @@ func legacyIsHeaderOverrideEligible(platform, accountType string) bool {
 }
 
 func legacyIsConcreteRequestPlatform(platform string) bool {
+	if platform == PlatformKiro {
+		return false
+	}
 	for _, p := range legacyAllPlatforms {
 		if p == platform {
 			return true

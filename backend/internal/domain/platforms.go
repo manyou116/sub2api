@@ -19,6 +19,7 @@ const (
 	PlatformGatewayGemini PlatformGateway = "gemini"
 	// PlatformGatewayAntigravity 由 Antigravity 网关处理。
 	PlatformGatewayAntigravity PlatformGateway = "antigravity"
+	PlatformGatewayKiro        PlatformGateway = "kiro"
 )
 
 // PlatformSpec 描述一个具体（非 composite）平台。
@@ -48,6 +49,7 @@ var platformList = []PlatformSpec{
 	{ID: PlatformTypeSafe, DisplayName: "TypeSafe / Jev", Gateway: PlatformGatewayAnthropic, LiteLLMProvider: "typesafe"},
 	{ID: PlatformCommandCode, DisplayName: "Command Code", Gateway: PlatformGatewayOpenAI},
 	{ID: PlatformCline, DisplayName: "Cline", Gateway: PlatformGatewayOpenAI},
+	{ID: PlatformKiro, DisplayName: "Kiro", Gateway: PlatformGatewayKiro},
 }
 
 var platformIndex = func() map[string]int {
@@ -117,7 +119,8 @@ func CompositePrecedencePlatformIDs() []string {
 		}
 	}
 	for _, spec := range platformList {
-		if _, ok := seen[spec.ID]; !ok {
+		// Kiro uses a dedicated gateway and does not support composite routes.
+		if _, ok := seen[spec.ID]; !ok && spec.Gateway != PlatformGatewayKiro {
 			out = append(out, spec.ID)
 		}
 	}

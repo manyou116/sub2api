@@ -50,6 +50,7 @@ type OpenAIGatewayHandler struct {
 	concurrencyHelper          *ConcurrencyHelper
 	imageLimiter               *imageConcurrencyLimiter
 	maxAccountSwitches         int
+	kiroTokenProvider          *service.KiroTokenProvider
 	cfg                        *config.Config
 }
 
@@ -384,6 +385,13 @@ func NewOpenAIGatewayHandler(
 		imageLimiter:             &imageConcurrencyLimiter{},
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
+	}
+}
+
+// SetKiroTokenProvider injects the Kiro access-token provider.
+func (h *OpenAIGatewayHandler) SetKiroTokenProvider(p *service.KiroTokenProvider) {
+	if h != nil {
+		h.kiroTokenProvider = p
 	}
 }
 

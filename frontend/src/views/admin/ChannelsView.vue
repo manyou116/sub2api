@@ -782,7 +782,7 @@ let abortController: AbortController | null = null
 // 平台清单中的全部具体平台（展示顺序）。
 const platformOrder = computed<GroupPlatform[]>(() => listPlatformIds())
 // Composite pricing/mapping may target every concrete schedulable provider.
-const compositePlatforms = platformOrder
+const compositePlatforms = computed(() => platformOrder.value.filter(platform => platform !== 'kiro'))
 
 // ── Helpers ──
 function formatDate(value: string): string {
