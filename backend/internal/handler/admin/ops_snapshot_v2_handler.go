@@ -76,70 +76,66 @@ func (h *OpsHandler) GetDashboardSnapshotV2(c *gin.Context) {
 	})
 	cacheKey := string(keyRaw)
 
-	if cached, ok := opsDashboardSnapshotV2Cache.Get(cacheKey); ok {
-		if cached.ETag != "" {
-			c.Header("ETag", cached.ETag)
-			c.Header("Vary", "If-None-Match")
-			if ifNoneMatchMatched(c.GetHeader("If-None-Match"), cached.ETag) {
-				c.Status(http.StatusNotModified)
-				return
+	cached, hit, err := opsDashboardSnapshotV2Cache.GetOrLoad(cacheKey, func() (any, error) {
+		var (
+			overview *service.OpsDashboardOverview
+			trend    *service.OpsThroughputTrendResponse
+			errTrend *service.OpsErrorTrendResponse
+		)
+		g, gctx := errgroup.WithContext(c.Request.Context())
+		g.Go(func() error {
+			f := *filter
+			result, err := h.opsService.GetDashboardOverview(gctx, &f)
+			if err != nil {
+				return err
 			}
+			overview = result
+			return nil
+		})
+		g.Go(func() error {
+			f := *filter
+			result, err := h.opsService.GetThroughputTrend(gctx, &f, bucketSeconds)
+			if err != nil {
+				return err
+			}
+			trend = result
+			return nil
+		})
+		g.Go(func() error {
+			f := *filter
+			result, err := h.opsService.GetErrorTrend(gctx, &f, bucketSeconds)
+			if err != nil {
+				return err
+			}
+			errTrend = result
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
 		}
-		c.Header("X-Snapshot-Cache", "hit")
-		response.Success(c, cached.Payload)
-		return
-	}
-
-	var (
-		overview *service.OpsDashboardOverview
-		trend    *service.OpsThroughputTrendResponse
-		errTrend *service.OpsErrorTrendResponse
-	)
-	g, gctx := errgroup.WithContext(c.Request.Context())
-	g.Go(func() error {
-		f := *filter
-		result, err := h.opsService.GetDashboardOverview(gctx, &f)
-		if err != nil {
-			return err
-		}
-		overview = result
-		return nil
+		return &opsDashboardSnapshotV2Response{
+			GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
+			Overview:        overview,
+			ThroughputTrend: trend,
+			ErrorTrend:      errTrend,
+		}, nil
 	})
-	g.Go(func() error {
-		f := *filter
-		result, err := h.opsService.GetThroughputTrend(gctx, &f, bucketSeconds)
-		if err != nil {
-			return err
-		}
-		trend = result
-		return nil
-	})
-	g.Go(func() error {
-		f := *filter
-		result, err := h.opsService.GetErrorTrend(gctx, &f, bucketSeconds)
-		if err != nil {
-			return err
-		}
-		errTrend = result
-		return nil
-	})
-	if err := g.Wait(); err != nil {
+	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-
-	resp := &opsDashboardSnapshotV2Response{
-		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
-		Overview:        overview,
-		ThroughputTrend: trend,
-		ErrorTrend:      errTrend,
-	}
-
-	cached := opsDashboardSnapshotV2Cache.Set(cacheKey, resp)
 	if cached.ETag != "" {
 		c.Header("ETag", cached.ETag)
 		c.Header("Vary", "If-None-Match")
+		if ifNoneMatchMatched(c.GetHeader("If-None-Match"), cached.ETag) {
+			c.Status(http.StatusNotModified)
+			return
+		}
 	}
-	c.Header("X-Snapshot-Cache", "miss")
-	response.Success(c, resp)
+	if hit {
+		c.Header("X-Snapshot-Cache", "hit")
+	} else {
+		c.Header("X-Snapshot-Cache", "miss")
+	}
+	response.Success(c, cached.Payload)
 }
