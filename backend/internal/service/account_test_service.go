@@ -22,13 +22,17 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/bpsbridge"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
@@ -36,6 +40,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
 )
 
 // sseDataPrefix matches SSE data lines with optional whitespace after colon.
@@ -182,6 +187,9 @@ func (s *AccountTestService) SetOpenAIGatewayService(gateway *OpenAIGatewayServi
 // It only fills picker-only gaps (local display-name fallbacks, OAuth image choices)
 // on its own copy; the shared catalog and its cache stay untouched.
 func (s *AccountTestService) FetchOpenAIAccountModels(ctx context.Context, account *Account) ([]openai.Model, error) {
+	if account != nil && account.IsBPSShadow() {
+		return bpsAccountTestModels(account), nil
+	}
 	if s == nil || s.openaiGatewayService == nil {
 		return nil, errors.New("OpenAI model discovery service is unavailable")
 	}
@@ -378,6 +386,9 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
 	bindAccountTestPlatform(c, account)
+	if account.IsBPSShadow() {
+		return s.testBPSAccountConnection(c, account, modelID, mode)
+	}
 
 	// Synthetic UI load-test accounts exercise the real SSE parsing and modal
 	// interactions, but intentionally do not send their placeholder credentials
@@ -1147,6 +1158,191 @@ func (s *AccountTestService) grokTestProxyURL(account *Account) string {
 		return account.Proxy.URL()
 	}
 	return ""
+}
+
+func bpsAccountTestModel(account *Account, model string) string {
+	ctx := WithBPSResponses(context.Background(), model)
+	_, mapped := resolveOpenAIForwardMappedModels(account, model, false)
+	if strings.Contains(model, "*") || mapped == "" || bpsRouteMismatch(ctx, account, model, false) ||
+		!supportsOpenAIRequestModel(account, model, false) {
+		return ""
+	}
+	return mapped
+}
+
+func bpsAccountTestModels(account *Account) []openai.Model {
+	models := make([]openai.Model, 0)
+	seen := make(map[string]bool)
+	for _, model := range openai.DefaultModels {
+		if bpsAccountTestModel(account, model.ID) != "" {
+			models = append(models, model)
+			seen[model.ID] = true
+		}
+	}
+	var aliases []string
+	for model := range account.GetModelMapping() {
+		if !seen[model] && bpsAccountTestModel(account, model) != "" {
+			aliases = append(aliases, model)
+		}
+	}
+	sort.Strings(aliases)
+	for _, model := range aliases {
+		models = append(models, openai.Model{ID: model, Object: "model", Type: "model", DisplayName: model})
+	}
+	return models
+}
+
+const bpsTestCompletionGrace = 2 * time.Second
+
+var errBPSProbeConnectedOnly = errors.New("BPS returned text without a completion event")
+
+func (s *AccountTestService) testBPSAccountConnection(c *gin.Context, account *Account, model, mode string) error {
+	start := time.Now()
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Accel-Buffering", "no")
+	if c.GetBool(accountTestBackgroundKey) {
+		return s.sendErrorAndEnd(c, "BPS supports manual connection tests only")
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = openai.DefaultTestModel
+	}
+	mapped := bpsAccountTestModel(account, model)
+	if mapped == "" || normalizeAccountTestMode(mode) == AccountTestModeCompact {
+		return s.sendErrorAndEnd(c, "BPS requires a supported text model and standard test mode")
+	}
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: model})
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	defer cancel()
+	bound, process, err := bpsReadBound(account.ID)
+	if errors.Is(err, bpsbridge.ErrInvalidGrant) {
+		return s.sendErrorAndEnd(c, "BPS authorization is missing or expired; reauthorize the shadow")
+	}
+	if err != nil {
+		return s.sendErrorAndEnd(c, "BPS bridge is unavailable")
+	}
+	parent, err := s.accountRepo.GetByID(ctx, *account.ParentAccountID)
+	if err != nil || !bpsMatchesParent(bound, parent) {
+		return s.sendErrorAndEnd(c, "BPS authorization does not match the parent account")
+	}
+	if !bpsParentQuotaAllows(ctx, parent, mapped) {
+		return s.sendErrorAndEnd(c, "BPS shared quota is currently unavailable")
+	}
+	if parent.ProxyID != nil {
+		if parent.Proxy == nil {
+			return s.sendErrorAndEnd(c, "BPS parent proxy is unavailable")
+		}
+		process.Proxy = parent.Proxy.URL()
+	}
+	timing := make(map[string]int64)
+	defer func() {
+		timing["total"] = time.Since(start).Milliseconds()
+		logger.FromContext(ctx).Info("account_test.bps_timing", zap.Any("timing_ms", timing))
+		if c.Request.Context().Err() == nil {
+			var parts []string
+			for _, phase := range []string{"bridge_acquire", "queue", "rate_wait", "handshake_rate_wait", "ws_dial_span", "upstream_open", "first_event", "first_text", "completed", "total"} {
+				if ms, ok := timing[phase]; ok {
+					parts = append(parts, fmt.Sprintf("%s=%dms", phase, ms))
+				}
+			}
+			s.sendEvent(c, TestEvent{Type: "status", Text: "BPS timing: " + strings.Join(parts, " · ")})
+		}
+	}()
+	acquireStart := time.Now()
+	worker, release, err := bpsAcquireWorker(ctx, process, account)
+	timing["bridge_acquire"] = time.Since(acquireStart).Milliseconds()
+	if err != nil {
+		return s.sendErrorAndEnd(c, "BPS bridge is unavailable")
+	}
+	defer release()
+	body, err := json.Marshal(gin.H{"model": mapped, "input": "Reply with only OK.", "stream": true, "store": false, "reasoning": gin.H{"effort": "low"}})
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Could not encode BPS test request")
+	}
+	streamCtx, cancelStream := context.WithCancelCause(ctx)
+	defer cancelStream(nil)
+	resp, err := worker.Responses(streamCtx, body)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return s.sendErrorAndEnd(c, "BPS timed out before receiving a response")
+		}
+		return s.sendErrorAndEnd(c, "BPS test request did not complete")
+	}
+	defer func() { _ = resp.Body.Close() }()
+	recordBPSTestBridgeTiming(resp.Header, timing)
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return s.sendErrorAndEnd(c, "BPS request was rate limited (HTTP 429)")
+	}
+	if !bpsIsStream(resp) {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("BPS test expected a response stream (HTTP %d)", resp.StatusCode))
+	}
+	var grace *time.Timer
+	defer func() {
+		if grace != nil {
+			grace.Stop()
+		}
+	}()
+	event, err := bpsReadStream(resp.Body, 16<<20, func(data string, _ []byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, seen := timing["first_event"]; !seen {
+			timing["first_event"] = time.Since(start).Milliseconds()
+		}
+		value := gjson.Parse(data)
+		if value.Get("type").String() == "response.output_text.delta" {
+			delta := value.Get("delta").String()
+			if grace == nil && strings.TrimSpace(delta) != "" {
+				timing["first_text"] = time.Since(start).Milliseconds()
+				grace = time.AfterFunc(bpsTestCompletionGrace, func() { cancelStream(errBPSProbeConnectedOnly) })
+				s.sendEvent(c, TestEvent{Type: "status", Status: "bps_connected"})
+			}
+			s.sendEvent(c, TestEvent{Type: "content", Text: delta})
+		}
+		return nil
+	})
+	switch event.Get("type").String() {
+	case "response.completed":
+		if err == nil {
+			timing["completed"] = time.Since(start).Milliseconds()
+			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+			return nil
+		}
+	case "response.failed", "error":
+		return s.sendErrorAndEnd(c, "BPS upstream reported a failed response")
+	case "response.incomplete":
+		return s.sendErrorAndEnd(c, "BPS upstream reported an incomplete response")
+	}
+	if c.Request.Context().Err() == nil && grace != nil &&
+		(errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(context.Cause(streamCtx), errBPSProbeConnectedOnly) || errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+		s.sendEvent(c, TestEvent{Type: "test_complete", Status: "bps_connected_only", Text: "No completion event"})
+		// Do not trigger the admin handler's successful-test account recovery.
+		return errBPSProbeConnectedOnly
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return s.sendErrorAndEnd(c, "BPS timed out before receiving a completed response")
+	}
+	return s.sendErrorAndEnd(c, "BPS test ended without a completed response")
+}
+
+func recordBPSTestBridgeTiming(header http.Header, timing map[string]int64) {
+	read := func(name string) (int64, bool) {
+		n, err := strconv.ParseInt(header.Get("X-BPS-"+name), 10, 64)
+		return n, err == nil && n >= 0
+	}
+	for phase, name := range map[string]string{
+		"queue": "Queue-Ms", "rate_wait": "Rate-Wait-Ms", "handshake_rate_wait": "Handshake-Rate-Wait-Ms", "upstream_open": "Upstream-Open-Ms",
+	} {
+		if ms, ok := read(name); ok {
+			timing[phase] = ms
+		}
+	}
+	from, fromOK := read("Ws-Dial-Start-Unix-Ms")
+	to, toOK := read("Ws-Dial-Done-Unix-Ms")
+	if fromOK && toOK && to >= from {
+		timing["ws_dial_span"] = to - from
+	}
 }
 
 func (s *AccountTestService) prepareGrokTestSSE(c *gin.Context) {

@@ -692,6 +692,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 生图意图只影响能力路由与图片计费，不关门：混合 /v1/responses 请求的
 	// token 计费部分仍受利润门保护，独立图片/视频端点才在门外。
 	pricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
+	if !needsResponses && !imageIntent {
+		pricingCtx = service.WithBPSResponses(pricingCtx, forwardModel)
+	}
 	c.Request = c.Request.WithContext(pricingCtx)
 
 	for {

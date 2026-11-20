@@ -49,6 +49,21 @@ const getBodyText = () => document.body.textContent ?? ''
 const getBodyButtons = () => Array.from(document.body.querySelectorAll('button'))
 
 describe('AccountActionMenu — spark shadow 按钮可见性', () => {
+  it('allows a manual test for BPS without exposing scheduled tests', async () => {
+    const account = makeAccount({ parent_account_id: 42, quota_dimension: 'bps' })
+    const wrapper = mount(AccountActionMenu, { props: { show: true, account, anchorRect }, attachTo: document.body })
+    try {
+      const button = getBodyButtons().find(b => b.textContent?.includes('admin.accounts.testConnection'))
+      expect(button).toBeDefined()
+      expect(getBodyText()).not.toContain('admin.scheduledTests.schedule')
+      button?.click()
+      await wrapper.vm.$nextTick()
+      expect(wrapper.emitted('test')?.[0]).toEqual([account])
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
   it.each(['oauth', 'setup-token'] as const)('allows a real OpenAI %s parent to create a Web shadow', async (type) => {
     const account = makeAccount({ type, parent_account_id: null })
     const wrapper = mount(AccountActionMenu, { props: { show: true, account, anchorRect }, attachTo: document.body })
