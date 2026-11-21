@@ -300,13 +300,26 @@ func TestStartRateProxyClonesShareStateAndLegacySSEWaits(t *testing.T) {
 	if clone.startRates != s.startRates || clone.dialRates != s.dialRates || clone.startAuthorization != s.startAuthorization || !clone.startDeadline.Equal(deadline) {
 		t.Fatal("proxy clone lost rate/auth/deadline")
 	}
+	lastStart := func() time.Time {
+		t.Helper()
+		rate := s.startRates.account("acct-test")
+		rate.mu.Lock()
+		defer rate.mu.Unlock()
+		if len(rate.starts) != 1 {
+			t.Fatalf("expected one start in the shared window, got %d", len(rate.starts))
+		}
+		return rate.starts[0]
+	}
 	if rec := postResponses(t, s.Handler(), basicBody()); rec.Code != 200 {
 		t.Fatal(rec.Body.String())
 	}
-	started := time.Now()
+	// Compare the two recorded starts. The first response can consume part
+	// of the rate window before the second request is made.
+	firstStart := lastStart()
 	rec := postResponses(t, clone.Handler(), basicBody())
-	if rec.Code != 200 || requests.Load() != 2 || time.Since(started) < time.Second-5*time.Millisecond {
-		t.Fatalf("SSE bypassed shared window: %d requests=%d", rec.Code, requests.Load())
+	gap := lastStart().Sub(firstStart)
+	if rec.Code != 200 || requests.Load() != 2 || gap < startRateWindow {
+		t.Fatalf("SSE bypassed shared window: %d requests=%d start gap=%s", rec.Code, requests.Load(), gap)
 	}
 }
 
