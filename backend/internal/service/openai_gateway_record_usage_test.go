@@ -675,6 +675,29 @@ func TestOpenAIGatewayServiceRecordUsage_IncludesEndpointMetadata(t *testing.T) 
 	require.Equal(t, "/v1/responses", *usageRepo.lastLog.UpstreamEndpoint)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_BPSUsesShadowIdentity(t *testing.T) {
+	logs := &openAIRecordUsageLogRepoStub{inserted: true}
+	billing := &openAIRecordUsageBillingRepoStub{}
+	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(logs, billing, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+	repo := &openAIRecordUsageAccountRepoStub{}
+	svc.accountRepo = repo
+	parent := int64(7)
+	child := &Account{ID: 8, ParentAccountID: &parent, Platform: PlatformOpenAI, Type: AccountTypeOAuth, QuotaDimension: quotaDimensionBPS}
+	require.NoError(t, svc.RecordUsage(t.Context(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{Model: "gpt-6-luna", RequestID: "resp_bps_usage",
+			Usage: OpenAIUsage{InputTokens: 8, OutputTokens: 2}},
+		APIKey: &APIKey{ID: 1, Group: &Group{RateMultiplier: 1}},
+		User:   &User{ID: 2}, Account: child,
+		InboundEndpoint: "/v1/chat/completions", UpstreamEndpoint: "/bps/responses",
+	}))
+	require.Zero(t, repo.calls)
+	require.Equal(t, 1, logs.calls)
+	require.Equal(t, child.ID, logs.lastLog.AccountID)
+	require.Equal(t, 2, logs.lastLog.OutputTokens)
+	require.Equal(t, 1, billing.calls)
+	require.Equal(t, child.ID, billing.lastCmd.AccountID)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_FallsBackToGroupDefaultRateOnResolverError(t *testing.T) {
 	groupID := int64(12)
 	groupRate := 1.6

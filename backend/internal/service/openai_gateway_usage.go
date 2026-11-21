@@ -189,9 +189,14 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	user := input.User
 	account := input.Account
 	subscription := input.Subscription
-	billingAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
-	if err != nil {
-		return err
+	// BPS generates with its own grant and attributes usage to the shadow.
+	billingAccount := account
+	var err error
+	if !account.IsBPSShadow() {
+		billingAccount, err = resolveCredentialAccount(ctx, s.accountRepo, account)
+		if err != nil {
+			return err
+		}
 	}
 	if !isGrokVideoUsageResult(result, nil) {
 		ApplyOpenAIImageBillingResolution(result)
