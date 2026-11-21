@@ -176,6 +176,20 @@ func TestBPSRuntimeReusesAcrossRequestsAndDiscardsCancelledTurn(t *testing.T) {
 	worker, err := (Runtime{}).start(t.Context(), grant, filepath.Join(dir, "task"), 1, proxy.Config{Upstream: upstream.URL})
 	require.NoError(t, err)
 	defer worker.Stop()
+	finished := make(chan struct{}, 4)
+	handler := worker.handler
+	worker.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+		finished <- struct{}{}
+	})
+	waitForHandler := func(ctx context.Context) {
+		t.Helper()
+		select {
+		case <-finished:
+		case <-ctx.Done():
+			t.Fatal("BPS handler did not release the task slot")
+		}
+	}
 	send := func(ctx context.Context, scope string) (*http.Response, bool) {
 		t.Helper()
 		ctx, reused := proxy.WithWebSocketReuse(ctx, scope)
@@ -191,6 +205,7 @@ func TestBPSRuntimeReusesAcrossRequestsAndDiscardsCancelledTurn(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, string(data), fmt.Sprintf("resp_%d", turn))
 		require.NoError(t, resp.Body.Close())
+		waitForHandler(ctx)
 		cancel()
 	}
 	require.EqualValues(t, 1, dials.Load())
@@ -207,6 +222,8 @@ func TestBPSRuntimeReusesAcrossRequestsAndDiscardsCancelledTurn(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("upstream socket survived cancellation")
 	}
+	// The remote close can arrive before the local handler releases its slot.
+	waitForHandler(ctx)
 	resp, reused = send(ctx, "")
 	require.False(t, reused)
 	data, err := io.ReadAll(resp.Body)
