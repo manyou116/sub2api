@@ -3,6 +3,7 @@ package service
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/bpsbridge"
 	"github.com/Wei-Shaw/sub2api/internal/bpsbridge/runtime/proxy"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -28,6 +30,22 @@ func WithBPSResponses(ctx context.Context, model string) context.Context {
 		return context.WithValue(ctx, bpsResponsesKey{}, true)
 	}
 	return ctx
+}
+
+// WithBPSChatCompletions admits the Chat message format supported by the BPS
+// adapter while keeping existing routing for other request shapes.
+func WithBPSChatCompletions(ctx context.Context, model string, body []byte) context.Context {
+	input := gjson.ParseBytes(body)
+	if messages := input.Get("messages"); !messages.IsArray() || !messages.Get("0").Exists() ||
+		input.Get("input").Exists() || input.Get("previous_response_id").String() != "" || input.Get("n").Int() > 1 {
+		return ctx
+	}
+	for _, tool := range input.Get("tools").Array() {
+		if tool.Get("type").String() != "function" || !tool.Get("function").IsObject() {
+			return ctx
+		}
+	}
+	return WithBPSResponses(ctx, model)
 }
 
 func bpsRouteMismatch(ctx context.Context, a *Account, model string, compact bool) bool {
@@ -194,8 +212,32 @@ func bpsWebSocketReuseScope(c *gin.Context, account *Account, model string) stri
 }
 
 func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	return s.forwardBPSWithProtocol(ctx, c, account, body, nil)
+}
+
+func (s *OpenAIGatewayService) forwardBPSChatCompletions(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	var chat apicompat.ChatCompletionsRequest
+	if json.Unmarshal(body, &chat) != nil {
+		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", "Invalid Chat Completions request")
+		return nil, errors.New("bps_invalid_request")
+	}
+	return s.forwardBPSWithProtocol(ctx, c, account, body, &chat)
+}
+
+func (s *OpenAIGatewayService) forwardBPSWithProtocol(ctx context.Context, c *gin.Context, account *Account, body []byte, chat *apicompat.ChatCompletionsRequest) (*OpenAIForwardResult, error) {
 	fail := func(status int, code string) (*OpenAIForwardResult, error) {
-		c.JSON(status, gin.H{"error": gin.H{"type": code, "message": code}})
+		switch {
+		case chat != nil && chat.Stream && c.Writer.Written():
+			MarkOpsStreamFailure(c, "upstream_error", code, code, status)
+			MarkResponseCommitted(c)
+			_, _ = c.Writer.WriteString(buildChatStreamErrorSSE(code, code) + "data: [DONE]\n\n")
+			c.Writer.Flush()
+		default:
+			if chat != nil {
+				MarkResponseCommitted(c)
+			}
+			c.JSON(status, gin.H{"error": gin.H{"type": code, "message": code}})
+		}
 		return nil, errors.New(code) // Never a scheduler failover or retry.
 	}
 	start := time.Now()
@@ -214,6 +256,19 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 		case "function", "custom", "namespace":
 		default:
 			return fail(http.StatusBadRequest, "bps_hosted_tool_unsupported")
+		}
+	}
+	stream := gjson.GetBytes(body, "stream").Bool()
+	if chat != nil {
+		stream = chat.Stream
+		chat.Model = mapped
+		request, err := chatCompletionsToResponses(s.cfg, chat)
+		if err != nil {
+			return fail(http.StatusBadRequest, "bps_invalid_request")
+		}
+		body, err = json.Marshal(request)
+		if err != nil {
+			return fail(http.StatusBadRequest, "bps_invalid_request")
 		}
 	}
 	bound, p, err := bpsReadBound(account.ID)
@@ -258,7 +313,12 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 		return fail(http.StatusBadGateway, "bps_upstream_rejected")
 	}
 	SetActualOpenAIUpstreamEndpoint(c, "/bps/responses")
-	stream := gjson.GetBytes(body, "stream").Bool()
+	var chatState *apicompat.ResponsesEventToChatState
+	if chat != nil && stream {
+		chatState = apicompat.NewResponsesEventToChatState()
+		chatState.Model = model
+		chatState.IncludeUsage = true
+	}
 	if stream {
 		c.Header("Content-Type", "text/event-stream")
 		c.Header("Cache-Control", "no-cache")
@@ -276,6 +336,26 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 			stats.FirstTokenMs = &ms
 		}
 		if !stream {
+			return nil
+		}
+		if chatState != nil {
+			if eventType == "response.failed" || eventType == "error" {
+				return nil // Handle terminal errors without emitting a success finish chunk.
+			}
+			var event apicompat.ResponsesStreamEvent
+			if err := json.Unmarshal([]byte(data), &event); err != nil {
+				return err
+			}
+			for _, chunk := range apicompat.ResponsesEventToChatChunks(&event, chatState) {
+				frame, err := apicompat.ChatChunkToSSE(chunk)
+				if err != nil {
+					return err
+				}
+				if _, err := c.Writer.WriteString(frame); err != nil {
+					return err
+				}
+				c.Writer.Flush()
+			}
 			return nil
 		}
 		line := "data: " + data
@@ -298,6 +378,9 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 		}
 	}
 	if err != nil {
+		if chat != nil && ctx.Err() == nil {
+			return fail(http.StatusBadGateway, "bps_result_unconfirmed")
+		}
 		if !stream && ctx.Err() == nil {
 			return fail(http.StatusBadGateway, "bps_result_unconfirmed")
 		}
@@ -309,7 +392,20 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 	}
 	switch event := terminal.Get("type").String(); event {
 	case "response.completed", "response.incomplete":
-		if !stream {
+		if chat != nil {
+			if stream {
+				if _, err := c.Writer.WriteString("data: [DONE]\n\n"); err != nil {
+					return nil, err
+				}
+				c.Writer.Flush()
+			} else {
+				var final *apicompat.ResponsesResponse
+				if json.Unmarshal([]byte(terminal.Get("response").Raw), &final) != nil || final == nil {
+					return fail(http.StatusBadGateway, "bps_result_unconfirmed")
+				}
+				c.JSON(http.StatusOK, apicompat.ResponsesToChatCompletions(final, model))
+			}
+		} else if !stream {
 			if response := terminal.Get("response"); response.IsObject() {
 				c.Data(http.StatusOK, "application/json", s.replaceModelInResponseBody([]byte(response.Raw), mapped, model))
 			} else {
@@ -330,7 +426,7 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 	case "response.failed", "error":
 		s.noteBPSQuota(ctx, parent.ID, terminal.Get("response.error"))
 		s.noteBPSQuota(ctx, parent.ID, terminal.Get("error"))
-		if !stream {
+		if !stream || chat != nil {
 			return fail(http.StatusBadGateway, "bps_generation_failed")
 		}
 		return nil, errors.New("bps_generation_failed")

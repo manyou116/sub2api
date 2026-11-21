@@ -1,6 +1,6 @@
 # BPS text shadows
 
-BPS is an optional, Responses SSE-only upstream. A BPS shadow is linked to a
+BPS is an optional, Responses SSE upstream. A BPS shadow is linked to a
 real OpenAI OAuth account, but never obtains its Codex credentials. Each parent
 can have one BPS shadow alongside its existing Spark and image shadows. Creation
 inherits the parent account's groups; there is no group selector. If the parent
@@ -12,7 +12,10 @@ required at creation. Existing explicit `bps-<model>` mappings stay valid and ca
 be edited in the account model mapping. Send full history. Compact,
 previous-response state, hosted tools, and resubmission to Codex after a BPS
 attempt are unsupported. The runtime emits SSE; Sub2API can return the final
-response object to non-streaming clients.
+response object to non-streaming clients. Standard `POST /v1/chat/completions`
+requests with `messages` and optional function tools also use the BPS runtime.
+Sub2API converts the request to Responses and returns Chat Completions JSON
+or Chat SSE according to the client's `stream` value.
 
 ## Deployment
 
@@ -68,8 +71,7 @@ BPS credentials live only on the private state volume (files mode
 Back up that volume as a secret, separately from the account configuration.
 The account menu shows the BPS expiry; this version uses manual reauthorization,
 not automatic refresh. Account or parent deletion removes the binding;
-re-authorizing never updates a Codex token. No live integration check was
-performed using a real grant during development.
+re-authorizing never updates a Codex token.
 
 The shadow uses a normal account concurrency slot and owns its usage logs.
 A confirmed shared `usage_limit_reached` with an explicit reset timestamp
