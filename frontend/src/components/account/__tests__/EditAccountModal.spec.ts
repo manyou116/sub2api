@@ -345,6 +345,47 @@ describe('EditAccountModal', () => {
 
   afterEach(() => vi.useRealTimers())
 
+  it('saves and reloads the BPS WebSocket reuse switch independently of the OAuth WS mode', async () => {
+    let account = {
+      ...buildOpenAISparkShadowAccount(),
+      name: 'BPS Shadow',
+      quota_dimension: 'bps',
+      credentials: {},
+      extra: { openai_oauth_responses_websockets_v2_mode: 'ctx_pool' }
+    }
+    updateAccountMock.mockReset().mockImplementation(async (_id, payload) => {
+      account = { ...account, extra: payload.extra }
+      return account
+    })
+    const toggle = '[data-testid="edit-bps-ws-session-reuse"]'
+    const wrapper = mountModal(account)
+    expect(wrapper.get(toggle).attributes('aria-checked')).toBe('false')
+    expect(wrapper.find('[data-testid="edit-openai-ws-mode-select"]').exists()).toBe(false)
+
+    for (const enabled of [true, false]) {
+      await wrapper.get(toggle).trigger('click')
+      await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+      await flushPromises()
+      expect(updateAccountMock).toHaveBeenLastCalledWith(account.id, expect.objectContaining({
+        extra: expect.objectContaining({
+          bps_ws_session_reuse: enabled,
+          openai_oauth_responses_websockets_v2_mode: 'ctx_pool'
+        })
+      }))
+      await wrapper.setProps({ show: false })
+      await wrapper.setProps({ show: true, account })
+      expect(wrapper.get(toggle).attributes('aria-checked')).toBe(String(enabled))
+    }
+    wrapper.unmount()
+  })
+
+  it('keeps the ordinary WebSocket mode selector for other OpenAI accounts', () => {
+    const wrapper = mountModal(buildOpenAISparkShadowAccount())
+    expect(wrapper.find('[data-testid="edit-bps-ws-session-reuse"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="edit-openai-ws-mode-select"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it.each(['apikey', 'oauth'])('can opt a passthrough %s account into model filtering without changing groups', async (type) => {
     const account = buildAccount()
     account.type = type

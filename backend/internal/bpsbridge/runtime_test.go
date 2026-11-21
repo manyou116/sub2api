@@ -3,11 +3,13 @@ package bpsbridge
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,6 +125,96 @@ func TestBPSRuntimeClosingBodyCancelsHandler(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("cancelled response still holds its handler")
 	}
+}
+
+func TestBPSRuntimeReusesAcrossRequestsAndDiscardsCancelledTurn(t *testing.T) {
+	dir := t.TempDir()
+	grant := filepath.Join(dir, "grant.json")
+	bound := BoundGrant{
+		Grant: Grant{AccessToken: "fixture-token"}, Identity: Identity{Account: "fixture-workspace"},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	require.NoError(t, Save(grant, bound))
+	var dials, writes atomic.Int32
+	cancelled := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			Subprotocols: []string{"responses"}, OriginPatterns: []string{"bps.openai.com"},
+		})
+		if !assertNoError(t, err) {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		dials.Add(1)
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		for {
+			var req map[string]any
+			if wsjson.Read(ctx, conn, &req) != nil {
+				return
+			}
+			turn := writes.Add(1)
+			id := fmt.Sprintf("resp_%d", turn)
+			response := map[string]any{"id": id, "status": "completed", "output": []any{}}
+			if !assertNoError(t, wsjson.Write(ctx, conn, map[string]any{"type": "response.created", "response": response})) {
+				return
+			}
+			if turn == 3 {
+				_, _, err := conn.Read(ctx)
+				if err == nil || ctx.Err() != nil {
+					t.Error("cancel must close upstream before another submission")
+				}
+				close(cancelled)
+				return
+			}
+			if !assertNoError(t, wsjson.Write(ctx, conn, map[string]any{"type": "response.completed", "response": response})) {
+				return
+			}
+		}
+	}))
+	defer upstream.Close()
+	worker, err := (Runtime{}).start(t.Context(), grant, filepath.Join(dir, "task"), 1, proxy.Config{Upstream: upstream.URL})
+	require.NoError(t, err)
+	defer worker.Stop()
+	send := func(ctx context.Context, scope string) (*http.Response, bool) {
+		t.Helper()
+		ctx, reused := proxy.WithWebSocketReuse(ctx, scope)
+		resp, err := worker.Responses(ctx, bound, []byte(`{"model":"gpt-5.4","input":"hi","stream":true,"store":false}`))
+		require.NoError(t, err)
+		return resp, reused != nil && reused.Load()
+	}
+	for turn := 1; turn <= 2; turn++ {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		resp, reused := send(ctx, "alice/session")
+		require.Equal(t, turn == 2, reused)
+		data, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.Contains(t, string(data), fmt.Sprintf("resp_%d", turn))
+		require.NoError(t, resp.Body.Close())
+		cancel()
+	}
+	require.EqualValues(t, 1, dials.Load())
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	resp, reused := send(ctx, "alice/session")
+	require.True(t, reused)
+	line, err := bufio.NewReader(resp.Body).ReadString('\n')
+	require.NoError(t, err)
+	require.Contains(t, line, "response.created")
+	require.NoError(t, resp.Body.Close())
+	select {
+	case <-cancelled:
+	case <-ctx.Done():
+		t.Fatal("upstream socket survived cancellation")
+	}
+	resp, reused = send(ctx, "")
+	require.False(t, reused)
+	data, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "resp_4")
+	require.NoError(t, resp.Body.Close())
+	require.EqualValues(t, 2, dials.Load())
+	require.EqualValues(t, 4, writes.Load())
 }
 
 func assertNoError(t *testing.T, err error) bool {

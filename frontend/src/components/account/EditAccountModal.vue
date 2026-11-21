@@ -2155,9 +2155,25 @@
         </div>
       </div>
 
-      <!-- OpenAI WS Mode 三态（off/ctx_pool/passthrough） -->
       <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
+        v-if="isBPSShadow"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <p class="input-label mb-0">{{ t('admin.accounts.bps.wsSessionReuse') }}</p>
+          <p id="bps-ws-session-reuse-hint" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.bps.wsSessionReuseHint') }}
+          </p>
+        </div>
+        <Toggle
+          v-model="bpsWSSessionReuse"
+          :aria-label="t('admin.accounts.bps.wsSessionReuse')"
+          aria-describedby="bps-ws-session-reuse-hint"
+          data-testid="edit-bps-ws-session-reuse"
+        />
+      </div>
+      <div
+        v-else-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token' || account?.type === 'apikey')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="flex items-center justify-between">
@@ -3546,6 +3562,8 @@ const selectableGroups = computed(() => {
 
 // Credential shadows inherit parent identity and proxy.
 const isCredentialShadow = computed(() => props.account?.parent_account_id != null)
+const isBPSShadow = computed(() => isCredentialShadow.value && props.account?.quota_dimension === 'bps')
+const bpsWSSessionReuse = ref(false)
 const isWebShadow = computed(() => isImageShadow(props.account))
 const webImageSettings = ref<WebImageSettings>(readWebImageSettings(null))
 
@@ -4623,6 +4641,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedChannelWarningRawMessage.value = ''
   mixedChannelWarningAction.value = null
   webImageSettings.value = readWebImageSettings(newAccount)
+  bpsWSSessionReuse.value = newAccount.extra?.bps_ws_session_reuse === true
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
   form.proxy_id = newAccount.proxy_id
@@ -6234,15 +6253,19 @@ const handleSubmit = async () => {
       const currentExtra = (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       const hadCodexCLIOnlyEnabled = currentExtra.codex_cli_only === true
-      if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
+      if (isBPSShadow.value) {
+        newExtra.bps_ws_session_reuse = bpsWSSessionReuse.value
+      } else if (props.account.type === 'oauth' || props.account.type === 'setup-token') {
         newExtra.openai_oauth_responses_websockets_v2_mode = openaiOAuthResponsesWebSocketV2Mode.value
         newExtra.openai_oauth_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiOAuthResponsesWebSocketV2Mode.value)
       } else if (props.account.type === 'apikey') {
         newExtra.openai_apikey_responses_websockets_v2_mode = openaiAPIKeyResponsesWebSocketV2Mode.value
         newExtra.openai_apikey_responses_websockets_v2_enabled = isOpenAIWSModeEnabled(openaiAPIKeyResponsesWebSocketV2Mode.value)
       }
-      delete newExtra.responses_websockets_v2_enabled
-      delete newExtra.openai_ws_enabled
+      if (!isBPSShadow.value) {
+        delete newExtra.responses_websockets_v2_enabled
+        delete newExtra.openai_ws_enabled
+      }
       if (openaiPassthroughEnabled.value) {
         newExtra.openai_passthrough = true
       } else {

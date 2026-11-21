@@ -586,6 +586,8 @@ export default {
       bps: {
         create: 'Create BPS shadow',
         authorize: 'Authorize BPS',
+        wsSessionReuse: 'Reuse WebSocket connections (experimental)',
+        wsSessionReuseHint: 'Requires a trusted user identity and an explicit session ID. Idle connections can be reused for the same user and session for up to 30 seconds.',
         group: 'OpenAI group',
         selectGroup: 'Select a group',
         model: 'Upstream BPS model',

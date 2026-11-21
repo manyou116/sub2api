@@ -20,6 +20,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBPSWebSocketReuseScope(t *testing.T) {
+	account := &Account{Extra: map[string]any{"bps_ws_session_reuse": true}}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
+	c.Set("api_key", &APIKey{ID: 7})
+	c.Request.Header.Set("session_id", "shared-session")
+	c.Request.Header.Set("X-Sub2api-Source", "unverified")
+	require.Empty(t, bpsWebSocketReuseScope(c, account, "gpt-5.4"))
+	c.Request = c.Request.WithContext(WithSourceUser(c.Request.Context(), &SourceUser{SourceID: "factory", UserID: "alice"}))
+	alice := bpsWebSocketReuseScope(c, account, "gpt-5.4")
+	require.NotEmpty(t, alice)
+	c.Request = c.Request.WithContext(WithSourceUser(c.Request.Context(), &SourceUser{SourceID: "factory", UserID: "bob"}))
+	require.NotEqual(t, alice, bpsWebSocketReuseScope(c, account, "gpt-5.4"))
+	c.Request.Header.Del("session_id")
+	require.Empty(t, bpsWebSocketReuseScope(c, account, "gpt-5.4"))
+}
+
 func TestBPSAccountConnection(t *testing.T) {
 	for _, tc := range []struct{ name, terminal string }{
 		{"completed", `{"type":"response.completed"}`},

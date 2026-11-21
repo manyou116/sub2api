@@ -31,6 +31,26 @@ are local to each Sub2API process. Sub2API uses the parent's outbound proxy
 for device authorization and generation. The runtime's upstream transport is
 WebSocket, with one upstream request per Responses submission.
 
+### Experimental WebSocket reuse
+
+In the BPS shadow's edit dialog, turn on **Reuse WebSocket connections
+(experimental)**. The setting is stored as `extra.bps_ws_session_reuse` and
+defaults to off. A request needs an explicit session
+header and a source-user identity supplied by an authenticated, bound
+gateway. The gateway must overwrite attribution headers from clients.
+Requests without both signals use a fresh socket.
+
+Reuse stays within the same API key, source user, session, mapped model,
+shadow, upstream task slot, grant and proxy. Requests still include full
+history. After a clean turn, the worker can retain one idle socket for
+30 seconds, up to 64 idle sockets per instance. Each request still acquires
+its normal concurrency slot. An uncertain submission is never replayed.
+
+The `bps.ws_turn` debug log includes the reuse result, first-text time,
+total time and completion status. A live `gpt-6-luna` test through the embedded
+runtime confirmed that two consecutive turns completed with distinct response
+IDs and one handshake.
+
 ## Authorization
 
 From the parent account menu, choose **Create BPS shadow** and either paste

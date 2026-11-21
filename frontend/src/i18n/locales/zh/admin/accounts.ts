@@ -715,6 +715,8 @@ export default {
       bps: {
         create: '创建 BPS 影子账号',
         authorize: '授权 BPS',
+        wsSessionReuse: '复用 WebSocket 连接（实验性）',
+        wsSessionReuseHint: '仅对带有可信用户身份和显式会话 ID 的请求生效。同一用户、同一会话的空闲连接最多保留 30 秒。',
         group: 'OpenAI 分组',
         selectGroup: '选择分组',
         model: 'BPS 上游模型',

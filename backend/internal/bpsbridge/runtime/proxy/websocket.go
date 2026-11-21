@@ -161,9 +161,20 @@ func (s *Server) openWebSocket(ctx context.Context, body []byte, token, accountI
 	request.Header.Set("User-Agent", "Mozilla/5.0")
 	request.Header.Set("Accept", "*/*")
 	s.applyCustomHeaders(request)
-	conn, releaseTransport, abortTransport, err := s.dialWebSocket(ctx, u.String(), request.Header, token, admissionKey)
+	slot, identity, scope := s.reuseLease(ctx, token, accountID)
+	socket := takeReusable(slot, identity)
+	reused := socket != nil
+	conn, releaseTransport, abortTransport, socket, err := s.openSocket(ctx, u.String(), request.Header, token, admissionKey, scope, socket)
 	if err != nil {
 		return nil, err
+	}
+	var frames chan wsFrame
+	if socket != nil {
+		frames = make(chan wsFrame)
+		scope.reused.Store(reused)
+		if !reused {
+			go socket.readLoop()
+		}
 	}
 	transferred := false
 	defer func() {
@@ -178,6 +189,9 @@ func (s *Server) openWebSocket(ctx context.Context, body []byte, token, accountI
 		log.Printf("upstream ws handshake=101")
 	}
 	err = s.startRates.run(ctx, admissionKey, s.startAuthorization, s.startDeadline, func() error {
+		if socket != nil {
+			socket.turn.Store(&frames)
+		}
 		writeCtx, cancelWrite := context.WithTimeout(ctx, 30*time.Second)
 		defer cancelWrite()
 		timing.writeStart = time.Now()
@@ -198,6 +212,7 @@ func (s *Server) openWebSocket(ctx context.Context, body []byte, token, accountI
 	_ = json.Unmarshal(doc["model"], &requestedModel)
 	transferred = true
 	return &webSocketBody{
+		socket: socket, frames: frames, slot: slot, identity: identity, reused: reused,
 		releaseTransport: releaseTransport,
 		abortTransport:   abortTransport,
 		conn:             conn, ctx: readCtx, cancel: cancelRead,
@@ -212,6 +227,13 @@ func (s *Server) openWebSocket(ctx context.Context, body []byte, token, accountI
 // for the existing tool/structured-output bridge. It buffers at most one event.
 // Bridge.Stream owns the reader goroutine; no second pump is needed here.
 type webSocketBody struct {
+	socket           *reusableSocket
+	frames           chan wsFrame
+	slot             reuseSlot
+	identity         reuseIdentity
+	reused           bool
+	responseID       string
+	reuseCompleted   atomic.Bool
 	releaseTransport func()
 	abortTransport   func()
 	conn             *websocket.Conn
@@ -231,6 +253,16 @@ type webSocketBody struct {
 
 func (b *webSocketBody) Close() error {
 	b.closeOnce.Do(func() {
+		if b.socket != nil {
+			healthy := b.reuseCompleted.Load() && b.ctx.Err() == nil
+			b.cancel()
+			if healthy {
+				parkReusable(b.slot, b.identity, b.socket)
+			} else {
+				b.socket.stop()
+			}
+			return
+		}
 		if b.upstreamTerminal.Load() && b.ctx.Err() == nil {
 			// Only a terminal event received from upstream permits normal close.
 			// Locally synthesized failures, cancellation and premature disconnects
@@ -265,7 +297,13 @@ func (b *webSocketBody) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 		ctx, cancel := context.WithTimeout(b.ctx, b.idleTimeout)
-		kind, data, err := b.conn.Read(ctx) // Handles WebSocket ping/pong internally.
+		read := b.conn.Read
+		if b.socket != nil {
+			read = func(ctx context.Context) (websocket.MessageType, []byte, error) {
+				return b.socket.read(ctx, b.frames)
+			}
+		}
+		kind, data, err := read(ctx)
 		timedOut := ctx.Err() == context.DeadlineExceeded
 		cancel()
 		if err != nil {
@@ -316,6 +354,10 @@ func (b *webSocketBody) Read(p []byte) (int, error) {
 		}
 		if eventType != "error" && !strings.HasPrefix(eventType, "response.") {
 			b.fail("basispoints_ws_protocol_error", "unexpected upstream WebSocket event type")
+			continue
+		}
+		if b.socket != nil && !b.validateReuseEvent(eventType, event) {
+			b.fail("basispoints_ws_protocol_error", "could not associate event with the current turn; request was not retried")
 			continue
 		}
 		delete(event, "basispoints_replay_cursor")

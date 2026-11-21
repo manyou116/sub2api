@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -12,9 +13,12 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/bpsbridge"
+	"github.com/Wei-Shaw/sub2api/internal/bpsbridge/runtime/proxy"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 )
 
 type bpsResponsesKey struct{}
@@ -177,6 +181,18 @@ func bpsSharedQuotaReset(errPayload gjson.Result, now time.Time) (time.Time, boo
 	return reset, reset.After(now) && reset.Before(now.Add(8*24*time.Hour))
 }
 
+func bpsWebSocketReuseScope(c *gin.Context, account *Account, model string) string {
+	enabled, _ := account.Extra["bps_ws_session_reuse"].(bool)
+	source := SourceUserFromContext(c.Request.Context())
+	keyID := getAPIKeyIDFromContext(c)
+	session := explicitOpenAIHeaderSessionID(c)
+	if !enabled || source == nil || source.SourceID == "" || source.UserID == "" ||
+		keyID <= 0 || session == "" || len(session) > 256 {
+		return ""
+	}
+	return fmt.Sprintf("%d/%q/%q/%q/%q", keyID, source.SourceID, source.UserID, session, model)
+}
+
 func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	fail := func(status int, code string) (*OpenAIForwardResult, error) {
 		c.JSON(status, gin.H{"error": gin.H{"type": code, "message": code}})
@@ -226,6 +242,8 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 		return fail(http.StatusServiceUnavailable, "bps_bridge_unavailable")
 	}
 	defer release()
+	reuseScope := bpsWebSocketReuseScope(c, account, mapped)
+	ctx, reused := proxy.WithWebSocketReuse(ctx, reuseScope)
 	resp, err := worker.Responses(ctx, bound, body)
 	if err != nil {
 		return fail(http.StatusBadGateway, "bps_result_unconfirmed")
@@ -270,6 +288,15 @@ func (s *OpenAIGatewayService) forwardBPS(ctx context.Context, c *gin.Context, a
 		c.Writer.Flush()
 		return nil
 	})
+	if reused != nil {
+		logger.FromContext(ctx).Debug("bps.ws_turn", zap.Bool("reused", reused.Load()),
+			zap.Int64("duration_ms", time.Since(start).Milliseconds()), zap.Any("first_text_ms", stats.FirstTokenMs),
+			zap.Bool("completed", err == nil && terminal.Get("type").String() == "response.completed"))
+		if err == nil && terminal.Get("type").String() == "response.completed" {
+			// Let the embedded reader park the socket before closing the response pipe.
+			_, _ = io.Copy(io.Discard, resp.Body)
+		}
+	}
 	if err != nil {
 		if !stream && ctx.Err() == nil {
 			return fail(http.StatusBadGateway, "bps_result_unconfirmed")
