@@ -1,4 +1,4 @@
-# OpenAI 过载与首字慢回避
+# OpenAI 文本请求回避
 
 「首字慢回避」有独立开关（默认关闭），与过载分别计数；可单独开启，无需开启过载保护。默认普通首字阈值 10 秒、high/xhigh/max 阈值 30 秒、滚动窗口 60 秒、累计 2 次触发，可设为 1 次。新增首字慢比例阈值（0–100%，默认 0）：窗口内首字慢请求数 / 已判定首字快慢的请求总数达到配置百分比即回避。次数阈值也允许 0；0 停用对应判定，两项都非零时任一达到即触发，两项都为 0 时不产生新的首字慢判定。没有最小样本数，单次慢请求可形成 100%。只统计已观测到有效首字的快请求和已达到慢阈值的请求；未判定、取消前未判定、普通 JSON 等不稀释比例。同请求同账号重试去重，快慢样本均使用首字慢窗口，手动恢复清空。普通阈值范围 1–300 秒，高思考强度阈值不小于普通阈值、最多 600 秒；窗口 1–300 秒、次数 0–100。
 
@@ -12,7 +12,9 @@
 
 管理员设置 JSON 新增 `slow_first_output_enabled`、`slow_first_output_seconds`、`slow_first_output_high_effort_seconds`、`slow_first_output_window_seconds`、`slow_first_output_threshold`、`slow_first_output_percent`。升级保留旧过载设置，首字慢默认关闭。日志 `openai.slow_first_output_cooldown_tripped` 含账号、模型、等待毫秒、阈值、次数、窗口和截止时间，无请求正文或凭证。
 
-管理后台「系统设置 → 网关 → OpenAI 过载与首字慢回避」中的过载保护默认关闭。它处理 OpenAI OAuth / SetupToken 文本请求明确返回的容量错误（如 `server_is_overloaded`、`slow_down` 或已识别的过载文案），包括 HTTP 错误和 HTTP 200 SSE 内的 `error` / `response.failed`。
+管理后台「系统设置 → 网关 → OpenAI 文本请求回避」中的过载保护默认关闭。它处理 OpenAI OAuth / SetupToken 文本请求明确返回的容量错误（如 `server_is_overloaded`、`slow_down` 或已识别的过载文案），包括 HTTP 错误和 HTTP 200 SSE 内的 `error` / `response.failed`。
+
+同一张卡片的「启用普通 429 回避」默认关闭，对应 `rate_limit_429_enabled`。普通限流按请求去重，与过载分别计数，共用统计窗口、次数阈值和回避时长。收到明确的 `Rate limit exceeded` 时，可安全重试的请求优先换号。账号冷却后逐个放行验证请求，成功三次后恢复调度。
 
 开启过载保护后默认优先换账号重试：只在尚未输出有效内容时进入现有换号流程，沿用 `gateway.max_account_switches` 上限；已输出文本、工具调用等内容后不重放。关闭「过载时优先换账号重试」则保留原有同账号重试策略，连续过载统计仍生效。此功能不能保证全池过载时请求成功。
 

@@ -10,10 +10,11 @@ import (
 
 const openAICapacityCooldownSettingKey = "openai_capacity_cooldown_settings"
 
-// OpenAICapacityCooldownSettings is independent of quota/429 cooldowns.
+// OpenAICapacityCooldownSettings controls the text scheduling circuit.
 type OpenAICapacityCooldownSettings struct {
 	Enabled                          bool `json:"enabled"`
 	SwitchAccountOnOverload          bool `json:"switch_account_on_overload"`
+	RateLimit429Enabled              bool `json:"rate_limit_429_enabled"`
 	WindowSeconds                    int  `json:"window_seconds"`
 	FailureThreshold                 int  `json:"failure_threshold"`
 	CooldownSeconds                  int  `json:"cooldown_seconds"`

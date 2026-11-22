@@ -280,3 +280,38 @@ func TestCapacityCooldownProbeLeaseCancellationUsesOwnerCAS(t *testing.T) {
 	require.True(t, d.Allowed)
 	require.True(t, d.Probe)
 }
+
+func TestOpenAI429AvoidanceCountsSeparatelyAndEscalatesOnProbe(t *testing.T) {
+	c, server := capacityTestStore(t)
+	ctx := context.Background()
+	settings := service.DefaultOpenAICapacityCooldownSettings()
+	settings.FailureThreshold = 2
+	record := func(id string, generation int64, outcome int) service.OpenAICapacityDecision {
+		t.Helper()
+		result, err := c.ObserveOpenAICapacity(ctx, 42, "gpt-5.4", id, generation, outcome, settings)
+		require.NoError(t, err)
+		return result
+	}
+	require.False(t, record("overload", 0, 1).Tripped)
+	first := record("rate-limit", 0, 5)
+	require.False(t, first.Tripped, "one overload and one 429 must not be added together")
+	require.EqualValues(t, 1, first.Failures)
+	require.False(t, record("rate-limit", 0, 5).Tripped, "retries must not inflate the 429 count")
+	tripped := record("second-rate-limit", 0, 5)
+	require.True(t, tripped.Tripped)
+	require.EqualValues(t, 2, tripped.Failures)
+	require.EqualValues(t, 1, tripped.Level)
+	blocked, err := c.AdmitOpenAICapacity(ctx, 42, "other-model", "next", 60)
+	require.NoError(t, err)
+	require.False(t, blocked.Allowed)
+	server.SetTime(time.UnixMilli(tripped.UntilMS + 1))
+	probe, err := c.AdmitOpenAICapacity(ctx, 42, "other-model", "probe", 60)
+	require.NoError(t, err)
+	require.True(t, probe.Probe)
+	another, err := c.AdmitOpenAICapacity(ctx, 42, "gpt-5.4", "another", 60)
+	require.NoError(t, err)
+	require.False(t, another.Allowed)
+	escalated := record("probe", probe.Generation, 5)
+	require.True(t, escalated.Tripped)
+	require.EqualValues(t, 2, escalated.Level)
+}

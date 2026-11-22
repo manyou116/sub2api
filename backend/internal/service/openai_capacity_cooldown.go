@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 )
 
 // OpenAICapacityCooldownStore is an optional extension of the existing Redis store.
@@ -29,6 +31,8 @@ type OpenAICapacityCooldownStore interface {
 // The stable prefix lets web-image selection exempt only this text pause.
 const OpenAICapacityCooldownReasonPrefix = `{"source":"openai_capacity_cooldown",`
 const openAICapacityCooldownKeyword = "openai_capacity_cooldown"
+const openAIRateLimit429CooldownKeyword = "openai_rate_limit_429"
+const openAIRateLimit429Outcome = 5
 
 func IsOpenAICapacityCooldownReason(reason string) bool {
 	return strings.HasPrefix(reason, OpenAICapacityCooldownReasonPrefix)
@@ -114,7 +118,7 @@ func (s *OpenAIGatewayService) withOpenAICapacityCooldown(ctx context.Context, c
 	defer cancel()
 	settings, err := s.settingService.GetOpenAICapacityCooldownSettings(readCtx)
 	store, ok := s.rateLimitService.tempUnschedCache.(OpenAICapacityCooldownStore)
-	if err != nil || (!settings.Enabled && !settings.slowFirstOutputActive()) || !ok {
+	if err != nil || (!settings.Enabled && !settings.RateLimit429Enabled && !settings.slowFirstOutputActive()) || !ok {
 		return ctx
 	}
 	return context.WithValue(ctx, openAICapacityContextKey{}, &openAICapacityRequest{store: store, settings: settings, compact: compact})
@@ -210,7 +214,7 @@ func (s *OpenAIGatewayService) admitOpenAICapacity(ctx context.Context, selectio
 	return true
 }
 
-// outcome: 0=inconclusive, 1=capacity shed, 2=healthy success; 3=slow, 4=timely first output.
+// outcome: 0=inconclusive, 1=capacity shed, 2=healthy success, 3=slow, 4=timely first output, 5=ordinary 429.
 // Redis deduplicates by logical request ID, including retries and repeated SSE frames.
 func observeOpenAICapacity(account *Account, outcome int) {
 	if account != nil && account.capacityAttempt != nil && outcome == 1 && !account.capacityAttempt.settings.Enabled {
@@ -221,7 +225,7 @@ func observeOpenAICapacity(account *Account, outcome int) {
 		a.slowMu.Lock()
 		slow := a.slowObserved
 		a.slowMu.Unlock()
-		if slow && outcome != 1 {
+		if slow && outcome != 1 && outcome != openAIRateLimit429Outcome {
 			return // The pending latency observation owns this result and probe lease.
 		}
 	}
@@ -244,17 +248,20 @@ func recordOpenAITextCooldown(account *Account, outcome int, slow *openAISlowFir
 				"elapsed_ms", slow.elapsed.Milliseconds(), "threshold_ms", slow.threshold.Milliseconds(), "count", d.Failures,
 				"requests", d.Total, "percent_threshold", a.settings.SlowFirstOutputPercent,
 				"window_seconds", a.settings.SlowFirstOutputWindowSeconds, "level", d.Level, "until_unix_ms", d.UntilMS)
+		} else if outcome == openAIRateLimit429Outcome {
+			slog.Warn("openai.rate_limit_429_cooldown_tripped", "account_id", account.ID, "model", a.model,
+				"failures", d.Failures, "level", d.Level, "until_unix_ms", d.UntilMS)
 		} else {
 			slog.Warn("openai.capacity_cooldown_tripped", "account_id", account.ID, "model", a.model,
 				"failures", d.Failures, "requests", d.Total, "level", d.Level, "until_unix_ms", d.UntilMS)
 		}
-		if err := a.rateLimit.persistOpenAICapacityPause(account, a, d, slow); err != nil {
+		if err := a.rateLimit.persistOpenAICapacityPause(account, a, d, outcome, slow); err != nil {
 			slog.Warn("openai.capacity_cooldown_persist_failed", "account_id", account.ID, "error", err)
 		}
 	}
 }
 
-func (s *RateLimitService) persistOpenAICapacityPause(account *Account, attempt *openAICapacityAttempt, decision OpenAICapacityDecision, observation ...*openAISlowFirstOutputObservation) error {
+func (s *RateLimitService) persistOpenAICapacityPause(account *Account, attempt *openAICapacityAttempt, decision OpenAICapacityDecision, outcome int, slow *openAISlowFirstOutputObservation) error {
 	if s == nil || s.accountRepo == nil {
 		return nil
 	}
@@ -277,8 +284,11 @@ func (s *RateLimitService) persistOpenAICapacityPause(account *Account, attempt 
 		TriggerCount: decision.Failures, TriggerThreshold: attempt.settings.FailureThreshold,
 		ErrorMessage: fmt.Sprintf("OpenAI 文本过载：%s；%d 秒内 %d 次过载达到阈值 %d；第 %d 级回避。整个账号暂停文本调用，Web 生图除外。", attempt.model, attempt.settings.WindowSeconds, decision.Failures, attempt.settings.FailureThreshold, decision.Level),
 	}
-	if len(observation) > 0 && observation[0] != nil {
-		slow := observation[0]
+	if outcome == openAIRateLimit429Outcome {
+		state.StatusCode = http.StatusTooManyRequests
+		state.MatchedKeyword = openAIRateLimit429CooldownKeyword
+		state.ErrorMessage = fmt.Sprintf("OpenAI 文本限流（429） %s。%d 秒内触发 %d 次，次数阈值 %d。第 %d 级回避，暂停整个账号的文本调用，Web 生图除外。", attempt.model, attempt.settings.WindowSeconds, decision.Failures, state.TriggerThreshold, decision.Level)
+	} else if slow != nil {
 		state.StatusCode = 0 // A slow successful request is not an HTTP error.
 		state.MatchedKeyword = "openai_slow_first_output"
 		state.TriggerThreshold = attempt.settings.SlowFirstOutputThreshold
@@ -346,19 +356,53 @@ func observeOpenAICapacityResult(account *Account, success bool, observedErr ...
 		return
 	}
 	var failure *UpstreamFailoverError
-	if len(observedErr) > 0 && errors.As(observedErr[0], &failure) && isOpenAIRequestScopedCapacityShed("", failure.ResponseBody) {
+	if len(observedErr) > 0 && errors.As(observedErr[0], &failure) && failure != nil &&
+		isOpenAIRequestScopedCapacityShed("", failure.ResponseBody) {
 		observeOpenAICapacity(account, 1)
 		return
 	}
 	observeOpenAICapacity(account, 0)
 }
 
-// Reuse the handler's bounded, pre-output failover flow. Quota 429s and other
-// failures retain their current retry policy; no replay is allowed after output.
-func (s *OpenAIGatewayService) applyOpenAICapacitySwitchPolicy(account *Account, failure *UpstreamFailoverError) {
-	if failure != nil && failure.RequestScopedTransient && s.shouldSwitchOpenAICapacity(account, failure.ResponseBody) {
+// Reuse the handler's bounded, pre-output failover flow.
+func (s *OpenAIGatewayService) applyOpenAICapacitySwitchPolicy(account *Account, failure *UpstreamFailoverError, classificationHeaders http.Header) {
+	if failure == nil {
+		return
+	}
+	if failure.RequestScopedTransient {
+		if s.shouldSwitchOpenAICapacity(account, failure.ResponseBody) {
+			failure.RetryableOnSameAccount = false
+		}
+		return
+	}
+	if !failure.IsCredentialFailure() && openAITextRateLimit429(account, failure.StatusCode, classificationHeaders, failure.ResponseBody) {
 		failure.RetryableOnSameAccount = false
 	}
+}
+
+// Match the explicit transient provider signal. Quota signals and specialized
+// Spark quotas are handled by the existing rate-limit paths.
+func openAITextRateLimit429(account *Account, statusCode int, headers http.Header, body []byte) bool {
+	if account == nil || account.capacityAttempt == nil || !account.capacityAttempt.settings.RateLimit429Enabled ||
+		statusCode != http.StatusTooManyRequests ||
+		isCodexSparkModel(account.capacityAttempt.model) {
+		return false
+	}
+	if disposition, _ := classifyOpenAIOAuth429(headers, body); disposition != openAIOAuth429Transient {
+		return false
+	}
+	match := strings.EqualFold(strings.TrimSpace(extractUpstreamErrorMessage(body)), "Rate limit exceeded")
+	for _, path := range []string{"error", "response.error", "detail"} {
+		err := gjson.GetBytes(body, path)
+		switch {
+		case err.Get("type").String() == "usage_limit_reached" || err.Get("code").String() == "usage_limit_reached":
+			return false
+		case err.Get("code").String() == "rate_limit_exceeded",
+			strings.EqualFold(strings.TrimSpace(err.Get("message").String()), "Rate limit exceeded"):
+			match = true
+		}
+	}
+	return match && len(matchTempUnschedulableRules(account, statusCode, body)) == 0
 }
 
 func (s *OpenAIGatewayService) shouldSwitchOpenAICapacity(account *Account, body []byte) bool {

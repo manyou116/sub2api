@@ -1120,16 +1120,18 @@ export default {
         saveFailed: 'Failed to save overload cooldown settings'
       },
       capacityCooldown: {
-        title: 'OpenAI overload and slow first-output cooldown',
-        description: 'Overload and slow first output have separate switches and counters. Either rule can pause all text models on an OAuth account under Temporarily unschedulable for filtering, reasons and recovery. Web images remain available. Disabled by default.',
+        title: 'OpenAI text request cooldown',
+        description: 'Overload, transient 429s and slow first output have separate switches and counters. All are off by default. When a rule reaches its threshold, text requests pause for the account and Web images remain available. View the reason and recover the account from the account list.',
         enabled: 'Enable overload protection',
         switchAccount: 'Prefer another account on overload',
         switchHint: 'Switch only before meaningful output, using the existing account-switch limit. Requests with output are not replayed.',
-        window_seconds: 'Observation window (seconds, 1–300)',
-        failure_threshold: 'Overloaded request threshold (1–100)',
+        rateLimit429Enabled: 'Enable transient 429 cooldown',
+        rateLimit429Hint: 'Applies to transient rate limits on OpenAI OAuth text requests. After an explicit Rate limit exceeded response, prefer another account when retrying is safe. Exhausted quotas still follow the upstream reset time.',
+        window_seconds: 'Overload / 429 window (seconds, 1–300)',
+        failure_threshold: 'Overload / 429 count threshold (1–100)',
         cooldown_seconds: 'Initial cooldown (seconds)',
         max_cooldown_seconds: 'Maximum cooldown (seconds, up to 7200)',
-        recoveryHint: 'Set to 1 to cool down on the first overload. Retries count once per request; successful requests do not dilute other overloads. Cooldowns grow by 1, 2, 5 and 10 times the initial duration with slight jitter. Afterward, verify three real requests sequentially before restoring traffic; another overload restarts the cooldown.',
+        recoveryHint: 'Overload and 429 counters each trigger cooldown when they reach the threshold. Retries count once per request. Cooldowns grow by 1, 2, 5 and 10 times the initial duration with slight jitter. Scheduling resumes after three successful checks, one request at a time.',
         slowEnabled: 'Enable slow first-output cooldown',
         slowHint: 'Measure from upstream dispatch to nonempty text, reasoning or tool-call content. Crossing the threshold counts even if the request later succeeds. The current request continues without cancellation or switching by this rule. Covers HTTP upstream SSE; plain JSON and WebSocket are excluded.',
         slow_first_output_seconds: 'First-output threshold (seconds, 1–300)',
@@ -1138,9 +1140,9 @@ export default {
         slow_first_output_threshold: 'Slow first-output count threshold (0–100, 0 disables)',
         slow_first_output_percent: 'Slow first-output percentage (0–100%, 0 disables)',
         slowRecoveryHint: 'Pause when either nonzero count or percentage threshold is reached in the window. Zero disables that criterion; both zero disable the rule. Percentage is slow requests / requests with a measured first-output result, deduplicated across retries; pending results are excluded and even small samples can trigger it. Set count to 1 to pause on the first slow request. Shares cooldown durations and escalation with overloads. Recovery requires success and timely content. Heartbeats, empty events and local queueing are excluded. The same pre-output timeout does not also incur a stream-timeout penalty; existing hard deadlines and switch limits still apply.',
-        loadFailed: 'Failed to load overload cooldown settings',
-        saved: 'Overload cooldown settings saved',
-        saveFailed: 'Failed to save overload cooldown settings'
+        loadFailed: 'Failed to load OpenAI text request cooldown settings',
+        saved: 'OpenAI text request cooldown settings saved',
+        saveFailed: 'Failed to save OpenAI text request cooldown settings'
       },
       rateLimit429Cooldown: {
         title: '429 Default Cooldown',

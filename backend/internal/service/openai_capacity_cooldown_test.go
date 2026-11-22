@@ -255,3 +255,80 @@ func TestCapacityCooldownSwitchPolicyDoesNotChangeQuotaOrDisabledBehavior(t *tes
 	e := svc.newOpenAIAccountFailoverError(sel.Account, 503, nil, payload, "overloaded", false, false)
 	require.True(t, e.RetryableOnSameAccount)
 }
+
+func TestOpenAI429AvoidancePrefersFailoverAndPersistsPause(t *testing.T) {
+	ctx := context.Background()
+	repo := newMockSettingRepo()
+	repo.data[openAICapacityCooldownSettingKey] = `{"rate_limit_429_enabled":true}`
+	svc, store := capacityGateway(t, false)
+	svc.settingService = NewSettingService(repo, &config.Config{})
+	svc.rateLimitService.SetAccountRuntimeBlocker(svc)
+	account := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	accountRepo := &capacityPauseRepo{rateLimitClearRepoStub: rateLimitClearRepoStub{getByIDAccount: account}}
+	svc.rateLimitService.accountRepo = accountRepo
+	sel := &AccountSelectionResult{Account: account}
+	require.True(t, svc.admitOpenAICapacity(svc.withOpenAICapacityCooldown(ctx, false), sel, "gpt-5.4"))
+	require.NotNil(t, sel.Account.capacityAttempt, "429 protection can be enabled independently")
+	store.trip = OpenAICapacityDecision{Tripped: true, Generation: 8, UntilMS: time.Now().Add(time.Minute).UnixMilli(), Failures: 1, Level: 1}
+	store.current = store.trip
+	body := []byte(`{"detail":"Rate limit exceeded"}`)
+	require.False(t, svc.handleOpenAIAccountUpstreamError(ctx, sel.Account, http.StatusTooManyRequests, nil, body, "gpt-5.4"))
+	failure := svc.newOpenAIAccountFailoverError(sel.Account, http.StatusTooManyRequests, nil, body, "", false, false)
+	require.False(t, failure.RetryableOnSameAccount)
+	require.True(t, failure.ShouldRetryNextAccount())
+	require.Equal(t, []int{openAIRateLimit429Outcome}, store.outcomes)
+	require.Equal(t, 1, accountRepo.setCalls)
+	require.True(t, IsOpenAICapacityCooldownReason(account.TempUnschedulableReason))
+	require.Equal(t, http.StatusTooManyRequests, store.cached.StatusCode)
+	require.Equal(t, openAIRateLimit429CooldownKeyword, store.cached.MatchedKeyword)
+	require.Nil(t, account.RateLimitResetAt)
+}
+
+func TestOpenAI429AvoidanceObservesTerminalStreamWithoutFailover(t *testing.T) {
+	svc, store := capacityGateway(t, false)
+	svc.rateLimitService.SetAccountRuntimeBlocker(svc)
+	svc.rateLimitService.accountRepo = &oauth429RateLimitRepo{}
+	settings := DefaultOpenAICapacityCooldownSettings()
+	settings.RateLimit429Enabled = true
+	account := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		capacityAttempt: &openAICapacityAttempt{store: store, rateLimit: svc.rateLimitService, settings: settings, model: "gpt-5.4"}}
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "100")
+	headers.Set("x-codex-primary-reset-after-seconds", "604800")
+	headers.Set("x-codex-primary-window-minutes", "10080")
+	body := []byte(`{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"Rate limit exceeded"}}}`)
+	status, disabled := svc.handleOpenAIStreamTerminalAccountSideEffects(nil, account, body, "Rate limit exceeded", headers, "gpt-5.4")
+	require.Equal(t, http.StatusTooManyRequests, status)
+	require.False(t, disabled)
+	require.Equal(t, []int{openAIRateLimit429Outcome}, store.outcomes)
+}
+
+func TestOpenAI429AvoidanceClassifiesOnlyOrdinaryTextRateLimit(t *testing.T) {
+	v := DefaultOpenAICapacityCooldownSettings()
+	v.RateLimit429Enabled = true
+	account := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		capacityAttempt: &openAICapacityAttempt{settings: v, model: "gpt-5.4"}}
+	headers := http.Header{}
+	headers.Set("x-codex-primary-used-percent", "100")
+	headers.Set("x-codex-primary-reset-after-seconds", "604800")
+	headers.Set("x-codex-primary-window-minutes", "10080")
+	body := []byte(`{"detail":"Rate limit exceeded"}`)
+	svc := &OpenAIGatewayService{}
+	require.False(t, openAITextRateLimit429(account, http.StatusTooManyRequests, headers, body), "an exhausted HTTP quota window retains its reset")
+	failure := svc.newOpenAIStreamFailoverErrorWithModel(nil, account, false, "", []byte(`{"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"slow down"}}}`), "", "gpt-5.4", headers)
+	require.Equal(t, http.StatusTooManyRequests, failure.StatusCode)
+	require.False(t, failure.RetryableOnSameAccount)
+	for _, body := range []string{
+		`{"error":{"type":"usage_limit_reached","message":"Rate limit exceeded"}}`,
+		`{"error":{"type":"usage_limit_reached","resets_in_seconds":3600}}`,
+		`{"error":{"type":"rate_limit_error","message":"try again"}}`,
+	} {
+		require.False(t, openAITextRateLimit429(account, http.StatusTooManyRequests, nil, []byte(body)), body)
+	}
+	account.capacityAttempt.model = "gpt-5.3-codex-spark"
+	require.False(t, openAITextRateLimit429(account, http.StatusTooManyRequests, nil, body))
+	account.capacityAttempt.model = "gpt-5.4"
+	account.capacityAttempt.settings.RateLimit429Enabled = false
+	failure = svc.newOpenAIAccountFailoverError(account, http.StatusTooManyRequests, nil, body, "", false, false)
+	require.True(t, failure.RetryableOnSameAccount, "disabled protection preserves the legacy retry")
+}

@@ -11,7 +11,7 @@ vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showSuccess: mocks.succes
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 const defaults = {
-  enabled: false, switch_account_on_overload: true, window_seconds: 60,
+  enabled: false, rate_limit_429_enabled: false, switch_account_on_overload: true, window_seconds: 60,
   failure_threshold: 1, cooldown_seconds: 60, max_cooldown_seconds: 600,
   slow_first_output_enabled: false, slow_first_output_seconds: 10,
   slow_first_output_high_effort_seconds: 30, slow_first_output_window_seconds: 60,
@@ -29,6 +29,7 @@ describe('OpenAI capacity cooldown settings', () => {
     const wrapper = mount(OpenAICapacityCooldownSettings)
     await flushPromises()
     expect(wrapper.get('#capacity-enabled').attributes('aria-checked')).toBe('false')
+    expect(wrapper.get('#capacity-rate-limit-429-enabled').attributes('aria-checked')).toBe('false')
     expect(wrapper.get('#capacity-slow-enabled').attributes('aria-checked')).toBe('false')
     expect(wrapper.find('input').exists()).toBe(false)
     await wrapper.get('#capacity-enabled').trigger('click')
@@ -46,6 +47,43 @@ describe('OpenAI capacity cooldown settings', () => {
       failure_threshold: 5, cooldown_seconds: 90, max_cooldown_seconds: 900
     })
     expect(mocks.success).toHaveBeenCalledOnce()
+  })
+
+  it('enables ordinary 429 protection on its own and saves the shared window, threshold and cooldown', async () => {
+    const wrapper = mount(OpenAICapacityCooldownSettings)
+    await flushPromises()
+    await wrapper.get('#capacity-rate-limit-429-enabled').trigger('click')
+    expect(wrapper.get('#capacity-enabled').attributes('aria-checked')).toBe('false')
+    expect(wrapper.find('#capacity-switch').exists()).toBe(false)
+    await wrapper.get('#capacity-window_seconds').setValue(120)
+    await wrapper.get('#capacity-failure_threshold').setValue(0)
+    await wrapper.get('[data-testid="capacity-save"]').trigger('click')
+    expect(mocks.save).not.toHaveBeenCalled()
+    await wrapper.get('#capacity-failure_threshold').setValue(3)
+    await wrapper.get('#capacity-cooldown_seconds').setValue(90)
+    await wrapper.get('#capacity-max_cooldown_seconds').setValue(900)
+    await wrapper.get('[data-testid="capacity-save"]').trigger('click')
+    await flushPromises()
+    expect(mocks.save).toHaveBeenCalledWith({
+      ...defaults, rate_limit_429_enabled: true, window_seconds: 120, failure_threshold: 3,
+      cooldown_seconds: 90, max_cooldown_seconds: 900
+    })
+    expect(mocks.success).toHaveBeenCalledOnce()
+  })
+
+  it('loads the saved 429 switch and can disable it independently of overload and slow output', async () => {
+    const saved = { ...defaults, enabled: true, rate_limit_429_enabled: true, slow_first_output_enabled: true }
+    mocks.load.mockResolvedValue(saved)
+    const wrapper = mount(OpenAICapacityCooldownSettings)
+    await flushPromises()
+    const toggle = wrapper.get('#capacity-rate-limit-429-enabled')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    await toggle.trigger('click')
+    expect(wrapper.find('#capacity-failure_threshold').exists()).toBe(true)
+    expect(wrapper.find('#capacity-slow_first_output_threshold').exists()).toBe(true)
+    await wrapper.get('[data-testid="capacity-save"]').trigger('click')
+    await flushPromises()
+    expect(mocks.save).toHaveBeenCalledWith({ ...saved, rate_limit_429_enabled: false })
   })
 
   it.each([[0, 30], [3, 0], [2, 50], [0, 0], [0, 100]])('saves independent count=%i and percent=%i criteria', async (count, percent) => {

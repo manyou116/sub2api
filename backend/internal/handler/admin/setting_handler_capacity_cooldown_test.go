@@ -57,6 +57,7 @@ func TestCapacityCooldownAdminSettingsContract(t *testing.T) {
 	require.Equal(t, service.DefaultOpenAICapacityCooldownSettings(), decode(call(http.MethodGet, "")))
 	want := service.DefaultOpenAICapacityCooldownSettings()
 	want.Enabled, want.SwitchAccountOnOverload, want.CooldownSeconds = true, false, 120
+	want.RateLimit429Enabled = true
 	want.SlowFirstOutputEnabled, want.SlowFirstOutputSeconds, want.SlowFirstOutputThreshold = true, 15, 1
 	body, err := json.Marshal(want)
 	require.NoError(t, err)

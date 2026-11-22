@@ -463,7 +463,7 @@ func (s *OpenAIGatewayService) newOpenAIAccountFailoverErrorWithClassificationHe
 		failoverErr.SameAccountRetryDeadline = s.openAIOAuth429RetryDeadline(account)
 		failoverErr.SameAccountRetryDelay = openAIOAuth429SameAccountRetryDelay(responseHeaders, failoverErr.SameAccountRetryDeadline)
 	}
-	s.applyOpenAICapacitySwitchPolicy(account, failoverErr)
+	s.applyOpenAICapacitySwitchPolicy(account, failoverErr, classificationHeaders)
 	return failoverErr
 }
 

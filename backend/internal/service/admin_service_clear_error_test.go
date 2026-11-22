@@ -60,7 +60,7 @@ func TestAdminService_ClearAccountError_ResetsCapacityCircuitAndTempCache(t *tes
 				projectionRepo := &capacityPauseRepo{rateLimitClearRepoStub: rateLimitClearRepoStub{getByIDAccount: account}}
 				gateway.rateLimitService.accountRepo = projectionRepo
 				attempt := &openAICapacityAttempt{store: store, settings: DefaultOpenAICapacityCooldownSettings(), model: "gpt-6.1-sol"}
-				require.NoError(t, gateway.rateLimitService.persistOpenAICapacityPause(account, attempt, old))
+				require.NoError(t, gateway.rateLimitService.persistOpenAICapacityPause(account, attempt, old, 1, nil))
 				require.Zero(t, projectionRepo.setCalls, "old results cannot reapply a pause after this admin entry point resets it")
 			})
 		}

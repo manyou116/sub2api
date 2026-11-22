@@ -74,7 +74,7 @@ func TestCapacityCooldownManualRecoveryResetsCircuitAndFencesLateProjection(t *t
 			require.Equal(t, 1, store.resets)
 			require.Equal(t, 1, repo.clearTempUnschedCalls)
 			attempt := &openAICapacityAttempt{store: store, settings: DefaultOpenAICapacityCooldownSettings(), model: "gpt-6.1-sol"}
-			require.NoError(t, svc.rateLimitService.persistOpenAICapacityPause(account, attempt, old))
+			require.NoError(t, svc.rateLimitService.persistOpenAICapacityPause(account, attempt, old, 1, nil))
 			require.Zero(t, repo.setCalls, "a delayed pre-recovery projection cannot restore the pause")
 		})
 	}

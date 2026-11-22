@@ -15,16 +15,23 @@
           <label for="capacity-enabled" class="text-sm font-medium">{{ t(`${prefix}.enabled`) }}</label>
           <Toggle id="capacity-enabled" v-model="form.enabled" />
         </div>
-        <template v-if="form.enabled">
-          <div class="flex items-center justify-between gap-4">
-            <div>
-              <label for="capacity-switch" class="text-sm font-medium">{{ t(`${prefix}.switchAccount`) }}</label>
-              <p class="mt-1 text-xs text-gray-500">{{ t(`${prefix}.switchHint`) }}</p>
-            </div>
-            <Toggle id="capacity-switch" v-model="form.switch_account_on_overload" />
+        <div v-if="form.enabled" class="flex items-center justify-between gap-4">
+          <div>
+            <label for="capacity-switch" class="text-sm font-medium">{{ t(`${prefix}.switchAccount`) }}</label>
+            <p class="mt-1 text-xs text-gray-500">{{ t(`${prefix}.switchHint`) }}</p>
           </div>
+          <Toggle id="capacity-switch" v-model="form.switch_account_on_overload" />
+        </div>
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label for="capacity-rate-limit-429-enabled" class="text-sm font-medium">{{ t(`${prefix}.rateLimit429Enabled`) }}</label>
+            <p id="capacity-rate-limit-429-hint" class="mt-1 text-xs text-gray-500">{{ t(`${prefix}.rateLimit429Hint`) }}</p>
+          </div>
+          <Toggle id="capacity-rate-limit-429-enabled" v-model="form.rate_limit_429_enabled" aria-describedby="capacity-rate-limit-429-hint" />
+        </div>
+        <template v-if="showFailureSettings">
           <div class="grid gap-4 sm:grid-cols-2">
-            <div v-for="field in overloadFields" :key="field.key">
+            <div v-for="field in failureFields" :key="field.key">
               <label :for="`capacity-${field.key}`" class="mb-2 block text-sm font-medium">{{ t(`${prefix}.${field.key}`) }}</label>
               <input
                 :id="`capacity-${field.key}`" v-model.number="form[field.key]" type="number" class="input"
@@ -56,7 +63,7 @@
           </div>
           <p class="text-xs text-gray-500 dark:text-gray-400">{{ t(`${prefix}.slowRecoveryHint`) }}</p>
         </template>
-        <div v-if="form.enabled || form.slow_first_output_enabled" class="grid gap-4 sm:grid-cols-2">
+        <div v-if="showFailureSettings || form.slow_first_output_enabled" class="grid gap-4 sm:grid-cols-2">
           <div v-for="field in cooldownFields" :key="field.key">
             <label :for="`capacity-${field.key}`" class="mb-2 block text-sm font-medium">{{ t(`${prefix}.${field.key}`) }}</label>
             <input
@@ -75,11 +82,11 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Toggle from '@/components/common/Toggle.vue'
 import { useAppStore } from '@/stores/app'
-import { getOpenAICapacityCooldownSettings, updateOpenAICapacityCooldownSettings } from '@/api/admin/openaiCapacityCooldown'
+import { getOpenAICapacityCooldownSettings, updateOpenAICapacityCooldownSettings, type OpenAICapacityCooldownSettings } from '@/api/admin/openaiCapacityCooldown'
 
 const prefix = 'admin.settings.capacityCooldown'
 const { t } = useI18n()
@@ -88,14 +95,15 @@ const card = ref<HTMLElement | null>(null)
 const loading = ref(true)
 const loadFailed = ref(false)
 const saving = ref(false)
-const form = reactive({
-  enabled: false, switch_account_on_overload: true, window_seconds: 60,
+const form = reactive<OpenAICapacityCooldownSettings>({
+  enabled: false, rate_limit_429_enabled: false, switch_account_on_overload: true, window_seconds: 60,
   failure_threshold: 1, cooldown_seconds: 60, max_cooldown_seconds: 600,
   slow_first_output_enabled: false, slow_first_output_seconds: 10,
   slow_first_output_high_effort_seconds: 30, slow_first_output_window_seconds: 60,
   slow_first_output_threshold: 2, slow_first_output_percent: 0
 })
-const overloadFields = [
+const showFailureSettings = computed(() => form.enabled || form.rate_limit_429_enabled)
+const failureFields = [
   { key: 'window_seconds', min: 1, max: 300 },
   { key: 'failure_threshold', min: 1, max: 100 }
 ] as const

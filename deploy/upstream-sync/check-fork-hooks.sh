@@ -255,7 +255,9 @@ need_rg "capacity admission on scheduler candidates" \
 need_rg "capacity observations on schedule result" \
   "observeOpenAICapacityResult(account, success" backend/internal/service/openai_account_scheduler.go
 need_rg "capacity switch policy before common failover" \
-  "applyOpenAICapacitySwitchPolicy(account, failoverErr)" backend/internal/service/openai_gateway_upstream_errors.go
+  "applyOpenAICapacitySwitchPolicy(account, failoverErr, classificationHeaders)" backend/internal/service/openai_gateway_upstream_errors.go
+need_rg "ordinary 429 observation at common upstream error handling" \
+  "observeOpenAICapacity(account, openAIRateLimit429Outcome)" backend/internal/service/openai_account_runtime_block_fastpath.go
 need_rg "capacity switch before passthrough HTTP response" \
   "s.shouldSwitchOpenAICapacity(account, probeBody)" backend/internal/service/openai_gateway_passthrough.go
 need_rg "capacity settings admin routes" \

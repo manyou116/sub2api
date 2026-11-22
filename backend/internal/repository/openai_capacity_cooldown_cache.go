@@ -14,14 +14,14 @@ import (
 func capacityKeys(accountID int64, _ string) []string {
 	prefix := "openai_capacity:{account_text_v1}:"
 	key := prefix + strconv.FormatInt(accountID, 10)
-	return []string{key, key + ":events", key + ":failures", key + ":successes", prefix + "blocked", key + ":slow", key + ":slow_events"}
+	return []string{key, key + ":events", key + ":failures", key + ":successes", prefix + "blocked", key + ":slow", key + ":slow_events", key + ":rate429"}
 }
 
 var capacityCooldownScript = redis.NewScript(`
 local clock = redis.call('TIME')
 local now = tonumber(clock[1])*1000 + math.floor(tonumber(clock[2])/1000)
 local op, account, id = ARGV[1], ARGV[2], ARGV[3]
-local state, events, failures, successes, blocked, slow, slow_events = unpack(KEYS)
+local state, events, failures, successes, blocked, slow, slow_events, rate429 = unpack(KEYS)
 if op == 'blocked' then
   return redis.call('ZRANGEBYSCORE', blocked, now+1, '+inf')
 end
@@ -40,7 +40,7 @@ if op == 'reset' then
   redis.call('HDEL',state,'owner','lease')
   redis.call('EXPIRE',state,14400)
   redis.call('ZREM',blocked,account)
-  redis.call('DEL',events,failures,successes,slow,slow_events)
+  redis.call('DEL',events,failures,successes,slow,slow_events,rate429)
   return result(1,0,0)
 end
 if op == 'release' then
@@ -94,14 +94,14 @@ if phase == 1 then
       generation = generation+1
       level = math.max(0,level-1)
       redis.call('HSET',state,'phase',0,'generation',generation,'level',level,'recovered',0)
-      redis.call('DEL',events,failures,successes,slow,slow_events)
+      redis.call('DEL',events,failures,successes,slow,slow_events,rate429)
     end
     return result(1,0,0)
   end
-  if outcome ~= 1 and outcome ~= 3 then return result(1,0,0) end
+  if outcome ~= 1 and outcome ~= 3 and outcome ~= 5 then return result(1,0,0) end
 end
 local window = tonumber(ARGV[6])*1000
-for _,key in ipairs({events,failures,successes}) do
+for _,key in ipairs({events,failures,successes,rate429}) do
   redis.call('ZREMRANGEBYSCORE',key,'-inf',now-window)
 end
 local score = redis.call('ZSCORE',events,id)
@@ -109,11 +109,14 @@ if not score then score=now; redis.call('ZADD',events,score,id) end
 if outcome == 2 then
   redis.call('ZADD',successes,score,id)
   redis.call('ZREM',failures,id)
-elseif outcome == 1 and not redis.call('ZSCORE',successes,id) then
-  redis.call('ZADD',failures,score,id)
+  redis.call('ZREM',rate429,id)
+elseif (outcome == 1 or outcome == 5) and not redis.call('ZSCORE',successes,id) then
+  if outcome == 1 then redis.call('ZADD',failures,score,id) end
+  if outcome == 5 then redis.call('ZADD',rate429,score,id) end
 end
-for _,key in ipairs({events,failures,successes}) do redis.call('PEXPIRE',key,window+60000) end
+for _,key in ipairs({events,failures,successes,rate429}) do redis.call('PEXPIRE',key,window+60000) end
 local n, f = redis.call('ZCARD',events), redis.call('ZCARD',failures)
+if outcome == 5 then f = redis.call('ZCARD',rate429) end
 local capacity_trip = f >= tonumber(ARGV[7])
 local slow_trip = false
 -- A successful completion never erases a slow first-output event.
@@ -133,7 +136,7 @@ if phase == 1 or capacity_trip or slow_trip then
   redis.call('EXPIRE',state,14400)
   redis.call('ZADD',blocked,until_ms,account)
   redis.call('EXPIRE',blocked,14400)
-  redis.call('DEL',events,failures,successes,slow,slow_events)
+  redis.call('DEL',events,failures,successes,slow,slow_events,rate429)
   return result(0,0,1,f,n)
 end
 return result(1,0,0,f,n)

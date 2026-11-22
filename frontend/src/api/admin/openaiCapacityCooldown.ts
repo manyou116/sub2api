@@ -2,6 +2,7 @@ import apiClient from '../client'
 
 export interface OpenAICapacityCooldownSettings {
   enabled: boolean
+  rate_limit_429_enabled: boolean
   switch_account_on_overload: boolean
   window_seconds: number
   failure_threshold: number

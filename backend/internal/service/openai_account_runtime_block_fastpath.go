@@ -190,6 +190,12 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		return false
 	}
 	shouldDisable := s.rateLimitService.HandleUpstreamError(stateCtx, account, statusCode, headers, responseBody)
+	// Observe the provider signal here even when the stream already produced
+	// output and cannot construct a failover error. Run legacy quota handling
+	// first so a new text cooldown cannot influence its same-account check.
+	if !shouldDisable && openAITextRateLimit429(account, statusCode, headers, responseBody) {
+		observeOpenAICapacity(account, openAIRateLimit429Outcome)
+	}
 	tempModel := tempUnschedulableModel(stateCtx, nil)
 	modelTempMatched := tempModel != "" && tempUnschedRulesApply(account, statusCode, responseBody, tempModel) &&
 		len(matchTempUnschedulableRules(account, statusCode, responseBody)) > 0
