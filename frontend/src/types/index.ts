@@ -2570,6 +2570,10 @@ export interface TotpLogin2FARequest {
 // ==================== Scheduled Test Types ====================
 
 export interface ScheduledTestPlan {
+  quality_prompt?: string
+  quality_expected?: string
+  quality_priority?: boolean
+  quality_isolation_failures?: number
   id: number
   account_id: number
   model_id: string
@@ -2584,6 +2588,7 @@ export interface ScheduledTestPlan {
 }
 
 export interface ScheduledTestResult {
+  quality_verdict?: "pass" | "fail"
   id: number
   plan_id: number
   status: string
@@ -2596,6 +2601,10 @@ export interface ScheduledTestResult {
 }
 
 export interface CreateScheduledTestPlanRequest {
+  quality_prompt?: string
+  quality_expected?: string
+  quality_priority?: boolean
+  quality_isolation_failures?: number
   account_id: number
   model_id: string
   cron_expression: string
@@ -2605,6 +2614,10 @@ export interface CreateScheduledTestPlanRequest {
 }
 
 export interface UpdateScheduledTestPlanRequest {
+  quality_prompt?: string
+  quality_expected?: string
+  quality_priority?: boolean
+  quality_isolation_failures?: number
   model_id?: string
   cron_expression?: string
   enabled?: boolean

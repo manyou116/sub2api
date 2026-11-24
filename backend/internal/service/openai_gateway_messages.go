@@ -45,6 +45,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
+	account = chooseOpenAIConnectionForModel(account, gjson.GetBytes(body, "model").String())
+	if account.IsExcelBPSEnabled() {
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", "Excel BPS supports Responses and Chat Completions")
+		return nil, errors.New("Excel BPS does not support Messages")
+	}
 	// Web Search 模拟：Chat Completions 转换会丢掉 web_search 工具，纯 web_search
 	// 请求在此直接调用搜索 API 构造 Anthropic 响应，不访问上游。
 	if groupID := getOpenAIGroupIDFromContext(c); shouldEmulateWebSearchFor(ctx, s.settingService, s.channelService, account, &groupID, body) {
@@ -356,7 +361,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	// 5. Get access token
-	token, _, err := s.getRequestCredential(ctx, c, account)
+	token, _, err := s.getOpenAIMessageInferenceToken(ctx, c, account)
 	if err != nil {
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
@@ -469,6 +474,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if siwcErr := stopSIWCEligibilityRejection(c, account, resp, respBody, func() {
+			writeAnthropicError(c, http.StatusBadGateway, "api_error", siwcNotEligibleMessage)
+		}); siwcErr != nil {
+			return nil, siwcErr
+		}
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {

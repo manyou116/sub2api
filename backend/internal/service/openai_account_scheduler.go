@@ -988,6 +988,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		}
 	}
 
+	qualityBias := s.service.scheduledQualityScores(ctx, candidates, req.RequestedModel)
 	for i := range candidates {
 		item := &candidates[i]
 		priorityFactor := 1.0
@@ -1029,6 +1030,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 			weights.Reset*resetFactor +
 			weights.QuotaHeadroom*quotaHeadroomFactor +
 			weights.UpstreamCost*(upstreamCostFactor-openAIUpstreamCostNeutralFactor)
+		item.score += qualityBias[item.account.ID]
 		if req.StickyWeighted {
 			if req.PreviousResponseCanMove && req.StickyPreviousAccountID > 0 && item.account.ID == req.StickyPreviousAccountID {
 				item.score += weights.Previous
@@ -2387,6 +2389,9 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		ctx = s.withOpenAIProfitControlGate(ctx, groupID)
 	}
 	platform = NormalizeOpenAICompatiblePlatform(platform)
+	if platform == PlatformOpenAI && requiredImageCapability == "" {
+		excludedIDs = s.excludeQualityIsolatedAccounts(ctx, requestedModel, excludedIDs)
+	}
 	decision := OpenAIAccountScheduleDecision{}
 	preserveStickyBinding := preserveOpenAIGuardianParentBinding(ctx, sessionHash) || openAIImageSizeSpilloverPass(ctx)
 	guardianParentAccountID := int64(0)
@@ -2540,6 +2545,12 @@ func accountSupportsOpenAICapabilities(account *Account, requiredCapability Open
 	if account == nil {
 		return false
 	}
+	if account.IsExcelBPSEnabled() && requiredImageCapability != "" {
+		return requiredImageCapability == OpenAIImagesCapabilityBasic || requiredImageCapability == OpenAIImagesCapabilityNative
+	}
+	if account.connectionProtocol() != "" {
+		return requiredImageCapability == "" && (requiredCapability == "" || requiredCapability == OpenAIEndpointCapabilityChatCompletions)
+	}
 	return account.SupportsOpenAIEndpointCapability(requiredCapability) &&
 		account.SupportsOpenAIImageCapability(requiredImageCapability)
 }
@@ -2559,7 +2570,7 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 	if requiredTransport == OpenAIUpstreamTransportAny || requiredTransport == OpenAIUpstreamTransportHTTPSSE {
 		return true
 	}
-	if s == nil || account == nil {
+	if s == nil || account == nil || account.connectionProtocol() != "" {
 		return false
 	}
 	if requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress {

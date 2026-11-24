@@ -334,7 +334,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	// Get access token
-	token, _, err := s.GetAccessToken(ctx, account)
+	token, _, err := s.getOpenAIHTTPInferenceToken(ctx, account)
 	if err != nil {
 		return nil, err
 	}
@@ -383,6 +383,12 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			// Peek only to identify an invalid task. Restore the body so the existing
 			// passthrough error handling sees the same response after recovery fails.
 			probeBody := s.readUpstreamErrorBody(resp)
+			if siwcErr := stopSIWCEligibilityRejection(c, account, resp, probeBody, func() {
+				c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"type": "upstream_error", "code": siwcNotEligibleCode, "message": siwcNotEligibleMessage}})
+			}); siwcErr != nil {
+				_ = resp.Body.Close()
+				return nil, siwcErr
+			}
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(probeBody))
 			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody); retryErr != nil {
@@ -549,6 +555,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	body []byte,
 	token string,
 ) (*http.Request, error) {
+	if account.IsSIWCEnabled() {
+		return s.buildSIWCRequest(ctx, c, account, body, token)
+	}
 	targetURL := openaiPlatformAPIURL
 	switch account.Type {
 	case AccountTypeOAuth:

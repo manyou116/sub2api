@@ -7,30 +7,37 @@ import (
 
 // ScheduledTestPlan represents a scheduled test plan domain model.
 type ScheduledTestPlan struct {
-	ID             int64      `json:"id"`
-	AccountID      int64      `json:"account_id"`
-	ModelID        string     `json:"model_id"`
-	CronExpression string     `json:"cron_expression"`
-	Enabled        bool       `json:"enabled"`
-	MaxResults     int        `json:"max_results"`
-	AutoRecover    bool       `json:"auto_recover"`
-	LastRunAt      *time.Time `json:"last_run_at"`
-	NextRunAt      *time.Time `json:"next_run_at"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	QualityRevision          int64      `json:"-"`
+	QualityPrompt            string     `json:"quality_prompt,omitempty"`
+	QualityExpected          string     `json:"quality_expected,omitempty"`
+	QualityPriority          bool       `json:"quality_priority,omitempty"`
+	QualityIsolationFailures int        `json:"quality_isolation_failures,omitempty"`
+	ID                       int64      `json:"id"`
+	AccountID                int64      `json:"account_id"`
+	ModelID                  string     `json:"model_id"`
+	CronExpression           string     `json:"cron_expression"`
+	Enabled                  bool       `json:"enabled"`
+	MaxResults               int        `json:"max_results"`
+	AutoRecover              bool       `json:"auto_recover"`
+	LastRunAt                *time.Time `json:"last_run_at"`
+	NextRunAt                *time.Time `json:"next_run_at"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
 // ScheduledTestResult represents a single test execution result.
 type ScheduledTestResult struct {
-	ID           int64     `json:"id"`
-	PlanID       int64     `json:"plan_id"`
-	Status       string    `json:"status"`
-	ResponseText string    `json:"response_text"`
-	ErrorMessage string    `json:"error_message"`
-	LatencyMs    int64     `json:"latency_ms"`
-	StartedAt    time.Time `json:"started_at"`
-	FinishedAt   time.Time `json:"finished_at"`
-	CreatedAt    time.Time `json:"created_at"`
+	QualityRevision int64     `json:"-"`
+	QualityVerdict  string    `json:"quality_verdict,omitempty"`
+	ID              int64     `json:"id"`
+	PlanID          int64     `json:"plan_id"`
+	Status          string    `json:"status"`
+	ResponseText    string    `json:"response_text"`
+	ErrorMessage    string    `json:"error_message"`
+	LatencyMs       int64     `json:"latency_ms"`
+	StartedAt       time.Time `json:"started_at"`
+	FinishedAt      time.Time `json:"finished_at"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 // ScheduledTestPlanRepository defines the data access interface for test plans.

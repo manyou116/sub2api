@@ -20,20 +20,28 @@ func NewScheduledTestHandler(scheduledTestSvc *service.ScheduledTestService) *Sc
 }
 
 type createScheduledTestPlanRequest struct {
-	AccountID      int64  `json:"account_id" binding:"required"`
-	ModelID        string `json:"model_id"`
-	CronExpression string `json:"cron_expression" binding:"required"`
-	Enabled        *bool  `json:"enabled"`
-	MaxResults     int    `json:"max_results"`
-	AutoRecover    *bool  `json:"auto_recover"`
+	AccountID                int64   `json:"account_id" binding:"required"`
+	ModelID                  string  `json:"model_id"`
+	CronExpression           string  `json:"cron_expression" binding:"required"`
+	Enabled                  *bool   `json:"enabled"`
+	MaxResults               int     `json:"max_results"`
+	AutoRecover              *bool   `json:"auto_recover"`
+	QualityPrompt            *string `json:"quality_prompt"`
+	QualityExpected          *string `json:"quality_expected"`
+	QualityPriority          *bool   `json:"quality_priority"`
+	QualityIsolationFailures *int    `json:"quality_isolation_failures"`
 }
 
 type updateScheduledTestPlanRequest struct {
-	ModelID        string `json:"model_id"`
-	CronExpression string `json:"cron_expression"`
-	Enabled        *bool  `json:"enabled"`
-	MaxResults     int    `json:"max_results"`
-	AutoRecover    *bool  `json:"auto_recover"`
+	ModelID                  string  `json:"model_id"`
+	CronExpression           string  `json:"cron_expression"`
+	Enabled                  *bool   `json:"enabled"`
+	MaxResults               int     `json:"max_results"`
+	AutoRecover              *bool   `json:"auto_recover"`
+	QualityPrompt            *string `json:"quality_prompt"`
+	QualityExpected          *string `json:"quality_expected"`
+	QualityPriority          *bool   `json:"quality_priority"`
+	QualityIsolationFailures *int    `json:"quality_isolation_failures"`
 }
 
 // ListByAccount GET /admin/accounts/:id/scheduled-test-plans
@@ -74,6 +82,7 @@ func (h *ScheduledTestHandler) Create(c *gin.Context) {
 		plan.AutoRecover = *req.AutoRecover
 	}
 
+	applyScheduledQuality(plan, req.QualityPrompt, req.QualityExpected, req.QualityPriority, req.QualityIsolationFailures)
 	created, err := h.scheduledTestSvc.CreatePlan(c.Request.Context(), plan)
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -118,6 +127,7 @@ func (h *ScheduledTestHandler) Update(c *gin.Context) {
 		existing.AutoRecover = *req.AutoRecover
 	}
 
+	applyScheduledQuality(existing, req.QualityPrompt, req.QualityExpected, req.QualityPriority, req.QualityIsolationFailures)
 	updated, err := h.scheduledTestSvc.UpdatePlan(c.Request.Context(), existing)
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -160,4 +170,19 @@ func (h *ScheduledTestHandler) ListResults(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, results)
+}
+
+func applyScheduledQuality(plan *service.ScheduledTestPlan, prompt, expected *string, priority *bool, isolationFailures *int) {
+	if prompt != nil {
+		plan.QualityPrompt = *prompt
+	}
+	if expected != nil {
+		plan.QualityExpected = *expected
+	}
+	if priority != nil {
+		plan.QualityPriority = *priority
+	}
+	if isolationFailures != nil {
+		plan.QualityIsolationFailures = *isolationFailures
+	}
 }

@@ -690,6 +690,13 @@ func (s *OpenAIGatewayService) ForwardImages(
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
+	account = chooseOpenAIConnectionForModel(account, firstNonEmpty(channelMappedModel, parsed.Model))
+	if account.IsExcelBPSEnabled() {
+		return s.forwardExcelBPSImage(ctx, c, account, parsed, channelMappedModel)
+	}
+	if account.IsSIWCEnabled() {
+		return nil, fmt.Errorf("SIWC does not support this image route")
+	}
 	if account.IsImageShadow() {
 		return s.forwardWebImage(ctx, c, account, parsed, channelMappedModel)
 	}

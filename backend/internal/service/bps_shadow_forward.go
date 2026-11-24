@@ -225,21 +225,7 @@ func (s *OpenAIGatewayService) forwardBPSChatCompletions(ctx context.Context, c 
 }
 
 func (s *OpenAIGatewayService) forwardBPSWithProtocol(ctx context.Context, c *gin.Context, account *Account, body []byte, chat *apicompat.ChatCompletionsRequest) (*OpenAIForwardResult, error) {
-	fail := func(status int, code string) (*OpenAIForwardResult, error) {
-		switch {
-		case chat != nil && chat.Stream && c.Writer.Written():
-			MarkOpsStreamFailure(c, "upstream_error", code, code, status)
-			MarkResponseCommitted(c)
-			_, _ = c.Writer.WriteString(buildChatStreamErrorSSE(code, code) + "data: [DONE]\n\n")
-			c.Writer.Flush()
-		default:
-			if chat != nil {
-				MarkResponseCommitted(c)
-			}
-			c.JSON(status, gin.H{"error": gin.H{"type": code, "message": code}})
-		}
-		return nil, errors.New(code) // Never a scheduler failover or retry.
-	}
+	fail := bpsResponseFailureWriter(c, chat)
 	start := time.Now()
 	if c.Request.Context().Value(bpsResponsesKey{}) != true {
 		return fail(http.StatusBadRequest, "bps_responses_only")
@@ -312,7 +298,44 @@ func (s *OpenAIGatewayService) forwardBPSWithProtocol(ctx context.Context, c *gi
 		}
 		return fail(http.StatusBadGateway, "bps_upstream_rejected")
 	}
-	SetActualOpenAIUpstreamEndpoint(c, "/bps/responses")
+	return s.deliverBPSResponse(ctx, c, resp, chat, stream, model, mapped, billingModel, "/bps/responses", parent.ID, start,
+		func(stats *OpenAIForwardResult, terminal gjson.Result, err error) {
+			if reused != nil {
+				logger.FromContext(ctx).Debug("bps.ws_turn", zap.Bool("reused", reused.Load()),
+					zap.Int64("duration_ms", time.Since(start).Milliseconds()), zap.Any("first_text_ms", stats.FirstTokenMs),
+					zap.Bool("completed", err == nil && terminal.Get("type").String() == "response.completed"))
+				if err == nil && terminal.Get("type").String() == "response.completed" {
+					// Let the embedded reader park the socket before closing the response pipe.
+					_, _ = io.Copy(io.Discard, resp.Body)
+				}
+			}
+		})
+}
+
+func bpsResponseFailureWriter(c *gin.Context, chat *apicompat.ChatCompletionsRequest) func(int, string) (*OpenAIForwardResult, error) {
+	return func(status int, code string) (*OpenAIForwardResult, error) {
+		switch {
+		case chat != nil && chat.Stream && c.Writer.Written():
+			MarkOpsStreamFailure(c, "upstream_error", code, code, status)
+			MarkResponseCommitted(c)
+			_, _ = c.Writer.WriteString(buildChatStreamErrorSSE(code, code) + "data: [DONE]\n\n")
+			c.Writer.Flush()
+		default:
+			if chat != nil {
+				MarkResponseCommitted(c)
+			}
+			c.JSON(status, gin.H{"error": gin.H{"type": code, "message": code}})
+		}
+		return nil, errors.New(code) // Never a scheduler failover or retry.
+	}
+}
+
+func (s *OpenAIGatewayService) deliverBPSResponse(ctx context.Context, c *gin.Context, resp *http.Response,
+	chat *apicompat.ChatCompletionsRequest, stream bool, model, mapped, billingModel, endpoint string,
+	quotaParentID int64, start time.Time, observe func(*OpenAIForwardResult, gjson.Result, error),
+) (*OpenAIForwardResult, error) {
+	fail := bpsResponseFailureWriter(c, chat)
+	SetActualOpenAIUpstreamEndpoint(c, endpoint)
 	var chatState *apicompat.ResponsesEventToChatState
 	if chat != nil && stream {
 		chatState = apicompat.NewResponsesEventToChatState()
@@ -324,7 +347,7 @@ func (s *OpenAIGatewayService) forwardBPSWithProtocol(ctx context.Context, c *gi
 		c.Header("Cache-Control", "no-cache")
 		c.Header("X-Accel-Buffering", "no")
 	}
-	stats := &OpenAIForwardResult{Model: model, UpstreamModel: mapped, BillingModel: billingModel, Stream: stream, UpstreamEndpoint: "/bps/responses"}
+	stats := &OpenAIForwardResult{Model: model, UpstreamModel: mapped, BillingModel: billingModel, Stream: stream, UpstreamEndpoint: endpoint}
 	terminal, err := bpsReadStream(resp.Body, 16<<20, func(data string, _ []byte) error {
 		event := gjson.Parse(data)
 		eventType := event.Get("type").String()
@@ -368,14 +391,8 @@ func (s *OpenAIGatewayService) forwardBPSWithProtocol(ctx context.Context, c *gi
 		c.Writer.Flush()
 		return nil
 	})
-	if reused != nil {
-		logger.FromContext(ctx).Debug("bps.ws_turn", zap.Bool("reused", reused.Load()),
-			zap.Int64("duration_ms", time.Since(start).Milliseconds()), zap.Any("first_text_ms", stats.FirstTokenMs),
-			zap.Bool("completed", err == nil && terminal.Get("type").String() == "response.completed"))
-		if err == nil && terminal.Get("type").String() == "response.completed" {
-			// Let the embedded reader park the socket before closing the response pipe.
-			_, _ = io.Copy(io.Discard, resp.Body)
-		}
+	if observe != nil {
+		observe(stats, terminal, err)
 	}
 	if err != nil {
 		if chat != nil && ctx.Err() == nil {
@@ -424,8 +441,10 @@ func (s *OpenAIGatewayService) forwardBPSWithProtocol(ctx context.Context, c *gi
 		stats.Usage.CacheReadInputTokens = int(u.Get("input_tokens_details.cached_tokens").Int())
 		return stats, nil
 	case "response.failed", "error":
-		s.noteBPSQuota(ctx, parent.ID, terminal.Get("response.error"))
-		s.noteBPSQuota(ctx, parent.ID, terminal.Get("error"))
+		if quotaParentID > 0 {
+			s.noteBPSQuota(ctx, quotaParentID, terminal.Get("response.error"))
+			s.noteBPSQuota(ctx, quotaParentID, terminal.Get("error"))
+		}
 		if !stream || chat != nil {
 			return fail(http.StatusBadGateway, "bps_generation_failed")
 		}

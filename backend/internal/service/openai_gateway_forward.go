@@ -22,6 +22,7 @@ import (
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
+	account = chooseOpenAIConnectionForModel(account, gjson.GetBytes(body, "model").String())
 	if account.IsBPSShadow() {
 		return s.forwardBPS(ctx, c, account, body)
 	}
@@ -61,6 +62,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			},
 		})
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
+	}
+
+	if account.IsSIWCEnabled() {
+		return s.forwardSIWC(ctx, c, account, body)
+	}
+	if account.IsExcelBPSEnabled() {
+		return s.forwardExcelBPS(ctx, c, account, body, nil)
 	}
 
 	normalizedBody, normalized, err := normalizeOpenAICodexCompactReasoningEffortForAccount(c, account, body)
@@ -1400,6 +1408,9 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 }
 
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool) (*http.Request, error) {
+	if account.IsSIWCEnabled() {
+		return s.buildSIWCRequest(ctx, c, account, body, token)
+	}
 	// Determine target URL based on account type
 	var targetURL string
 	switch account.Type {

@@ -116,9 +116,14 @@ func ProvideOpenAIOAuthService(
 	proxyRepo ProxyRepository,
 	oauthClient OpenAIOAuthClient,
 	privacyClientFactory PrivacyClientFactory,
+	accountRepo AccountRepository,
+	encryptor SecretEncryptor,
+	redisClient *redis.Client,
 ) *OpenAIOAuthService {
 	svc := NewOpenAIOAuthService(proxyRepo, oauthClient)
 	svc.SetPrivacyClientFactory(privacyClientFactory)
+	repo, _ := accountRepo.(forkOpenAIConnectionRepository)
+	svc.connections = &forkOpenAIConnections{accounts: accountRepo, repo: repo, encryptor: encryptor, redis: redisClient}
 	return svc
 }
 

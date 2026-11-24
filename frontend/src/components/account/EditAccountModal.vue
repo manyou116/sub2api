@@ -2673,6 +2673,19 @@
         </div>
       </div>
 
+      <div
+        v-if="show && account.platform === 'openai' && account.type === 'oauth' && !isCredentialShadow"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <button type="button" class="btn btn-secondary" :aria-expanded="showOpenAIConnections" @click="showOpenAIConnections = !showOpenAIConnections">
+          {{ locale?.startsWith('zh') ? 'OpenAI 授权连接' : 'OpenAI authorization connections' }}
+        </button>
+        <template v-if="showOpenAIConnections">
+          <SIWCAccountSettings :key="'siwc-' + account.id" :account-id="account.id" />
+          <SIWCAccountSettings :key="'excel-' + account.id" :account-id="account.id" kind="excel" />
+        </template>
+      </div>
+
       <!-- OpenAI 订阅档位手动覆盖（Plus/Pro/Free），仅 OAuth 非影子账号 -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth' && !isCredentialShadow"
@@ -3448,6 +3461,7 @@ import {
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import WebImageShadowSettings from './WebImageShadowSettings.vue'
+import SIWCAccountSettings from './SIWCAccountSettings.vue'
 import { isImageShadow, imageShadowMode, readWebImageSettings, type WebImageSettings } from './webImageShadow'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
@@ -3545,7 +3559,9 @@ const emit = defineEmits<{
   updated: [account: Account]
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+const showOpenAIConnections = ref(false)
+watch(() => [props.show, props.account?.id], () => { showOpenAIConnections.value = false })
 const appStore = useAppStore()
 const browserTimeZone = getBrowserTimeZone()
 

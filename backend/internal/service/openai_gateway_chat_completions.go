@@ -76,6 +76,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
+	account = chooseOpenAIConnectionForModel(account, gjson.GetBytes(body, "model").String())
 	if account.IsBPSShadow() {
 		return s.forwardBPSChatCompletions(ctx, c, account, body)
 	}
@@ -98,6 +99,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			},
 		})
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
+	}
+
+	if account.IsExcelBPSEnabled() {
+		return s.forwardExcelBPSChat(ctx, c, account, body)
 	}
 
 	if account.Platform == PlatformGrok {
@@ -342,7 +347,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	responsesReq.ServiceTier = normalizedOpenAIServiceTierValue(gjson.GetBytes(responsesBody, "service_tier").String())
 
 	// 5. Get access token
-	token, _, err := s.GetAccessToken(ctx, account)
+	token, _, err := s.getOpenAIHTTPInferenceToken(ctx, account)
 	if err != nil {
 		return nil, fmt.Errorf("get access token: %w", err)
 	}
@@ -386,6 +391,11 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg, completeErrorBody := s.readOpenAIUpstreamErrorWithCompleteness(resp)
+		if siwcErr := stopSIWCEligibilityRejection(c, account, resp, respBody, func() {
+			writeChatCompletionsError(c, http.StatusBadGateway, siwcNotEligibleCode, siwcNotEligibleMessage)
+		}); siwcErr != nil {
+			return nil, siwcErr
+		}
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {

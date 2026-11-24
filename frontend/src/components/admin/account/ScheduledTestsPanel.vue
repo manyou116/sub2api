@@ -107,6 +107,22 @@
               </p>
             </div>
           </div>
+          <label class="input-label">
+            {{ qualityCopy.question }}
+            <input v-model.trim="newPlan.quality_prompt" type="text" maxlength="4096" class="input mt-1" />
+          </label>
+          <label class="input-label">
+            {{ qualityCopy.answer }}
+            <input v-model.trim="newPlan.quality_expected" type="text" maxlength="2048" class="input mt-1" />
+          </label>
+          <label class="input-label">
+            {{ qualityCopy.isolation }}
+            <input v-model.number="newPlan.quality_isolation_failures" class="input mt-1" type="number" min="0" max="8" />
+          </label>
+          <label class="flex items-center gap-2 text-sm sm:col-span-2">
+            <Toggle v-model="newPlan.quality_priority" />
+            {{ qualityCopy.priority }}
+          </label>
         </div>
         <div class="mt-3 flex justify-end gap-2">
           <button
@@ -317,6 +333,22 @@
                   </p>
                 </div>
               </div>
+              <label class="input-label">
+                {{ qualityCopy.question }}
+                <input v-model.trim="editForm.quality_prompt" type="text" maxlength="4096" class="input mt-1" />
+              </label>
+              <label class="input-label">
+                {{ qualityCopy.answer }}
+                <input v-model.trim="editForm.quality_expected" type="text" maxlength="2048" class="input mt-1" />
+              </label>
+              <label class="input-label">
+                {{ qualityCopy.isolation }}
+                <input v-model.number="editForm.quality_isolation_failures" class="input mt-1" type="number" min="0" max="8" />
+              </label>
+              <label class="flex items-center gap-2 text-sm sm:col-span-2">
+                <Toggle v-model="editForm.quality_priority" />
+                {{ qualityCopy.priority }}
+              </label>
             </div>
             <div class="mt-3 flex justify-end gap-2">
               <button
@@ -388,6 +420,9 @@
                       }}
                     </span>
 
+                    <span v-if="result.quality_verdict" class="text-xs text-gray-600 dark:text-gray-300">
+                      {{ qualityCopy[result.quality_verdict] }}
+                    </span>
                     <!-- Latency -->
                     <span v-if="result.latency_ms > 0" class="text-xs text-gray-500 dark:text-gray-400">
                       {{ result.latency_ms }}ms
@@ -463,7 +498,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onBeforeUnmount } from 'vue'
+import { computed, ref, reactive, watch, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -477,7 +512,14 @@ import { useAppStore } from '@/stores/app'
 import { formatDateTime } from '@/utils/format'
 import type { ScheduledTestPlan, ScheduledTestResult } from '@/types'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
+const qualityCopy = computed(() => locale?.value?.startsWith('zh') ? {
+  question: '质量检测问题', answer: '期望答案', priority: '质量结果参与 OpenAI 优先调度',
+  pass: '判题通过', fail: '答案不符', isolation: '连续错答后隔离该模型（0 关闭）',
+} : {
+  question: 'Quality probe question', answer: 'Expected answer', priority: 'Use quality results in OpenAI scheduling',
+  pass: 'Answer matched', fail: 'Answer did not match', isolation: 'Consecutive wrong answers before model isolation (0 disables)',
+})
 const appStore = useAppStore()
 
 const props = defineProps<{
@@ -515,7 +557,11 @@ const editForm = reactive({
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
-  auto_recover: false
+  auto_recover: false,
+  quality_prompt: "",
+  quality_expected: "",
+  quality_priority: false,
+  quality_isolation_failures: 0
 })
 
 const newPlan = reactive({
@@ -523,7 +569,11 @@ const newPlan = reactive({
   cron_expression: '' as string,
   max_results: '100' as string,
   enabled: true,
-  auto_recover: false
+  auto_recover: false,
+  quality_prompt: "",
+  quality_expected: "",
+  quality_priority: false,
+  quality_isolation_failures: 0
 })
 
 const resetNewPlan = () => {
@@ -532,6 +582,10 @@ const resetNewPlan = () => {
   newPlan.max_results = '100'
   newPlan.enabled = true
   newPlan.auto_recover = false
+  newPlan.quality_prompt = ""
+  newPlan.quality_expected = ""
+  newPlan.quality_priority = false
+  newPlan.quality_isolation_failures = 0
 }
 
 // Load plans when dialog opens
@@ -574,7 +628,11 @@ const handleCreate = async () => {
       cron_expression: newPlan.cron_expression,
       enabled: newPlan.enabled,
       max_results: maxResults,
-      auto_recover: newPlan.auto_recover
+      auto_recover: newPlan.auto_recover,
+      quality_prompt: newPlan.quality_prompt,
+      quality_expected: newPlan.quality_expected,
+      quality_priority: newPlan.quality_priority,
+      quality_isolation_failures: Number(newPlan.quality_isolation_failures) || 0
     })
     appStore.showSuccess(t('admin.scheduledTests.createSuccess'))
     showAddForm.value = false
@@ -607,6 +665,10 @@ const startEdit = (plan: ScheduledTestPlan) => {
   editForm.max_results = String(plan.max_results)
   editForm.enabled = plan.enabled
   editForm.auto_recover = plan.auto_recover
+  editForm.quality_prompt = plan.quality_prompt ?? ""
+  editForm.quality_expected = plan.quality_expected ?? ""
+  editForm.quality_priority = plan.quality_priority === true
+  editForm.quality_isolation_failures = plan.quality_isolation_failures ?? 0
 }
 
 const cancelEdit = () => {
@@ -622,7 +684,11 @@ const handleEdit = async () => {
       cron_expression: editForm.cron_expression,
       max_results: Number(editForm.max_results) || 100,
       enabled: editForm.enabled,
-      auto_recover: editForm.auto_recover
+      auto_recover: editForm.auto_recover,
+      quality_prompt: editForm.quality_prompt,
+      quality_expected: editForm.quality_expected,
+      quality_priority: editForm.quality_priority,
+      quality_isolation_failures: Number(editForm.quality_isolation_failures) || 0
     })
     const index = plans.value.findIndex((p) => p.id === editingPlanId.value)
     if (index !== -1) {
