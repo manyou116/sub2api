@@ -22,6 +22,7 @@ FRONTEND_CRITICAL_VITEST := \
 	src/components/account/__tests__/CNProviderQuotaCell.spec.ts \
 	src/components/account/__tests__/CreateAccountModal.spec.ts \
 	src/components/account/__tests__/EditAccountModal.spec.ts \
+	src/components/account/__tests__/SIWCAccountSettings.spec.ts \
 	src/components/account/__tests__/BulkEditAccountModal.spec.ts \
 	src/components/account/__tests__/credentialsBuilder.spec.ts \
 	src/components/account/__tests__/OpenCodeGoProtocolRulesEditor.spec.ts \

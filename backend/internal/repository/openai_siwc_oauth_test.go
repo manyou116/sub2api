@@ -80,7 +80,7 @@ func TestSIWCTokenScopeAndVerifiedIdentityOffline(t *testing.T) {
 					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(payload)), Request: r}, nil
 				}
 			})
-			poolKey := buildReqClientKey(reqClientOptions{ProxyURL: proxy, Timeout: 120 * time.Second})
+			poolKey := buildReqClientKey(reqClientOptions{ProxyURL: proxy, Timeout: 120 * time.Second, DisableRedirects: true})
 			sharedReqClients.Store(poolKey, client)
 			defer sharedReqClients.Delete(poolKey)
 			nonce := ""

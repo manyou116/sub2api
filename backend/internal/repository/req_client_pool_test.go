@@ -43,6 +43,36 @@ func TestGetSharedReqClient_ForceHTTP2SeparatesCache(t *testing.T) {
 	require.NotEqual(t, buildReqClientKey(base), buildReqClientKey(force))
 }
 
+func TestGetSharedReqClient_DisableRedirectsKeepsFormAtOriginalEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			http.Redirect(w, r, "/other", http.StatusTemporaryRedirect)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	opts := reqClientOptions{Timeout: time.Second}
+	ordinary, err := getSharedReqClient(opts)
+	require.NoError(t, err)
+	opts.DisableRedirects = true
+	restricted, err := getSharedReqClient(opts)
+	require.NoError(t, err)
+	require.NotSame(t, ordinary, restricted)
+	for _, tt := range []struct {
+		client *req.Client
+		status int
+	}{
+		{restricted, http.StatusTemporaryRedirect},
+		{ordinary, http.StatusNoContent},
+	} {
+		resp, err := tt.client.R().SetFormData(map[string]string{"refresh_token": "synthetic"}).Post(server.URL + "/token")
+		require.NoError(t, err)
+		require.Equal(t, tt.status, resp.StatusCode)
+	}
+}
+
 func TestGetSharedReqClient_ReuseCachedClient(t *testing.T) {
 	sharedReqClients = sync.Map{}
 	opts := reqClientOptions{
@@ -85,7 +115,7 @@ func TestGetSharedReqClient_ImpersonateAndProxy(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, client)
-	require.Equal(t, "http://proxy.local:8080|4s|true|false", buildReqClientKey(opts))
+	require.Equal(t, "http://proxy.local:8080|4s|true|false|false", buildReqClientKey(opts))
 }
 
 func TestGetSharedReqClient_InvalidProxyURL(t *testing.T) {

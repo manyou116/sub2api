@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
@@ -12,7 +13,10 @@ import (
 // Tokens and signing keys use the same selected account proxy. No credentials
 // or token endpoint response bodies are included in errors.
 func (s *openaiOAuthService) SIWCToken(ctx context.Context, form url.Values, proxyURL, nonce string) (*openai.TokenResponse, *openai.SIWCIdentity, error) {
-	client, err := createOpenAIReqClient(proxyURL)
+	// Keep codes, verifiers and refresh tokens on their configured OAuth endpoint.
+	client, err := getSharedReqClient(reqClientOptions{
+		ProxyURL: proxyURL, Timeout: 120 * time.Second, DisableRedirects: true,
+	})
 	if err != nil {
 		return nil, nil, errors.New("SIWC proxy is unavailable")
 	}
