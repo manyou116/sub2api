@@ -269,19 +269,19 @@ func (s *OpenAIGatewayService) uploadExcelBPSAttachment(ctx context.Context, acc
 	req.Header.Set("Accept", "application/json")
 	resp, err := s.sendExcelBPSRequest(req, account, auth, token, proxy)
 	if err != nil {
-		return "", fmt.Errorf("Excel BPS attachment result unconfirmed")
+		return "", fmt.Errorf("BPS attachment result unconfirmed")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("Excel BPS attachment rejected with HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("BPS attachment rejected with HTTP %d", resp.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, (64<<10)+1))
 	if err != nil || len(raw) > 64<<10 || !gjson.ValidBytes(raw) {
-		return "", fmt.Errorf("Excel BPS attachment returned an invalid result")
+		return "", fmt.Errorf("BPS attachment returned an invalid result")
 	}
 	id := gjson.GetBytes(raw, "openai_file_id").String()
 	if !basispoints.ValidAttachmentID(id) {
-		return "", fmt.Errorf("Excel BPS attachment file ID is invalid")
+		return "", fmt.Errorf("BPS attachment file ID is invalid")
 	}
 	return id, nil
 }

@@ -48,7 +48,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	account = chooseOpenAIConnectionForModel(account, gjson.GetBytes(body, "model").String())
 	if account.IsExcelBPSEnabled() {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", "Excel BPS supports Responses and Chat Completions")
-		return nil, errors.New("Excel BPS does not support Messages")
+		return nil, errors.New("BPS does not support Messages")
 	}
 	// Web Search 模拟：Chat Completions 转换会丢掉 web_search 工具，纯 web_search
 	// 请求在此直接调用搜索 API 构造 Anthropic 响应，不访问上游。

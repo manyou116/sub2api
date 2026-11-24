@@ -168,11 +168,11 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 			}, func(nextCtx context.Context, request []byte) (io.ReadCloser, error) {
 				next, err := send(nextCtx, basispoints.ResponsesURL, request)
 				if err != nil {
-					return nil, errors.New("Excel BPS continuation result unconfirmed")
+					return nil, errors.New("BPS continuation result unconfirmed")
 				}
 				if !bpsIsStream(next) {
 					_ = next.Body.Close()
-					return nil, fmt.Errorf("Excel BPS continuation returned HTTP %d", next.StatusCode)
+					return nil, fmt.Errorf("BPS continuation returned HTTP %d", next.StatusCode)
 				}
 				return next.Body, nil
 			})
@@ -202,27 +202,27 @@ func doExcelBPSSearch(ctx context.Context, plan *basispoints.SearchPlan, model, 
 	}
 	response, err := send(ctx, basispoints.SearchURL, payload)
 	if err != nil {
-		return basispoints.SearchResult{}, errors.New("Excel BPS search result unconfirmed")
+		return basispoints.SearchResult{}, errors.New("BPS search result unconfirmed")
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return basispoints.SearchResult{}, fmt.Errorf("Excel BPS search returned HTTP %d", response.StatusCode)
+		return basispoints.SearchResult{}, fmt.Errorf("BPS search returned HTTP %d", response.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
 	if err != nil {
-		return basispoints.SearchResult{}, errors.New("Excel BPS search result could not be read")
+		return basispoints.SearchResult{}, errors.New("BPS search result could not be read")
 	}
 	return basispoints.ParseSearchResult(raw)
 }
 
 func (s *OpenAIGatewayService) excelBPSCredential(ctx context.Context, account *Account) (*OpenAIOAuthService, string, string, error) {
 	if s.openAITokenProvider == nil || s.openAITokenProvider.openAIOAuthService == nil {
-		return nil, "", "", errors.New("Excel authorization is unavailable")
+		return nil, "", "", errors.New("authorization for Excel is unavailable")
 	}
 	proxy := ""
 	if account.ProxyID != nil {
 		if account.Proxy == nil {
-			return nil, "", "", errors.New("Excel account proxy is unavailable")
+			return nil, "", "", errors.New("account proxy for Excel is unavailable")
 		}
 		proxy = account.Proxy.URL()
 	}
