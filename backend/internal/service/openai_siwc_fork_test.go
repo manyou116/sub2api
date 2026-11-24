@@ -17,6 +17,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/redis/go-redis/v9"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -139,7 +140,7 @@ func TestSIWCForkLifecycleIsolation(t *testing.T) {
 	repo := &siwcLifecycleRepo{account: account, records: make(map[string]ForkOpenAIConnection)}
 	cipher := &liveAttestationAES{key: [32]byte{3}}
 	token := &siwcLifecycleTokenClient{}
-	service := &OpenAIOAuthService{oauthClient: token, connections: &forkOpenAIConnections{accounts: repo, repo: repo, redis: redisClient, encryptor: cipher}}
+	service := &OpenAIOAuthService{oauthClient: token, connections: &forkOpenAIConnections{accounts: repo, repo: repo, redis: newOpenAIConnectionState(redisClient), encryptor: cipher}}
 	flow, err := service.BeginOpenAIConnectionAuthorization(ctx, account.ID, siwcConnectionKind)
 	require.NoError(t, err)
 	auth, err := url.Parse(flow.AuthURL)
@@ -165,8 +166,14 @@ func TestSIWCForkLifecycleIsolation(t *testing.T) {
 	value, err := service.openAIConnectionToken(ctx, account.ID, siwcConnectionKind)
 	require.NoError(t, err)
 	require.Equal(t, "first-grant", value)
-	service.invalidateOpenAIConnectionToken(ctx, account.ID, siwcConnectionKind, value)
+	record, grant, err := service.loadOpenAIConnectionGrant(ctx, account.ID, siwcConnectionKind)
+	require.NoError(t, err)
+	grant.ExpiresAt = time.Now().Add(time.Second)
+	require.NoError(t, service.saveOpenAIConnectionGrant(ctx, account.ID, siwcConnectionKind, record.Revision, grant))
 	token.exchange = func(form url.Values, nonce string) (*openai.TokenResponse, *openai.SIWCIdentity, error) {
+		before := repo.records[siwcConnectionKind].Revision
+		service.invalidateOpenAIConnectionToken(ctx, account.ID, siwcConnectionKind, value)
+		require.Equal(t, before, repo.records[siwcConnectionKind].Revision, "a late 401 must not compete with a rotating refresh")
 		require.Equal(t, "refresh_token", form.Get("grant_type"))
 		require.Equal(t, "refresh-grant", form.Get("refresh_token"))
 		require.Empty(t, nonce)

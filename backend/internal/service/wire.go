@@ -123,8 +123,41 @@ func ProvideOpenAIOAuthService(
 	svc := NewOpenAIOAuthService(proxyRepo, oauthClient)
 	svc.SetPrivacyClientFactory(privacyClientFactory)
 	repo, _ := accountRepo.(forkOpenAIConnectionRepository)
-	svc.connections = &forkOpenAIConnections{accounts: accountRepo, repo: repo, encryptor: encryptor, redis: redisClient}
+	svc.connections = &forkOpenAIConnections{accounts: accountRepo, repo: repo, encryptor: encryptor, redis: newOpenAIConnectionState(redisClient)}
 	return svc
+}
+
+type redisOpenAIConnectionState struct {
+	client *redis.Client
+}
+
+func newOpenAIConnectionState(client *redis.Client) openAIConnectionState {
+	if client == nil {
+		return nil
+	}
+	return redisOpenAIConnectionState{client: client}
+}
+
+func (r redisOpenAIConnectionState) set(ctx context.Context, key, value string, ttl time.Duration) error {
+	return r.client.Set(ctx, key, value, ttl).Err()
+}
+
+func (r redisOpenAIConnectionState) get(ctx context.Context, key string) (string, error) {
+	return r.client.Get(ctx, key).Result()
+}
+
+func (r redisOpenAIConnectionState) trySet(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
+	return r.client.SetNX(ctx, key, value, ttl).Result()
+}
+
+var openAIConnectionCompareAndDelete = redis.NewScript(`
+	if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end
+	return 0
+`)
+
+func (r redisOpenAIConnectionState) compareAndDelete(ctx context.Context, key, value string) (bool, error) {
+	n, err := openAIConnectionCompareAndDelete.Run(ctx, r.client, []string{key}, value).Int()
+	return n == 1, err
 }
 
 // ProvideTokenRefreshService creates and starts TokenRefreshService

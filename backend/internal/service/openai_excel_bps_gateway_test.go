@@ -71,7 +71,7 @@ func excelTestGateway(t *testing.T, upstream HTTPUpstream) (*OpenAIGatewayServic
 	store := &excelTestRepository{account: account, record: ForkOpenAIConnection{HostID: "test", Ciphertext: encrypted, Revision: 1}}
 	redisClient := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})
 	t.Cleanup(func() { _ = redisClient.Close() })
-	oauth := &OpenAIOAuthService{connections: &forkOpenAIConnections{accounts: store, repo: store, encryptor: cipher, redis: redisClient}}
+	oauth := &OpenAIOAuthService{connections: &forkOpenAIConnections{accounts: store, repo: store, encryptor: cipher, redis: newOpenAIConnectionState(redisClient)}}
 	return &OpenAIGatewayService{httpUpstream: upstream, openAITokenProvider: &OpenAITokenProvider{openAIOAuthService: oauth}}, account
 }
 

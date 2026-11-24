@@ -15,7 +15,6 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 )
 
 const siwcConnectionKind = "siwc"
@@ -41,11 +40,18 @@ type siwcTokenClient interface {
 	SIWCToken(context.Context, url.Values, string, string) (*openai.TokenResponse, *openai.SIWCIdentity, error)
 }
 
+type openAIConnectionState interface {
+	set(context.Context, string, string, time.Duration) error
+	get(context.Context, string) (string, error)
+	trySet(context.Context, string, string, time.Duration) (bool, error)
+	compareAndDelete(context.Context, string, string) (bool, error)
+}
+
 type forkOpenAIConnections struct {
 	accounts  AccountRepository
 	repo      forkOpenAIConnectionRepository
 	encryptor SecretEncryptor
-	redis     *redis.Client
+	redis     openAIConnectionState
 }
 
 func (a *Account) IsSIWCEnabled() bool {
@@ -229,7 +235,7 @@ func (s *OpenAIOAuthService) BeginOpenAIConnectionAuthorization(ctx context.Cont
 	if err != nil {
 		return nil, errors.New("failed to encrypt SIWC authorization session")
 	}
-	if err = s.connections.redis.Set(ctx, siwcSessionKey(id, kind, idToken), encrypted, 30*time.Minute).Err(); err != nil {
+	if err = s.connections.redis.set(ctx, siwcSessionKey(id, kind, idToken), encrypted, 30*time.Minute); err != nil {
 		return nil, errors.New("SIWC authorization session storage unavailable")
 	}
 	challenge := openai.GenerateCodeChallenge(verifier)
@@ -243,11 +249,6 @@ func (s *OpenAIOAuthService) BeginOpenAIConnectionAuthorization(ctx context.Cont
 func siwcSessionKey(id int64, kind, sessionID string) string {
 	return "fork:openai:" + kind + ":session:" + strconv.FormatInt(id, 10) + ":" + sessionID
 }
-
-var takeSIWCSession = redis.NewScript(`
-	if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end
-	return 0
-`)
 
 func parseOpenAIConnectionCallback(callback, state, originalClient, kind string) (code, clientID string, err error) {
 	fail := infraerrors.BadRequest("OPENAI_SIWC_CALLBACK_INVALID", "Invalid SIWC callback")
@@ -298,7 +299,7 @@ func (s *OpenAIOAuthService) CompleteOpenAIConnectionAuthorization(ctx context.C
 		return infraerrors.BadRequest("OPENAI_SIWC_SESSION_INVALID", "Invalid SIWC authorization session")
 	}
 	key := siwcSessionKey(id, kind, sessionID)
-	ciphertext, err := s.connections.redis.Get(ctx, key).Result()
+	ciphertext, err := s.connections.redis.get(ctx, key)
 	if err != nil {
 		return infraerrors.BadRequest("OPENAI_SIWC_SESSION_INVALID", "SIWC authorization session expired or unavailable")
 	}
@@ -323,8 +324,8 @@ func (s *OpenAIOAuthService) CompleteOpenAIConnectionAuthorization(ctx context.C
 	if !ok {
 		return errors.New("SIWC token client is unavailable")
 	}
-	n, err := takeSIWCSession.Run(ctx, s.connections.redis, []string{key}, ciphertext).Int()
-	if err != nil || n != 1 {
+	consumed, err := s.connections.redis.compareAndDelete(ctx, key, ciphertext)
+	if err != nil || !consumed {
 		return infraerrors.Conflict("OPENAI_SIWC_SESSION_CONSUMED", "SIWC authorization session already used or unavailable")
 	}
 	exchange, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -367,17 +368,11 @@ func (s *OpenAIOAuthService) openAIConnectionToken(ctx context.Context, id int64
 	if time.Until(grant.ExpiresAt) > openAITokenRefreshSkew {
 		return grant.AccessToken, nil
 	}
-	key := fmt.Sprintf("fork:openai:%s:refresh:%d", kind, id)
-	owner := uuid.NewString()
-	ok, err := s.connections.redis.SetNX(ctx, key, owner, time.Minute).Result()
-	if err != nil || !ok {
+	unlock, ok := s.tryOpenAIConnectionRefreshLock(ctx, id, kind)
+	if !ok {
 		return "", infraerrors.ServiceUnavailable("OPENAI_SIWC_REFRESH_BUSY", "SIWC refresh is in progress or unavailable")
 	}
-	defer func() {
-		release, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
-		defer cancel()
-		_ = takeSIWCSession.Run(release, s.connections.redis, []string{key}, owner).Err()
-	}()
+	defer unlock()
 
 	current, refreshed, err := s.loadOpenAIConnectionGrant(ctx, id, kind)
 	if err != nil {
@@ -423,6 +418,23 @@ func (s *OpenAIOAuthService) openAIConnectionToken(ctx context.Context, id int64
 	return grant.AccessToken, nil
 }
 
+func (s *OpenAIOAuthService) tryOpenAIConnectionRefreshLock(ctx context.Context, id int64, kind string) (func(), bool) {
+	if s.connections.redis == nil {
+		return nil, false
+	}
+	key := fmt.Sprintf("fork:openai:%s:refresh:%d", kind, id)
+	owner := uuid.NewString()
+	locked, err := s.connections.redis.trySet(ctx, key, owner, time.Minute)
+	if err != nil || !locked {
+		return nil, false
+	}
+	return func() {
+		release, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		_, _ = s.connections.redis.compareAndDelete(release, key, owner)
+	}, true
+}
+
 // Expire only the rejected grant if it is still current; a late 401 must not
 // invalidate the replacement. The primary Codex token is independent.
 func (s *OpenAIOAuthService) invalidateOpenAIConnectionToken(ctx context.Context, id int64, kind, token string) {
@@ -431,6 +443,12 @@ func (s *OpenAIOAuthService) invalidateOpenAIConnectionToken(ctx context.Context
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
+	// A stale 401 must not bump the revision while refresh is persisting a rotated token.
+	unlock, ok := s.tryOpenAIConnectionRefreshLock(ctx, id, kind)
+	if !ok {
+		return
+	}
+	defer unlock()
 	record, grant, err := s.loadOpenAIConnectionGrant(ctx, id, kind)
 	if err == nil && grant.AccessToken == token && !grant.ExpiresAt.IsZero() {
 		grant.ExpiresAt = time.Time{}
